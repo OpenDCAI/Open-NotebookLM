@@ -28,8 +28,6 @@
 <br>
 <br>
 
-<img src="static/readme/首页预览.png" alt="OpenNotebook 首页" width="80%"/>
-
 </div>
 
 ---
@@ -214,6 +212,10 @@ opennoteboolLM/
 ## 📄 许可证
 
 本项目采用 [Apache License 2.0](LICENSE)。
+
+---
+
+**功能卡片功能基于：[OpenDCAI/Paper2Any](https://github.com/OpenDCAI/Paper2Any)**
 
 ---
 

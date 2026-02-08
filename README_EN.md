@@ -26,10 +26,6 @@
 </a>
 
 <br>
-<br>
-
-<img src="static/readme/首页预览.png" alt="OpenNotebook Home" width="80%"/>
-
 </div>
 
 ---
@@ -214,6 +210,10 @@ See [Contributing](docs/contributing.md).
 ## 📄 License
 
 This project is under [Apache License 2.0](LICENSE).
+
+---
+
+**Feature cards are based on: [OpenDCAI/Paper2Any](https://github.com/OpenDCAI/Paper2Any)**
 
 ---
 

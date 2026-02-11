@@ -99,6 +99,16 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   // Settings modal
   const [showSettingsModal, setShowSettingsModal] = useState(false);
 
+  // Flashcard state
+  const [flashcards, setFlashcards] = useState<any[]>([]);
+  const [showFlashcardViewer, setShowFlashcardViewer] = useState(false);
+  const [flashcardSetId, setFlashcardSetId] = useState<string>('');
+
+  // Quiz state
+  const [quizQuestions, setQuizQuestions] = useState<any[]>([]);
+  const [showQuizContainer, setShowQuizContainer] = useState(false);
+  const [quizId, setQuizId] = useState<string>('');
+
   // Output preview
   const [previewOutput, setPreviewOutput] = useState<{
     id: string;
@@ -212,6 +222,8 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     { icon: <BookOpen className="text-indigo-500" />, label: 'Flashcards', id: 'flashcard' },
     { icon: <Brain className="text-blue-500" />, label: 'Quiz', id: 'quiz' },
     { icon: <Mic2 className="text-red-500" />, label: 'Knowledge Podcast', id: 'podcast' },
+    { icon: <BookOpen className="text-indigo-500" />, label: 'Flashcards', id: 'flashcard' },
+    { icon: <Brain className="text-blue-500" />, label: 'Quiz', id: 'quiz' },
     // Video narration temporarily disabled
     // { icon: <VideoIcon className="text-blue-600" />, label: 'Video narration', id: 'video' },
   ];

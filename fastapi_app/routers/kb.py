@@ -2318,10 +2318,12 @@ def _collect_figure_images(
         local_path = _resolve_local_path(ps)
         stem = local_path.stem
 
-        # 1) 检查 MinerU auto/ 目录下的图片
+        # 1) 检查 MinerU auto/images/ 目录下的图片
         mineru_root = mgr.get_mineru_root(stem)
         if mineru_root and mineru_root.exists():
-            for img in sorted(mineru_root.iterdir()):
+            images_dir = mineru_root / "images"
+            scan_dir = images_dir if images_dir.is_dir() else mineru_root
+            for img in sorted(scan_dir.iterdir()):
                 if img.is_file() and img.suffix.lower() in IMAGE_EXTS:
                     results.append((stem, img))
 
@@ -2565,4 +2567,178 @@ async def save_mindmap_to_file(
     except Exception as e:
         import traceback
         traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===================== Flashcard 闪卡 =====================
+
+@router.post("/generate-flashcards")
+async def generate_flashcards(
+    file_paths: List[str] = Body(..., embed=True),
+    email: str = Body(..., embed=True),
+    user_id: str = Body(..., embed=True),
+    notebook_id: Optional[str] = Body(None, embed=True),
+    notebook_title: Optional[str] = Body(None, embed=True),
+    api_url: str = Body(..., embed=True),
+    api_key: str = Body(..., embed=True),
+    model: str = Body("deepseek-v3.2", embed=True),
+    language: str = Body("zh", embed=True),
+    card_count: int = Body(20, embed=True),
+):
+    """从知识库文件生成闪卡"""
+    try:
+        from fastapi_app.services.flashcard_service import generate_flashcards_with_llm
+
+        local_paths = []
+        for f in file_paths:
+            ps = (f or "").strip()
+            if ps.startswith("http://") or ps.startswith("https://"):
+                local_md = _resolve_link_to_local_md(email, notebook_id, ps)
+                if local_md and local_md.exists():
+                    local_paths.append(str(local_md))
+            else:
+                local_path = _resolve_local_path(f)
+                if local_path.exists():
+                    local_paths.append(str(local_path))
+
+        if not local_paths:
+            raise HTTPException(status_code=400, detail="No valid files provided")
+
+        text_content = _extract_text_from_files(local_paths, max_chars=50000)
+        if not text_content.strip():
+            raise HTTPException(status_code=400, detail="No text content extracted")
+
+        log.info("[generate-flashcards] text_len=%d, files=%d", len(text_content), len(local_paths))
+
+        flashcards = await generate_flashcards_with_llm(
+            text_content=text_content,
+            api_url=api_url,
+            api_key=api_key,
+            model=model,
+            language=language,
+            card_count=card_count,
+        )
+        if not flashcards:
+            raise HTTPException(status_code=500, detail="Failed to generate flashcards")
+
+        ts = int(time.time())
+        flashcard_set_id = f"flashcard_{ts}"
+        if notebook_id:
+            paths = get_notebook_paths(notebook_id, notebook_title or "", user_id)
+            output_dir = paths.feature_output_dir("flashcard", ts)
+        else:
+            output_dir = _outputs_dir(email, notebook_id, flashcard_set_id)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        flashcard_data = {
+            "id": flashcard_set_id,
+            "notebook_id": notebook_id,
+            "flashcards": [fc.dict() for fc in flashcards],
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "source_files": file_paths,
+            "total_count": len(flashcards),
+        }
+        (output_dir / "flashcards.json").write_text(
+            json.dumps(flashcard_data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        log.info("[generate-flashcards] 成功生成 %d 张闪卡", len(flashcards))
+
+        return {
+            "success": True,
+            "flashcards": [fc.dict() for fc in flashcards],
+            "flashcard_set_id": flashcard_set_id,
+            "total_count": len(flashcards),
+            "result_path": _to_outputs_url(str(output_dir)),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("[generate-flashcards] failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===================== Quiz 测验 =====================
+
+@router.post("/generate-quiz")
+async def generate_quiz(
+    file_paths: List[str] = Body(..., embed=True),
+    email: str = Body(..., embed=True),
+    user_id: str = Body(..., embed=True),
+    notebook_id: Optional[str] = Body(None, embed=True),
+    notebook_title: Optional[str] = Body(None, embed=True),
+    api_url: str = Body(..., embed=True),
+    api_key: str = Body(..., embed=True),
+    model: str = Body("deepseek-v3.2", embed=True),
+    language: str = Body("en", embed=True),
+    question_count: int = Body(10, embed=True),
+):
+    """生成 Quiz 测验题目"""
+    try:
+        from fastapi_app.services.quiz_service import generate_quiz_with_llm
+
+        local_paths = []
+        for f in file_paths:
+            ps = (f or "").strip()
+            if ps.startswith("http://") or ps.startswith("https://"):
+                local_md = _resolve_link_to_local_md(email, notebook_id, ps)
+                if local_md and local_md.exists():
+                    local_paths.append(str(local_md))
+            else:
+                local_path = _resolve_local_path(f)
+                if local_path.exists():
+                    local_paths.append(str(local_path))
+
+        if not local_paths:
+            raise HTTPException(status_code=400, detail="No valid files provided")
+
+        text_content = _extract_text_from_files(local_paths, max_chars=50000)
+        if not text_content.strip():
+            raise HTTPException(status_code=400, detail="No text content extracted")
+
+        log.info("[generate-quiz] text_len=%d, files=%d", len(text_content), len(local_paths))
+
+        questions = await generate_quiz_with_llm(
+            text_content=text_content,
+            api_url=api_url,
+            api_key=api_key,
+            model=model,
+            language=language,
+            question_count=question_count,
+        )
+        if not questions:
+            raise HTTPException(status_code=500, detail="Failed to generate quiz")
+
+        ts = int(time.time())
+        quiz_id = f"quiz_{ts}"
+        if notebook_id:
+            paths = get_notebook_paths(notebook_id, notebook_title or "", user_id)
+            output_dir = paths.feature_output_dir("quiz", ts)
+        else:
+            output_dir = _outputs_dir(email, notebook_id, quiz_id)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        quiz_data = {
+            "id": quiz_id,
+            "notebook_id": notebook_id,
+            "questions": [q.dict() for q in questions],
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "source_files": file_paths,
+            "total_count": len(questions),
+        }
+        (output_dir / "quiz.json").write_text(
+            json.dumps(quiz_data, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        log.info("[generate-quiz] 成功生成 %d 道题目", len(questions))
+
+        return {
+            "success": True,
+            "questions": [q.dict() for q in questions],
+            "quiz_id": quiz_id,
+            "total_count": len(questions),
+            "result_path": _to_outputs_url(str(output_dir)),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.exception("[generate-quiz] failed")
         raise HTTPException(status_code=500, detail=str(e))

@@ -300,3 +300,82 @@ class Paper2PPTResponse(BaseModel):
     pagecontent: List[Dict[str, Any]] = []
     result_path: str = ""
     all_output_files: List[str] = []
+
+
+# ===================== Flashcard 闪卡相关 =====================
+
+class Flashcard(BaseModel):
+    """单个闪卡"""
+    id: str
+    question: str
+    answer: str
+    type: str = "qa"
+    difficulty: Optional[str] = None
+    source_file: Optional[str] = None
+    source_excerpt: Optional[str] = None
+    tags: List[str] = []
+    created_at: Optional[str] = None
+
+
+class GenerateFlashcardsRequest(BaseModel):
+    """生成闪卡请求"""
+    file_paths: List[str]
+    email: str
+    user_id: str
+    notebook_id: Optional[str] = None
+    api_url: str
+    api_key: str
+    model: str = "deepseek-v3.2"
+    language: str = "zh"
+    card_count: int = 20
+
+
+class GenerateFlashcardsResponse(BaseModel):
+    """生成闪卡响应"""
+    success: bool
+    flashcards: List[Flashcard] = []
+    flashcard_set_id: str = ""
+    total_count: int = 0
+    result_path: str = ""
+
+
+# ===================== Quiz 相关模型 =====================
+
+class QuizOption(BaseModel):
+    """Quiz 选项"""
+    label: str
+    text: str
+
+
+class QuizQuestion(BaseModel):
+    """Quiz 题目"""
+    id: str
+    question: str
+    options: List[QuizOption]
+    correct_answer: str
+    explanation: str
+    source_excerpt: Optional[str] = None
+    difficulty: Optional[str] = None
+    category: Optional[str] = None
+
+
+class GenerateQuizRequest(BaseModel):
+    """生成 Quiz 请求"""
+    file_paths: List[str]
+    email: str
+    user_id: str
+    notebook_id: Optional[str] = None
+    api_url: str
+    api_key: str
+    model: str = "deepseek-v3.2"
+    language: str = "en"
+    question_count: int = 10
+
+
+class GenerateQuizResponse(BaseModel):
+    """生成 Quiz 响应"""
+    success: bool
+    questions: List[QuizQuestion] = []
+    quiz_id: str = ""
+    total_count: int = 0
+    result_path: str = ""

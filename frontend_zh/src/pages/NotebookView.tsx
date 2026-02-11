@@ -1,10 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { 
-  ChevronLeft, Plus, Share2, Settings, MessageSquare, 
-  BarChart2, Zap, AudioLines, Video, FileText, 
+import {
+  ChevronLeft, Plus, Share2, Settings, MessageSquare,
+  BarChart2, Zap, AudioLines, Video, FileText,
   Filter, MoreVertical, Search, Image as ImageIcon, FileStack, Sparkles,
   Mic2, Video as VideoIcon, BrainCircuit, Send, Bot, User, Loader2, Upload, X,
-  Globe, Link2, Cloud, ChevronRight, LayoutGrid, Download
+  Globe, Link2, Cloud, ChevronRight, LayoutGrid, Download, BookOpen, Brain
 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { supabase, isSupabaseConfigured } from '../lib/supabase';
@@ -15,6 +15,10 @@ import ReactMarkdown from 'react-markdown';
 import { MermaidPreview } from '../components/knowledge-base/tools/MermaidPreview';
 import { SettingsModal } from '../components/SettingsModal';
 import DrawioInlineEditor from '../components/DrawioInlineEditor';
+import { FlashcardGenerator } from '../components/flashcards/FlashcardGenerator';
+import { FlashcardViewer } from '../components/flashcards/FlashcardViewer';
+import { QuizGenerator } from '../components/quiz/QuizGenerator';
+import { QuizContainer } from '../components/quiz/QuizContainer';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 
@@ -154,6 +158,16 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   const [sourceDetailFormat, setSourceDetailFormat] = useState<'text' | 'markdown'>('text');
   const [sourceDetailLoading, setSourceDetailLoading] = useState(false);
 
+  // Flashcard state
+  const [flashcards, setFlashcards] = useState<any[]>([]);
+  const [showFlashcardViewer, setShowFlashcardViewer] = useState(false);
+  const [flashcardSetId, setFlashcardSetId] = useState<string>('');
+
+  // Quiz state
+  const [quizQuestions, setQuizQuestions] = useState<any[]>([]);
+  const [showQuizContainer, setShowQuizContainer] = useState(false);
+  const [quizId, setQuizId] = useState<string>('');
+
   // 三栏可拖拽宽度（左 / 右，中间 flex 自适应）
   const [leftPanelWidth, setLeftPanelWidth] = useState(256);
   const [rightPanelWidth, setRightPanelWidth] = useState(320);
@@ -195,6 +209,8 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     { icon: <ImageIcon className="text-orange-500" />, label: 'PPT生成', id: 'ppt' },
     { icon: <BrainCircuit className="text-purple-500" />, label: '思维导图', id: 'mindmap' },
     { icon: <LayoutGrid className="text-teal-500" />, label: 'DrawIO 图表', id: 'drawio' },
+    { icon: <BookOpen className="text-indigo-500" />, label: '闪卡', id: 'flashcard' },
+    { icon: <Brain className="text-blue-500" />, label: '测验', id: 'quiz' },
     { icon: <Mic2 className="text-red-500" />, label: '知识播客', id: 'podcast' },
     // 视频讲解暂未开放
     // { icon: <VideoIcon className="text-blue-600" />, label: '视频讲解', id: 'video' },
@@ -2625,6 +2641,36 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
               </div>
             )}
 
+            {/* Flashcard Generator */}
+            {activeTool === 'flashcard' && !showFlashcardViewer && (
+              <FlashcardGenerator
+                selectedFiles={files.filter(f => selectedIds.has(f.id)).map(f => f.url || f.name)}
+                notebookId={notebook?.id || ''}
+                email={effectiveUser.email || ''}
+                userId={effectiveUser.id || ''}
+                onGenerated={(id: string, cards: any[]) => {
+                  setFlashcardSetId(id);
+                  setFlashcards(cards);
+                  setShowFlashcardViewer(true);
+                }}
+              />
+            )}
+
+            {/* Quiz Generator */}
+            {activeTool === 'quiz' && !showQuizContainer && (
+              <QuizGenerator
+                selectedFiles={files.filter(f => selectedIds.has(f.id)).map(f => f.url || f.name)}
+                notebookId={notebook?.id || ''}
+                email={effectiveUser.email || ''}
+                userId={effectiveUser.id || ''}
+                onGenerated={(id: string, questions: any[]) => {
+                  setQuizId(id);
+                  setQuizQuestions(questions);
+                  setShowQuizContainer(true);
+                }}
+              />
+            )}
+
           {/* Output Feed */}
           {outputFeed.length > 0 && (
             <div className="mt-6">
@@ -3169,6 +3215,30 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                 </div>
               )}
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Flashcard Viewer Modal */}
+      {showFlashcardViewer && flashcards.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowFlashcardViewer(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <FlashcardViewer
+              flashcards={flashcards}
+              onClose={() => setShowFlashcardViewer(false)}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Quiz Container Modal */}
+      {showQuizContainer && quizQuestions.length > 0 && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowQuizContainer(false)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
+            <QuizContainer
+              questions={quizQuestions}
+              onClose={() => setShowQuizContainer(false)}
+            />
           </div>
         </div>
       )}

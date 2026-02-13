@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { Settings, Plus, User, Loader2, BookOpen, Key, CheckCircle2 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { apiFetch } from '../config/api';
@@ -36,7 +37,6 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0 }: { onOpenNotebook: (n:
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
 
-  // 不做用户管理时用默认用户，数据从 outputs 取
   const effectiveUserId = user?.id || 'default';
 
   useEffect(() => {
@@ -84,7 +84,6 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0 }: { onOpenNotebook: (n:
           date: row.updated_at ? new Date(row.updated_at).toLocaleDateString('zh-CN') : '',
           sources: typeof row.sources === 'number' ? row.sources : 0,
         }));
-        // 本地笔记本的 sources 已由后端从 outputs 扫描返回，无需再读 localStorage
         setNotebooks(list);
       } else {
         setNotebooks([]);
@@ -141,41 +140,45 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0 }: { onOpenNotebook: (n:
 
   return (
     <div className="max-w-[1200px] mx-auto px-6 py-8">
-      <header className="flex justify-between items-center mb-12">
-        <div className="flex items-center gap-2">
-          <img src="/logo.png" alt="Logo" className="w-8 h-8 object-contain" />
-          <h1 className="text-2xl font-semibold text-gray-800">open NoteBookLM</h1>
-        </div>
-        <div className="flex items-center gap-6">
-          <button
-            type="button"
-            onClick={() => setConfigOpen((o) => !o)}
-            className="text-gray-600 hover:text-gray-900 flex items-center gap-2"
-          >
-            <Settings size={20} />
-            <span>API Settings</span>
-          </button>
-          <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white">
-            <User size={18} />
+      {/* Glass Header */}
+      <header className="sticky top-0 z-30 glass rounded-b-ios-xl -mx-6 px-6 py-4 mb-12 border-b border-white/30">
+        <div className="flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <img src="/logo_small.png" alt="Logo" className="h-8 w-auto object-contain" />
+            <h1 className="text-2xl font-semibold text-ios-gray-900">open NoteBookLM</h1>
+          </div>
+          <div className="flex items-center gap-4">
+            <motion.button
+              whileTap={{ scale: 0.95 }}
+              type="button"
+              onClick={() => setConfigOpen((o) => !o)}
+              className="text-ios-gray-600 hover:text-ios-gray-900 flex items-center gap-2 px-3 py-2 rounded-ios hover:bg-white/50 transition-colors"
+            >
+              <Settings size={20} />
+              <span className="text-sm font-medium">API Settings</span>
+            </motion.button>
+            <div className="w-8 h-8 bg-gradient-to-br from-primary to-blue-600 rounded-full flex items-center justify-center text-white shadow-ios-sm">
+              <User size={18} />
+            </div>
           </div>
         </div>
       </header>
 
       {configOpen && (
-        <section className="mb-8 p-6 bg-white rounded-2xl border border-gray-200 shadow-sm">
-          <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+        <section className="mb-8 p-6 bg-white rounded-ios-xl border border-ios-gray-100 shadow-ios">
+          <h3 className="text-lg font-semibold text-ios-gray-900 mb-4 flex items-center gap-2">
             <Key size={20} />
             Home config (used when you open a notebook)
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-4">
-              <h4 className="text-sm font-medium text-gray-600 flex items-center gap-1.5">LLM API</h4>
+              <h4 className="text-sm font-medium text-ios-gray-600 flex items-center gap-1.5">LLM API</h4>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">API URL</label>
+                <label className="block text-xs font-medium text-ios-gray-500 mb-1">API URL</label>
                 <select
                   value={apiUrl}
                   onChange={(e) => setApiUrl(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
                 >
                   {[apiUrl, ...API_URL_OPTIONS].filter((v, i, a) => a.indexOf(v) === i).map((url: string) => (
                     <option key={url} value={url}>{url}</option>
@@ -183,24 +186,24 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0 }: { onOpenNotebook: (n:
                 </select>
               </div>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">API Key</label>
+                <label className="block text-xs font-medium text-ios-gray-500 mb-1">API Key</label>
                 <input
                   type="password"
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder="sk-..."
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
                 />
               </div>
             </div>
             <div className="space-y-4">
-              <h4 className="text-sm font-medium text-gray-600 flex items-center gap-1.5">Search API</h4>
+              <h4 className="text-sm font-medium text-ios-gray-600 flex items-center gap-1.5">Search API</h4>
               <div>
-                <label className="block text-xs font-medium text-gray-500 mb-1">Search provider</label>
+                <label className="block text-xs font-medium text-ios-gray-500 mb-1">Search provider</label>
                 <select
                   value={searchProvider}
                   onChange={(e) => setSearchProvider(e.target.value as SearchProvider)}
-                  className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
                 >
                   <option value="serper">Serper (Google, env)</option>
                   <option value="serpapi">SerpAPI (Google/Baidu)</option>
@@ -209,23 +212,23 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0 }: { onOpenNotebook: (n:
               </div>
               {(searchProvider === 'serpapi' || searchProvider === 'bocha') && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Search API Key</label>
+                  <label className="block text-xs font-medium text-ios-gray-500 mb-1">Search API Key</label>
                   <input
                     type="password"
                     value={searchApiKey}
                     onChange={(e) => setSearchApiKey(e.target.value)}
                     placeholder={searchProvider === 'bocha' ? 'Bocha API Key' : 'SerpAPI Key'}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
                   />
                 </div>
               )}
               {searchProvider === 'serpapi' && (
                 <div>
-                  <label className="block text-xs font-medium text-gray-500 mb-1">Search engine</label>
+                  <label className="block text-xs font-medium text-ios-gray-500 mb-1">Search engine</label>
                   <select
                     value={searchEngine}
                     onChange={(e) => setSearchEngine(e.target.value as SearchEngine)}
-                    className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
                   >
                     <option value="google">Google</option>
                     <option value="baidu">Baidu</option>
@@ -235,98 +238,127 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0 }: { onOpenNotebook: (n:
             </div>
           </div>
           <div className="mt-4 flex justify-end">
-            <button
+            <motion.button
+              whileTap={{ scale: 0.97 }}
               type="button"
               onClick={handleSaveConfig}
               disabled={configSaving}
-              className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 flex items-center gap-2 text-sm font-medium"
+              className="px-5 py-2.5 bg-primary text-white rounded-ios hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2 text-sm font-medium shadow-ios-sm transition-colors"
             >
               {configSaving ? <Loader2 size={16} className="animate-spin" /> : configSaved ? <CheckCircle2 size={16} /> : <Key size={16} />}
               {configSaving ? 'Saving...' : configSaved ? 'Saved' : 'Save config'}
-            </button>
+            </motion.button>
           </div>
         </section>
       )}
 
       <section>
         <div className="flex justify-between items-center mb-6">
-          <h2 className="text-xl font-semibold">Notebooks</h2>
+          <h2 className="text-xl font-semibold text-ios-gray-900">Notebooks</h2>
         </div>
         {loading ? (
-          <div className="flex items-center justify-center py-12 text-gray-500">
+          <div className="flex items-center justify-center py-12 text-ios-gray-500">
             <Loader2 className="w-6 h-6 animate-spin mr-2" />
             Loading...
           </div>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div
-              className="cursor-pointer bg-white rounded-2xl border-2 border-dashed border-gray-200 aspect-[4/3] flex flex-col items-center justify-center gap-4 hover:border-blue-300 hover:bg-blue-50/50 transition-all"
+            {/* New Notebook Card */}
+            <motion.div
+              whileHover={{ scale: 1.02, y: -4 }}
+              whileTap={{ scale: 0.98 }}
+              className="cursor-pointer bg-white rounded-ios-xl border-2 border-dashed border-ios-gray-200 aspect-[4/3] flex flex-col items-center justify-center gap-4 hover:border-primary/40 transition-colors shadow-ios-sm"
               onClick={() => setCreateModalOpen(true)}
             >
-              <div className="w-12 h-12 bg-blue-50 rounded-full flex items-center justify-center text-blue-500">
-                <Plus size={24} />
+              <div className="w-12 h-12 bg-gradient-to-br from-primary/10 to-primary/20 rounded-full flex items-center justify-center">
+                <Plus size={24} className="text-primary" />
               </div>
-              <span className="font-medium text-gray-700">New notebook</span>
-            </div>
+              <span className="font-medium text-ios-gray-700">New notebook</span>
+            </motion.div>
 
+            {/* Notebook Cards */}
             {notebooks.map((nb) => (
-              <div
+              <motion.div
                 key={nb.id}
-                className="cursor-pointer bg-white rounded-2xl p-6 shadow-sm hover:shadow-md transition-shadow aspect-[4/3] flex flex-col justify-between"
+                whileHover={{ scale: 1.02, y: -4 }}
+                whileTap={{ scale: 0.98 }}
+                className="cursor-pointer bg-white rounded-ios-xl p-6 shadow-ios hover:shadow-ios-lg transition-shadow aspect-[4/3] flex flex-col justify-between"
                 onClick={() => onOpenNotebook(nb)}
               >
                 <div className="flex justify-between items-start">
-                  <div className="w-10 h-10 bg-amber-50 rounded-lg flex items-center justify-center text-amber-600">
+                  <div className="w-10 h-10 bg-gradient-to-br from-amber-100 to-orange-100 rounded-ios flex items-center justify-center text-amber-600">
                     <BookOpen size={20} />
                   </div>
                 </div>
                 <div>
-                  <h3 className="font-medium text-gray-900 line-clamp-2 mb-2">
+                  <h3 className="font-medium text-ios-gray-900 line-clamp-2 mb-2">
                     {nb.title || nb.name || 'Untitled'}
                   </h3>
-                  <p className="text-gray-400 text-xs">
+                  <p className="text-ios-gray-400 text-xs">
                     {nb.date || (nb.updated_at ? new Date(nb.updated_at).toLocaleDateString('zh-CN') : '')}
                     {typeof nb.sources === 'number' ? ` · ${nb.sources} sources` : ''}
                   </p>
                 </div>
-              </div>
+              </motion.div>
             ))}
           </div>
         )}
       </section>
 
-      {createModalOpen && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50" onClick={() => !creating && setCreateModalOpen(false)}>
-          <div className="bg-white rounded-xl p-6 w-full max-w-md shadow-xl" onClick={e => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold mb-4">New notebook</h3>
-            <input
-              type="text"
-              className="w-full border border-gray-300 rounded-lg px-3 py-2 mb-2"
-              placeholder="Notebook name"
-              value={newNotebookName}
-              onChange={e => setNewNotebookName(e.target.value)}
+      {/* Create Modal — iOS Sheet */}
+      <AnimatePresence>
+        {createModalOpen && (
+          <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" onClick={() => !creating && setCreateModalOpen(false)}>
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              className="absolute inset-0 glass-dark"
             />
-            {createError && <p className="text-red-500 text-sm mb-2">{createError}</p>}
-            <div className="flex justify-end gap-2">
-              <button
-                className="px-4 py-2 text-gray-600 hover:bg-gray-100 rounded-lg"
-                onClick={() => !creating && setCreateModalOpen(false)}
-                disabled={creating}
-              >
-                Cancel
-              </button>
-              <button
-                className="px-4 py-2 bg-blue-500 text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 flex items-center gap-2"
-                onClick={handleCreateNotebook}
-                disabled={creating || !newNotebookName.trim()}
-              >
-                {creating && <Loader2 className="w-4 h-4 animate-spin" />}
-                Create
-              </button>
-            </div>
+            <motion.div
+              initial={{ y: 100, opacity: 0 }}
+              animate={{ y: 0, opacity: 1 }}
+              exit={{ y: 100, opacity: 0 }}
+              transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+              className="relative bg-white rounded-t-ios-2xl sm:rounded-ios-2xl p-6 w-full max-w-md shadow-ios-xl"
+              onClick={e => e.stopPropagation()}
+            >
+              {/* iOS Drag Indicator */}
+              <div className="flex justify-center mb-4 sm:hidden">
+                <div className="w-9 h-1 rounded-full bg-ios-gray-300" />
+              </div>
+              <h3 className="text-lg font-semibold text-ios-gray-900 mb-4">New notebook</h3>
+              <input
+                type="text"
+                className="w-full border border-ios-gray-200 rounded-ios px-4 py-3 mb-3 text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+                placeholder="Notebook name"
+                value={newNotebookName}
+                onChange={e => setNewNotebookName(e.target.value)}
+              />
+              {createError && <p className="text-red-500 text-sm mb-2">{createError}</p>}
+              <div className="flex justify-end gap-2">
+                <motion.button
+                  whileTap={{ scale: 0.95 }}
+                  className="px-5 py-2.5 text-ios-gray-600 hover:bg-ios-gray-100 rounded-ios font-medium text-sm transition-colors"
+                  onClick={() => !creating && setCreateModalOpen(false)}
+                  disabled={creating}
+                >
+                  Cancel
+                </motion.button>
+                <motion.button
+                  whileTap={{ scale: 0.95 }}
+                  className="px-5 py-2.5 bg-primary text-white rounded-ios hover:bg-primary/90 disabled:opacity-50 flex items-center gap-2 font-medium text-sm shadow-ios-sm transition-colors"
+                  onClick={handleCreateNotebook}
+                  disabled={creating || !newNotebookName.trim()}
+                >
+                  {creating && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Create
+                </motion.button>
+              </div>
+            </motion.div>
           </div>
-        </div>
-      )}
+        )}
+      </AnimatePresence>
     </div>
   );
 };

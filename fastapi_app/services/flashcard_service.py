@@ -122,6 +122,46 @@ def _build_flashcard_prompt(text_content: str, language: str, card_count: int) -
     return prompt
 
 
+def _try_parse_json_array(json_str: str):
+    """尝试解析 JSON 数组，失败时逐步回退到最后一个完整对象"""
+    try:
+        return json.loads(json_str)
+    except json.JSONDecodeError:
+        pass
+
+    brace_depth = 0
+    in_string = False
+    escape = False
+    candidates = []
+    for i, ch in enumerate(json_str):
+        if escape:
+            escape = False
+            continue
+        if ch == '\\' and in_string:
+            escape = True
+            continue
+        if ch == '"' and not escape:
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '{':
+            brace_depth += 1
+        elif ch == '}':
+            brace_depth -= 1
+            if brace_depth == 0:
+                candidates.append(i)
+
+    for pos in reversed(candidates):
+        attempt = json_str[:pos + 1] + ']'
+        try:
+            return json.loads(attempt)
+        except json.JSONDecodeError:
+            continue
+
+    raise json.JSONDecodeError("No valid JSON array found", json_str, 0)
+
+
 def _parse_flashcards_from_llm_response(content: str, card_count: int) -> List[Flashcard]:
     """
     解析 LLM 返回的闪卡数据
@@ -135,11 +175,16 @@ def _parse_flashcards_from_llm_response(content: str, card_count: int) -> List[F
     """
     try:
         # 提取 JSON（处理可能的 markdown 代码块）
-        json_match = re.search(r'\[.*\]', content, re.DOTALL)
+        json_match = re.search(r'```(?:json)?\s*(\[[\s\S]*)', content)
         if json_match:
-            flashcards_data = json.loads(json_match.group())
+            json_str = json_match.group(1)
+            json_str = re.sub(r'\s*```\s*$', '', json_str)
         else:
-            flashcards_data = json.loads(content)
+            # fallback: 找 [ 开头的内容
+            idx = content.find('[')
+            json_str = content[idx:] if idx >= 0 else content.strip()
+
+        flashcards_data = _try_parse_json_array(json_str)
 
         # 转换为 Flashcard 对象
         flashcards = []

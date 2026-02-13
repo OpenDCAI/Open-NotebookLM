@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import { QuizQuestion } from './QuizQuestion';
 import { QuizResults } from './QuizResults';
 import { QuizReview } from './QuizReview';
@@ -25,6 +26,8 @@ interface QuizContainerProps {
 
 type QuizState = 'taking' | 'results' | 'review';
 
+const springTransition = { type: 'spring', stiffness: 300, damping: 30 };
+
 export const QuizContainer: React.FC<QuizContainerProps> = ({
   questions,
   onClose,
@@ -32,9 +35,11 @@ export const QuizContainer: React.FC<QuizContainerProps> = ({
   const [currentIndex, setCurrentIndex] = useState(0);
   const [userAnswers, setUserAnswers] = useState<Record<string, string | null>>({});
   const [quizState, setQuizState] = useState<QuizState>('taking');
+  const [direction, setDirection] = useState(1);
 
   const currentQuestion = questions[currentIndex];
   const currentAnswer = userAnswers[currentQuestion?.id] || null;
+  const progress = ((currentIndex + 1) / questions.length) * 100;
 
   const handleSelectAnswer = (answer: string) => {
     setUserAnswers({
@@ -53,15 +58,16 @@ export const QuizContainer: React.FC<QuizContainerProps> = ({
 
   const handleNext = () => {
     if (currentIndex < questions.length - 1) {
+      setDirection(1);
       setCurrentIndex(currentIndex + 1);
     } else {
-      // 最后一题，显示结果
       setQuizState('results');
     }
   };
 
   const handlePrevious = () => {
     if (currentIndex > 0) {
+      setDirection(-1);
       setCurrentIndex(currentIndex - 1);
     }
   };
@@ -76,7 +82,6 @@ export const QuizContainer: React.FC<QuizContainerProps> = ({
     setQuizState('review');
   };
 
-  // 计算统计数据
   const calculateStats = () => {
     let correct = 0;
     let wrong = 0;
@@ -96,7 +101,6 @@ export const QuizContainer: React.FC<QuizContainerProps> = ({
     return { correct, wrong, skipped };
   };
 
-  // 结果页面
   if (quizState === 'results') {
     const stats = calculateStats();
     return (
@@ -111,7 +115,6 @@ export const QuizContainer: React.FC<QuizContainerProps> = ({
     );
   }
 
-  // 复习页面
   if (quizState === 'review') {
     return (
       <QuizReview
@@ -122,61 +125,75 @@ export const QuizContainer: React.FC<QuizContainerProps> = ({
     );
   }
 
-  // 答题页面
   return (
     <div className="max-w-3xl mx-auto p-6">
-      {/* Progress */}
+      {/* iOS Progress Bar */}
       <div className="mb-6">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm text-gray-600">
+          <span className="text-sm text-ios-gray-500">
             Question {currentIndex + 1} of {questions.length}
           </span>
         </div>
-        <div className="w-full bg-gray-200 h-2 rounded-full">
-          <div
-            className="bg-blue-600 h-2 rounded-full transition-all"
-            style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }}
+        <div className="w-full bg-ios-gray-100 h-1 rounded-full overflow-hidden">
+          <motion.div
+            className="h-full bg-primary rounded-full"
+            initial={false}
+            animate={{ width: `${progress}%` }}
+            transition={springTransition}
           />
         </div>
       </div>
 
-      {/* Question */}
-      <div className="bg-white border border-gray-200 rounded-lg p-6 mb-6">
-        <QuizQuestion
-          question={currentQuestion.question}
-          options={currentQuestion.options}
-          selectedAnswer={currentAnswer}
-          onSelectAnswer={handleSelectAnswer}
-        />
-      </div>
+      {/* Question with spring transition */}
+      <AnimatePresence mode="wait" custom={direction}>
+        <motion.div
+          key={currentIndex}
+          custom={direction}
+          initial={{ x: direction > 0 ? 30 : -30, opacity: 0 }}
+          animate={{ x: 0, opacity: 1 }}
+          exit={{ x: direction > 0 ? -30 : 30, opacity: 0 }}
+          transition={springTransition}
+          className="bg-white border border-ios-gray-100 rounded-ios-lg p-6 mb-6 shadow-ios-sm"
+        >
+          <QuizQuestion
+            question={currentQuestion.question}
+            options={currentQuestion.options}
+            selectedAnswer={currentAnswer}
+            onSelectAnswer={handleSelectAnswer}
+          />
+        </motion.div>
+      </AnimatePresence>
 
       {/* Navigation */}
       <div className="flex justify-between items-center">
-        <button
+        <motion.button
+          whileTap={{ scale: 0.95 }}
           onClick={handlePrevious}
           disabled={currentIndex === 0}
-          className="flex items-center gap-2 px-4 py-2 bg-gray-200 rounded-lg hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="flex items-center gap-2 px-4 py-2.5 bg-ios-gray-100 rounded-ios-lg text-sm font-medium text-ios-gray-700 hover:bg-ios-gray-200 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           <ChevronLeft className="w-4 h-4" />
           Previous
-        </button>
+        </motion.button>
 
-        <button
+        <motion.button
+          whileTap={{ scale: 0.95 }}
           onClick={handleSkip}
-          className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
+          className="flex items-center gap-2 px-4 py-2.5 border border-ios-gray-200 rounded-ios-lg text-sm font-medium text-ios-gray-600 hover:bg-ios-gray-50 transition-colors"
         >
           <SkipForward className="w-4 h-4" />
           Skip
-        </button>
+        </motion.button>
 
-        <button
+        <motion.button
+          whileTap={{ scale: 0.95 }}
           onClick={handleNext}
           disabled={!currentAnswer}
-          className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          className="flex items-center gap-2 px-4 py-2.5 bg-primary text-white rounded-ios-lg text-sm font-medium hover:bg-primary/90 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
         >
           {currentIndex === questions.length - 1 ? 'Finish' : 'Next'}
           <ChevronRight className="w-4 h-4" />
-        </button>
+        </motion.button>
       </div>
     </div>
   );

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
 import {
   ChevronLeft, Plus, Share2, Settings, MessageSquare,
   BarChart2, Zap, AudioLines, Video, FileText,
@@ -26,7 +27,6 @@ const DEFAULT_USER = { id: 'default', email: 'default' };
 const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void }) => {
   const { user } = useAuthStore();
   const effectiveUser = user || DEFAULT_USER;
-  const [activeTab, setActiveTab] = useState<'chat' | 'retrieval' | 'sources'>('chat');
   const [activeTool, setActiveTool] = useState<ToolType>('chat');
   
   // Files management
@@ -37,7 +37,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   const WELCOME_MSG: ChatMessage = {
     id: 'welcome',
     role: 'assistant',
-    content: 'Hello! I\'m your knowledge base assistant. Upload files or select sources on the left, then ask your questions here.',
+    content: 'Welcome to OpenNotebookLM! I\'m your intelligent knowledge base assistant.\n\nUpload documents on the left, then chat with me to explore, summarize, and generate insights from your sources — including podcasts, mind maps, presentations, flashcards, and quizzes.',
     time: new Date().toLocaleTimeString()
   };
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([WELCOME_MSG]);
@@ -123,11 +123,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   const [previewLoading, setPreviewLoading] = useState(false);
   /** DrawIO 预览：从 url 拉取后的 xml，用于在弹窗内嵌编辑 */
   const [previewDrawioXml, setPreviewDrawioXml] = useState<string | null>(null);
-  const [retrievalQuery, setRetrievalQuery] = useState('');
-  const [retrievalResults, setRetrievalResults] = useState<any[]>([]);
-  const [retrievalLoading, setRetrievalLoading] = useState(false);
   const [retrievalError, setRetrievalError] = useState('');
-  const [retrievalTopK, setRetrievalTopK] = useState(5);
   const [retrievalModel, setRetrievalModel] = useState('text-embedding-3-large');
   const [vectorFiles, setVectorFiles] = useState<any[]>([]);
   const [vectorLoading, setVectorLoading] = useState(false);
@@ -167,16 +163,6 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   const [sourceDetailContent, setSourceDetailContent] = useState('');
   const [sourceDetailFormat, setSourceDetailFormat] = useState<'text' | 'markdown'>('text');
   const [sourceDetailLoading, setSourceDetailLoading] = useState(false);
-
-  // Flashcard state
-  const [flashcards, setFlashcards] = useState<any[]>([]);
-  const [showFlashcardViewer, setShowFlashcardViewer] = useState(false);
-  const [flashcardSetId, setFlashcardSetId] = useState<string>('');
-
-  // Quiz state
-  const [quizQuestions, setQuizQuestions] = useState<any[]>([]);
-  const [showQuizContainer, setShowQuizContainer] = useState(false);
-  const [quizId, setQuizId] = useState<string>('');
 
   // Loading state for saved flashcard/quiz sets
   const [loadingSetId, setLoadingSetId] = useState<string | null>(null);
@@ -655,56 +641,6 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       setVectorError(err?.message || 'Failed to delete vector');
     } finally {
       setVectorActionLoading(prev => ({ ...prev, [key]: false }));
-    }
-  };
-
-  const handleRunRetrieval = async () => {
-    if (!retrievalQuery.trim()) {
-      setRetrievalError('Please enter a query');
-      return;
-    }
-    if (!user?.email) {
-      setRetrievalError('User info missing');
-      return;
-    }
-
-    const settings = getApiSettings(user?.id || null);
-    const apiUrl = settings?.apiUrl?.trim() || '';
-    const apiKey = settings?.apiKey?.trim() || '';
-    if (!apiUrl || !apiKey) {
-      setRetrievalError('Please configure API URL and API Key in Settings first');
-      return;
-    }
-
-    try {
-      const selectedFiles = files.filter(f => selectedIds.has(f.id));
-      const fileIds = selectedFiles.map(f => f.kbFileId).filter(Boolean) as string[];
-
-      setRetrievalLoading(true);
-      setRetrievalError('');
-      const res = await apiFetch('/api/v1/kb/search', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: retrievalQuery.trim(),
-          top_k: retrievalTopK,
-          email: effectiveUser?.email || effectiveUser?.id,
-          api_url: apiUrl,
-          api_key: apiKey,
-          model_name: retrievalModel,
-          file_ids: fileIds.length > 0 ? fileIds : undefined
-        })
-      });
-      if (!res.ok) {
-        const msg = await res.text();
-        throw new Error(msg || 'Retrieval failed');
-      }
-      const data = await res.json();
-      setRetrievalResults(Array.isArray(data.results) ? data.results : []);
-    } catch (err: any) {
-      setRetrievalError(err?.message || 'Retrieval failed');
-    } finally {
-      setRetrievalLoading(false);
     }
   };
 
@@ -1908,44 +1844,29 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
         }
       `}</style>
       {/* Header */}
-      <header className="h-14 bg-white border-b flex items-center justify-between px-4 shrink-0">
+      <header className="h-14 glass border-b border-white/30 flex items-center justify-between px-4 shrink-0">
         <div className="flex items-center gap-4">
-          <button onClick={onBack} className="p-2 hover:bg-gray-100 rounded-lg">
+          <motion.button whileTap={{ scale: 0.9 }} onClick={onBack} className="p-2 hover:bg-white/50 rounded-ios text-ios-gray-600 transition-colors">
             <ChevronLeft size={20} />
-          </button>
-          <img src="/logo.png" alt="Logo" className="w-6 h-6 object-contain" />
-          <h1 className="font-medium text-gray-800 truncate max-w-[300px]">
+          </motion.button>
+          <img src="/logo_small.png" alt="Logo" className="h-8 w-auto object-contain" />
+          <h1 className="font-medium text-ios-gray-900 truncate max-w-[300px]">
             {notebook?.title || 'Semantic Rewards for Low-Resource Language Alignment'}
           </h1>
         </div>
-        
+
         <div className="flex items-center gap-2">
-          {/* 右上方添加笔记 - 暂未使用，先注释
-          <button className="flex items-center gap-1.5 px-3 py-1.5 bg-black text-white rounded-full text-sm font-medium hover:bg-gray-800 transition-colors">
-            <Plus size={16} />
-            New notebook
-          </button>
-          */}
-          {/* 右侧上方分析和分享 - 暂未使用，先注释
-          <button className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-gray-100 rounded-full text-sm font-medium transition-colors">
-            <BarChart2 size={16} />
-            Analyze
-          </button>
-          <button className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-gray-100 rounded-full text-sm font-medium transition-colors">
-            <Share2 size={16} />
-            Share
-          </button>
-          */}
-          <button
+          <motion.button
+            whileTap={{ scale: 0.9 }}
             onClick={() => setShowSettingsModal(true)}
-            className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+            className="p-2 hover:bg-white/50 rounded-ios transition-colors"
             title="API settings"
           >
-            <Settings size={20} className="text-gray-600" />
-          </button>
-          <div className="h-4 w-[1px] bg-gray-200 mx-1"></div>
-          <div className="text-xs font-medium bg-gray-100 px-2 py-0.5 rounded text-gray-500 uppercase tracking-tight">PRO</div>
-          <div className="w-8 h-8 bg-blue-500 rounded-full flex items-center justify-center text-white ml-2 text-xs font-bold">
+            <Settings size={20} className="text-ios-gray-500" />
+          </motion.button>
+          <div className="h-4 w-[1px] bg-ios-gray-200 mx-1"></div>
+          <div className="text-xs font-medium bg-ios-gray-100 px-2 py-0.5 rounded-ios text-ios-gray-500 uppercase tracking-tight">PRO</div>
+          <div className="w-8 h-8 bg-gradient-to-br from-primary to-blue-600 rounded-full flex items-center justify-center text-white ml-2 text-xs font-bold shadow-ios-sm">
             {(effectiveUser?.email || effectiveUser?.id || 'U').charAt(0).toUpperCase()}
           </div>
         </div>
@@ -1955,12 +1876,12 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       <div className="flex-1 flex overflow-hidden min-w-0">
         {/* Left Sidebar: Sources */}
         <aside
-          className="bg-gray-50 border-r flex flex-col p-4 shrink-0 overflow-hidden"
+          className="bg-ios-gray-50 border-r border-ios-gray-100/60 flex flex-col p-4 shrink-0 overflow-hidden"
           style={{ width: leftPanelWidth, minWidth: 160, maxWidth: 480 }}
         >
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-sm font-semibold text-gray-700">Sources ({files.length})</h2>
-            <button className="p-1 hover:bg-gray-200 rounded">
+            <h2 className="text-sm font-semibold text-ios-gray-700">Sources ({files.length})</h2>
+            <button className="p-1 hover:bg-ios-gray-200 rounded-ios">
               <MoreVertical size={16} />
             </button>
           </div>
@@ -1975,19 +1896,20 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
             />
             <label
               htmlFor="file-upload"
-              className={`flex-1 flex items-center justify-center gap-2 py-2.5 bg-white border border-gray-200 rounded-full text-sm font-medium transition-all ${fileUploading ? 'text-gray-400 cursor-not-allowed opacity-60' : 'text-gray-700 hover:shadow-sm cursor-pointer'}`}
+              className={`flex-1 flex items-center justify-center gap-2 py-2.5 bg-white border border-ios-gray-200 rounded-full text-sm font-medium transition-all ${fileUploading ? 'text-ios-gray-400 cursor-not-allowed opacity-60' : 'text-ios-gray-700 hover:shadow-ios-sm cursor-pointer'}`}
             >
               {fileUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
               {fileUploading ? 'Importing...' : 'Upload files'}
             </label>
-            <button
+            <motion.button
+              whileTap={{ scale: 0.95 }}
               type="button"
               onClick={() => setShowIntroduceModal(true)}
-              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-white border border-gray-200 rounded-full text-sm font-medium text-gray-700 hover:shadow-sm transition-all hover:bg-gray-50"
+              className="flex-1 flex items-center justify-center gap-2 py-2.5 bg-white border border-ios-gray-200 rounded-full text-sm font-medium text-ios-gray-700 hover:shadow-ios-sm transition-all hover:bg-ios-gray-50"
             >
               <Search size={16} />
               Add sources
-            </button>
+            </motion.button>
           </div>
 
           {retrievalError && (
@@ -2017,12 +1939,12 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
           {!sourceDetailView ? (
             <>
               <div className="flex items-center justify-between mb-2">
-                <span className="text-xs font-medium text-gray-500 uppercase tracking-wider">
+                <span className="text-xs font-medium text-ios-gray-500 uppercase tracking-wider">
                   {selectedIds.size > 0 ? `${selectedIds.size} selected` : 'All sources'}
                 </span>
                 <input
                   type="checkbox"
-                  className="rounded text-blue-500"
+                  className="rounded-full text-primary accent-primary"
                   checked={selectedIds.size === files.length && files.length > 0}
                   onChange={(e) => {
                     if (e.target.checked) {
@@ -2036,21 +1958,24 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
 
               <div className="flex-1 overflow-y-auto min-h-0">
                 {files.length === 0 ? (
-                  <div className="text-center py-8 text-gray-400 text-sm">
+                  <div className="text-center py-8 text-ios-gray-400 text-sm">
                     No files. Please upload.
                   </div>
                 ) : (
                   files.map((file, fileIdx) => (
-                    <div
+                    <motion.div
                       key={file.id}
-                      className="flex items-center gap-3 p-3 bg-white border border-gray-100 rounded-xl mb-2 hover:shadow-sm transition-all cursor-pointer"
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: fileIdx * 0.03, type: 'spring', stiffness: 300, damping: 25 }}
+                      className="flex items-center gap-3 p-3 bg-white border border-ios-gray-100 rounded-ios-xl mb-2 hover:shadow-ios-sm transition-all cursor-pointer"
                       onClick={() => openSourceDetail(file)}
                     >
-                      <div className="w-8 h-8 bg-blue-50 rounded flex items-center justify-center shrink-0">
-                        <span className="text-xs font-bold text-blue-600">{fileIdx + 1}</span>
+                      <div className="w-8 h-8 bg-gradient-to-br from-primary/15 to-blue-100 rounded-ios flex items-center justify-center shrink-0">
+                        <span className="text-xs font-bold text-primary">{fileIdx + 1}</span>
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="text-xs text-gray-700 line-clamp-2 leading-tight">
+                        <div className="text-xs text-ios-gray-700 line-clamp-2 leading-tight">
                           {file.name}
                         </div>
                         <div className="mt-1 flex items-center gap-2">
@@ -2063,7 +1988,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                       </div>
                       <input
                         type="checkbox"
-                        className="rounded text-blue-500"
+                        className="rounded-full text-primary accent-primary"
                         checked={selectedIds.has(file.id)}
                         onChange={() => {
                           setSelectedIds(prev => {
@@ -2075,7 +2000,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                         }}
                         onClick={(e) => e.stopPropagation()}
                       />
-                    </div>
+                    </motion.div>
                   ))
                 )}
               </div>
@@ -2127,61 +2052,44 @@ rel="noopener noreferrer"
         <div
           role="separator"
           aria-orientation="vertical"
-          className="w-1 shrink-0 bg-gray-200 hover:bg-blue-400 active:bg-blue-500 cursor-col-resize transition-colors flex items-center justify-center group"
+          className="w-1 shrink-0 bg-ios-gray-100/60 hover:bg-primary/40 active:bg-primary cursor-col-resize transition-colors flex items-center justify-center group"
           onMouseDown={(e) => {
             e.preventDefault();
             setResizing('left');
             resizeRef.current = { startX: e.clientX, startLeft: leftPanelWidth, startRight: rightPanelWidth };
           }}
         >
-          <span className="w-0.5 h-8 bg-gray-400 group-hover:bg-blue-500 rounded-full opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+          <span className="w-0.5 h-8 bg-ios-gray-300 group-hover:bg-primary rounded-full opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
         </div>
 
         {/* Center: Chat/Content Area */}
         <main className="flex-1 flex flex-col relative bg-white min-w-[300px] overflow-hidden">
-          <div className="flex items-center justify-between px-6 py-4 border-b shrink-0">
-            <div className="flex items-center gap-6">
-              <button 
-                onClick={() => setActiveTab('chat')}
-                className={`text-sm font-semibold pb-1 transition-all ${activeTab === 'chat' ? 'text-gray-800 border-b-2 border-black' : 'text-gray-400 hover:text-gray-600'}`}
-              >
-                Chat
-              </button>
-              <button 
-                onClick={() => setActiveTab('retrieval')}
-                className={`text-sm font-semibold pb-1 transition-all ${activeTab === 'retrieval' ? 'text-gray-800 border-b-2 border-black' : 'text-gray-400 hover:text-gray-600'}`}
-              >
-                Retrieval
-              </button>
-              <button 
-                onClick={() => setActiveTab('sources')}
-                className={`text-sm font-medium pb-1 transition-all ${activeTab === 'sources' ? 'text-gray-800 border-b-2 border-black' : 'text-gray-400 hover:text-gray-600'}`}
-              >
-                Source management
-              </button>
-            </div>
+          <div className="flex items-center justify-between px-6 py-3 border-b border-ios-gray-100 shrink-0">
+            <span className="text-sm font-medium text-ios-gray-900">Chat</span>
             <div className="flex items-center gap-2">
-              <button
+              <motion.button
+                whileTap={{ scale: 0.95 }}
                 type="button"
                 onClick={handleNewConversation}
-                className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-gray-100 rounded-full text-sm font-medium text-gray-700"
+                className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-ios-gray-100 rounded-ios text-sm font-medium text-ios-gray-700 transition-colors"
               >
                 <Plus size={16} />
                 New Chat
-              </button>
-              <button
+              </motion.button>
+              <motion.button
+                whileTap={{ scale: 0.95 }}
                 type="button"
                 onClick={handleShowHistory}
-                className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-gray-100 rounded-full text-sm font-medium text-gray-700"
+                className="flex items-center gap-1.5 px-3 py-1.5 hover:bg-ios-gray-100 rounded-ios text-sm font-medium text-ios-gray-700 transition-colors"
               >
                 <MessageSquare size={16} />
                 Chat history
-              </button>
+              </motion.button>
             </div>
           </div>
 
           <div className="flex-1 overflow-y-auto p-8">
-            {activeTab === 'chat' && chatSubView === 'history' && (
+            {chatSubView === 'history' && (
               <div className="max-w-[800px] mx-auto w-full">
                 <div className="flex items-center justify-between mb-3">
                   <h3 className="text-sm font-semibold text-gray-500">Chat history (click to restore)</h3>
@@ -2215,17 +2123,22 @@ rel="noopener noreferrer"
                 </ul>
               </div>
             )}
-            {activeTab === 'chat' && chatSubView === 'current' && (
+            {chatSubView === 'current' && (
               <div className="max-w-[800px] mx-auto w-full space-y-4">
+                {chatMessages.length <= 1 && chatMessages[0]?.id === 'welcome' && (
+                  <div className="flex flex-col items-center pt-6 pb-2">
+                    <img src="/logo_banner.jpg" alt="OpenNotebookLM" className="h-16 w-auto object-contain rounded-xl" />
+                  </div>
+                )}
                 {chatMessages.map(msg => (
                   <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
-                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${
-                      msg.role === 'assistant' ? 'bg-blue-100 text-blue-600' : 'bg-gray-200 text-gray-600'
+                    <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 shadow-ios-sm ${
+                      msg.role === 'assistant' ? 'bg-gradient-to-br from-blue-100 to-blue-200 text-primary' : 'bg-gradient-to-br from-ios-gray-200 to-ios-gray-300 text-ios-gray-600'
                     }`}>
                       {msg.role === 'assistant' ? <Bot size={16} /> : <User size={16} />}
                     </div>
-                    <div className={`max-w-[85%] rounded-2xl px-4 py-3 text-sm leading-relaxed ${
-                      msg.role === 'assistant' ? 'bg-gray-50 text-gray-700' : 'bg-blue-500 text-white'
+                    <div className={`max-w-[85%] px-4 py-3 text-sm leading-relaxed shadow-ios-sm ${
+                      msg.role === 'assistant' ? 'bg-ios-gray-50 text-ios-gray-700 rounded-2xl rounded-tl-md' : 'bg-primary text-white rounded-2xl rounded-tr-md'
                     }`}>
                       {msg.role === 'assistant' ? (
                         <MarkdownContent content={msg.content} sourceMapping={msg.sourceMapping} />
@@ -2237,10 +2150,10 @@ rel="noopener noreferrer"
                 ))}
                 {isChatLoading && (
                   <div className="flex gap-3 animate-pulse">
-                    <div className="w-8 h-8 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
+                    <div className="w-8 h-8 rounded-full bg-gradient-to-br from-blue-100 to-blue-200 text-primary flex items-center justify-center shadow-ios-sm">
                       <Bot size={16} />
                     </div>
-                    <div className="bg-gray-50 rounded-2xl px-4 py-3 text-sm flex items-center gap-2 text-gray-500">
+                    <div className="bg-ios-gray-50 rounded-2xl rounded-tl-md px-4 py-3 text-sm flex items-center gap-2 text-ios-gray-500 shadow-ios-sm">
                       <Loader2 size={14} className="animate-spin" /> Thinking...
                     </div>
                   </div>
@@ -2248,248 +2161,35 @@ rel="noopener noreferrer"
               </div>
             )}
 
-            {activeTab === 'retrieval' && (
-              <div className="max-w-[900px] mx-auto w-full space-y-6">
-                {!apiConfigured && (
-                  <div className="flex items-center justify-between gap-4 p-4 bg-amber-50 border border-amber-200 rounded-2xl">
-                    <p className="text-sm text-amber-800">Configure API URL and API Key in Settings (top right) to use retrieval and embeddings.</p>
-                    <button type="button" onClick={() => setShowSettingsModal(true)} className="shrink-0 text-sm font-medium text-amber-700 hover:text-amber-900 underline">Settings</button>
-                  </div>
-                )}
-                {retrievalError && (
-                  <div className="flex items-center justify-between gap-4 p-4 bg-red-50 border border-red-100 rounded-2xl">
-                    <p className="text-sm text-red-700">{retrievalError}</p>
-                    <button type="button" onClick={() => setRetrievalError('')} className="shrink-0 text-sm text-red-500 hover:text-red-700">Close</button>
-                  </div>
-                )}
-                <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
-                  <div className="flex items-start gap-3">
-                    <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
-                      <Search size={18} className="text-blue-600" />
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="text-lg font-semibold text-gray-900">Knowledge base retrieval</h3>
-                      <p className="text-sm text-gray-500 mt-1">Enter a question to search over embedded sources.</p>
-                    </div>
-                  </div>
-                  <div className="mt-4 space-y-3">
-                    <input
-                      value={retrievalQuery}
-                      onChange={e => setRetrievalQuery(e.target.value)}
-                      placeholder="e.g. What is the main contribution of the model?"
-                      className="w-full bg-white border border-gray-200 rounded-xl px-4 py-3 text-sm text-gray-700 outline-none focus:border-blue-400"
-                    />
-                    <div className="flex flex-wrap items-center gap-3">
-                      <div className="flex items-center gap-2 text-xs text-gray-500">
-                        <span>TopK</span>
-                        <input
-                          type="number"
-                          min={1}
-                          max={20}
-                          value={retrievalTopK}
-                          onChange={e => setRetrievalTopK(Math.max(1, Number(e.target.value || 1)))}
-                          className="w-16 bg-white border border-gray-200 rounded-lg px-2 py-1 text-xs text-gray-700"
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 text-xs text-gray-500">
-                        <span>Embedding Model</span>
-                        <input
-                          value={retrievalModel}
-                          onChange={e => setRetrievalModel(e.target.value)}
-                          className="w-56 bg-white border border-gray-200 rounded-lg px-2 py-1 text-xs text-gray-700"
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 ml-auto">
-                        <button
-                          onClick={handleRunRetrieval}
-                          disabled={retrievalLoading}
-                          className="px-4 py-2 text-xs rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                        >
-                          {retrievalLoading ? 'Searching...' : 'Search'}
-                        </button>
-                      </div>
-                    </div>
-                    {retrievalError && (
-                      <div className="text-xs text-red-500">{retrievalError}</div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="space-y-3">
-                  {retrievalResults.length === 0 && !retrievalLoading && (
-                    <div className="text-sm text-gray-400 text-center py-10">
-                      No results
-                    </div>
-                  )}
-                  {retrievalResults.map((item, idx) => (
-                    <div key={idx} className="bg-white border border-gray-200 rounded-2xl p-4">
-                      <div className="flex items-center justify-between mb-2">
-                        <div className="text-xs text-gray-500">
-                          Score:{item.score?.toFixed ? item.score.toFixed(3) : item.score}
-                        </div>
-                        {item.source_file?.url && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const u = getSameOriginUrl(item.source_file?.url);
-                              if (u) window.open(u, '_blank', 'noopener,noreferrer');
-                            }}
-                            className="text-xs text-blue-600 hover:text-blue-500 underline cursor-pointer bg-transparent border-0 p-0"
-                          >
-                            Open source
-                          </button>
-                        )}
-                      </div>
-                      <div className="text-sm text-gray-700 whitespace-pre-line">
-                        {item.content || '(no content)'}
-                      </div>
-                      {item.media?.url && (
-                        <div className="mt-3">
-                          {item.type === 'image' ? (
-                            <img src={getSameOriginUrl(item.media.url)} alt="media" className="max-h-64 rounded-lg border" />
-                          ) : (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                const u = getSameOriginUrl(item.media?.url);
-                                if (u) window.open(u, '_blank', 'noopener,noreferrer');
-                              }}
-                              className="text-xs text-blue-600 hover:text-blue-500 underline cursor-pointer bg-transparent border-0 p-0"
-                            >
-                              View media
-                            </button>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {activeTab === 'sources' && (
-              <div className="max-w-[900px] mx-auto w-full space-y-6">
-                <div className="bg-gray-50 border border-gray-200 rounded-2xl p-6">
-                  <h3 className="text-lg font-semibold text-gray-900">Vector store files</h3>
-                  <p className="text-sm text-gray-500 mt-1">
-                    Sources are managed on the left. This list shows embedded files and status.
-                  </p>
-                  <div className="mt-4 flex items-center gap-2">
-                    <button
-                      onClick={fetchVectorList}
-                      disabled={vectorLoading}
-                      className="px-3 py-2 text-xs rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
-                    >
-                      {vectorLoading ? 'Refreshing...' : 'Refresh'}
-                    </button>
-                    {vectorError && <span className="text-xs text-red-500">{vectorError}</span>}
-                  </div>
-                </div>
-
-                {vectorLoading && (
-                  <div className="text-sm text-gray-400 text-center py-8">Loading vector list...</div>
-                )}
-
-                {!vectorLoading && vectorFiles.length === 0 && (
-                  <div className="text-sm text-gray-400 text-center py-10">No vector files</div>
-                )}
-
-                <div className="space-y-3">
-                  {vectorFiles.map((item, idx) => {
-                    const fileName = getFileNameFromPath(item.original_path);
-                    const status = item.status || 'unknown';
-                    const actionKey = item.id || item.original_path;
-                    const isBusy = actionKey ? vectorActionLoading[actionKey] : false;
-                    const statusColor =
-                      status === 'embedded'
-                        ? 'text-green-600 bg-green-50'
-                        : status === 'failed'
-                        ? 'text-red-600 bg-red-50'
-                        : status === 'skipped'
-                        ? 'text-gray-600 bg-gray-100'
-                        : 'text-blue-600 bg-blue-50';
-                    return (
-                      <div key={`${item.id || idx}`} className="bg-white border border-gray-200 rounded-2xl p-4">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-3">
-                            <FileText size={18} className="text-gray-400" />
-                            <div>
-                              <div className="text-sm font-medium text-gray-900">{fileName || 'Untitled'}</div>
-                              <div className="text-xs text-gray-500 mt-1">
-                                Type: {item.file_type || '-'} | chunks: {item.chunks_count ?? 0} | media: {item.media_desc_count ?? 0}
-                              </div>
-                            </div>
-                          </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={() => handleReembedVector(item)}
-                            disabled={isBusy}
-                            className="text-xs px-2 py-1 rounded-lg border border-gray-200 text-gray-600 hover:bg-gray-100 disabled:opacity-50"
-                          >
-                            Re-embed
-                          </button>
-                          <button
-                            onClick={() => handleDeleteVector(item)}
-                            disabled={isBusy}
-                            className="text-xs px-2 py-1 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 disabled:opacity-50"
-                          >
-                            Delete vector
-                          </button>
-                          <span className={`text-xs px-2 py-1 rounded-full ${statusColor}`}>
-                            {status}
-                          </span>
-                        </div>
-                        </div>
-                        {item.error && (
-                          <div className="text-xs text-red-500 mt-3 flex items-center gap-2 flex-wrap">
-                            <span>
-                              {/401|Unauthorized/i.test(String(item.error))
-                                ? 'API auth failed. Check API Key in Settings.'
-                                : `Error: ${item.error}`}
-                            </span>
-                            {(/401|Unauthorized/i.test(String(item.error))) && (
-                              <button
-                                type="button"
-                                onClick={() => setShowSettingsModal(true)}
-                                className="text-blue-600 hover:underline"
-                              >
-                                Settings
-                              </button>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
           </div>
 
-          {activeTab === 'chat' && chatSubView === 'current' && (
+          {chatSubView === 'current' && (
             <div className="px-6 pb-6 shrink-0">
               <div className="max-w-[800px] mx-auto relative">
-                <input 
-                  type="text" 
-                  value={inputMsg}
-                  onChange={e => setInputMsg(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
-                  placeholder={selectedIds.size > 0 ? "Type here..." : "Select files first..."} 
-                  disabled={selectedIds.size === 0}
-                  className="w-full bg-[#f8f9fa] border border-gray-200 rounded-3xl py-4 pl-6 pr-24 focus:outline-none focus:ring-1 focus:ring-blue-500 text-lg disabled:opacity-50"
-                />
-                <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                  <span className="text-xs text-gray-400 font-medium">{selectedIds.size} sources</span>
-                  <button 
-                    onClick={handleSendMessage}
-                    disabled={!inputMsg.trim() || isChatLoading || selectedIds.size === 0}
-                    className="p-2 bg-blue-500 text-white rounded-full hover:bg-blue-600 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    <Send size={20} />
-                  </button>
+                <div className="glass rounded-ios-xl border border-white/30 shadow-ios-sm">
+                  <input
+                    type="text"
+                    value={inputMsg}
+                    onChange={e => setInputMsg(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleSendMessage()}
+                    placeholder={selectedIds.size > 0 ? "Type here..." : "Select files first..."}
+                    disabled={selectedIds.size === 0}
+                    className="w-full bg-transparent rounded-ios-xl py-4 pl-6 pr-24 focus:outline-none text-lg disabled:opacity-50"
+                  />
+                  <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                    <span className="text-xs text-ios-gray-400 font-medium">{selectedIds.size} sources</span>
+                    <motion.button
+                      whileTap={{ scale: 0.88 }}
+                      onClick={handleSendMessage}
+                      disabled={!inputMsg.trim() || isChatLoading || selectedIds.size === 0}
+                      className="p-2 bg-primary text-white rounded-full hover:bg-primary/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-ios-sm"
+                    >
+                      <Send size={20} />
+                    </motion.button>
+                  </div>
                 </div>
               </div>
-              <p className="text-center text-[10px] text-gray-400 mt-4">
+              <p className="text-center text-[10px] text-ios-gray-400 mt-4">
                 Answers may not be fully accurate. Please verify important content.
               </p>
             </div>
@@ -2500,23 +2200,23 @@ rel="noopener noreferrer"
         <div
           role="separator"
           aria-orientation="vertical"
-          className="w-1 shrink-0 bg-gray-200 hover:bg-blue-400 active:bg-blue-500 cursor-col-resize transition-colors flex items-center justify-center group"
+          className="w-1 shrink-0 bg-ios-gray-100/60 hover:bg-primary/40 active:bg-primary cursor-col-resize transition-colors flex items-center justify-center group"
           onMouseDown={(e) => {
             e.preventDefault();
             setResizing('right');
             resizeRef.current = { startX: e.clientX, startLeft: leftPanelWidth, startRight: rightPanelWidth };
           }}
         >
-          <span className="w-0.5 h-8 bg-gray-400 group-hover:bg-blue-500 rounded-full opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
+          <span className="w-0.5 h-8 bg-ios-gray-300 group-hover:bg-primary rounded-full opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none" />
         </div>
 
         {/* Right Sidebar: Studio 功能卡片，每卡片「…」翻转进该卡片设置 */}
         <aside
-          className="border-l flex flex-col bg-white overflow-hidden shrink-0"
+          className="border-l border-ios-gray-100/60 flex flex-col bg-white overflow-hidden shrink-0"
           style={{ width: rightPanelWidth, minWidth: 200, maxWidth: 600 }}
         >
-          <div className="h-14 border-b flex items-center px-4 shrink-0">
-            <h2 className="font-semibold text-gray-700">Studio</h2>
+          <div className="h-14 border-b border-ios-gray-100 flex items-center px-4 shrink-0">
+            <h2 className="font-semibold text-ios-gray-700">Studio</h2>
           </div>
 
           {studioPanelView === 'settings' && studioSettingsTool ? (
@@ -2780,37 +2480,53 @@ rel="noopener noreferrer"
           <div className="flex-1 overflow-y-auto p-4">
             <div className="grid grid-cols-2 gap-3 mb-4">
               {studioTools.map(tool => (
-                <div
+                <motion.div
                   key={tool.id}
+                  whileHover={{ scale: 1.03, y: -2 }}
+                  whileTap={{ scale: 0.97 }}
                   onClick={() => setActiveTool(tool.id)}
-                  className={`relative p-4 rounded-xl border transition-all cursor-pointer ${
-                    activeTool === tool.id ? 'bg-blue-50 border-blue-200' : 'bg-gray-50 border-gray-100 hover:border-blue-200 hover:bg-white'
+                  className={`relative p-4 rounded-ios-xl border transition-all cursor-pointer ${
+                    activeTool === tool.id ? 'bg-gradient-to-br from-primary/10 to-primary/5 border-primary/30 shadow-ios-sm' : 'bg-ios-gray-50 border-ios-gray-100 hover:border-primary/20 hover:bg-white'
                   }`}
                 >
-                  <div className="w-8 h-8 rounded-lg flex items-center justify-center mb-3">
+                  <div className={`w-8 h-8 rounded-ios flex items-center justify-center mb-3 ${
+                    activeTool === tool.id ? 'bg-primary/15' : 'bg-ios-gray-100'
+                  }`}>
                     {tool.icon}
                   </div>
-                  <span className="text-sm font-medium text-gray-700">{tool.label}</span>
-                  <button
+                  <span className="text-sm font-medium text-ios-gray-700">{tool.label}</span>
+                  <motion.button
+                    whileTap={{ scale: 0.85 }}
                     type="button"
                     onClick={(e) => { e.stopPropagation(); setStudioSettingsTool(tool.id as StudioToolId); setStudioPanelView('settings'); }}
-                    className="absolute top-2 right-2 min-w-[36px] min-h-[36px] flex items-center justify-center hover:bg-gray-200 rounded-lg transition-colors"
+                    className="absolute top-2 right-2 min-w-[36px] min-h-[36px] flex items-center justify-center hover:bg-ios-gray-200 rounded-ios transition-colors"
                     title="Tool settings"
                   >
-                    <MoreVertical size={16} className="text-gray-500" />
-                  </button>
-                </div>
+                    <MoreVertical size={16} className="text-ios-gray-500" />
+                  </motion.button>
+                </motion.div>
               ))}
             </div>
             {activeTool !== 'chat' && activeTool !== 'search' && (
-              <button
+              <motion.button
+                whileTap={{ scale: 0.97 }}
                 type="button"
                 onClick={() => handleToolGenerate(activeTool)}
                 disabled={selectedIds.size === 0 || toolLoading}
-                className="w-full py-2.5 mb-4 bg-black text-white text-sm font-medium rounded-xl hover:bg-gray-800 disabled:opacity-50 disabled:cursor-not-allowed"
+                className="w-full py-2.5 mb-4 bg-gradient-to-r from-gray-900 to-gray-800 text-white text-sm font-medium rounded-ios-xl hover:from-gray-800 hover:to-gray-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-ios-sm flex items-center justify-center gap-2 transition-all"
               >
-                {toolLoading ? 'Generating…' : 'Generate'}
-              </button>
+                {toolLoading ? (
+                  <>
+                    <Loader2 size={16} className="animate-spin" />
+                    Generating…
+                  </>
+                ) : (
+                  <>
+                    <Sparkles size={16} />
+                    Generate
+                  </>
+                )}
+              </motion.button>
             )}
 
             {/* Tool Output Display */}
@@ -2885,14 +2601,18 @@ rel="noopener noreferrer"
           {outputFeed.length > 0 && (
             <div className="mt-6">
               <div className="flex items-center justify-between mb-3">
-                <h3 className="text-sm font-semibold text-gray-700">Outputs</h3>
-                <span className="text-xs text-gray-400">Latest {outputFeed.length} items</span>
+                <h3 className="text-sm font-semibold text-ios-gray-700">Outputs</h3>
+                <span className="text-xs text-ios-gray-400">Latest {outputFeed.length} items</span>
               </div>
               <div className="space-y-3">
-                {outputFeed.map(item => (
-                  <div
+                {outputFeed.map((item, feedIdx) => (
+                  <motion.div
                     key={item.id}
-                    className="bg-white border border-gray-200 rounded-xl p-3 hover:shadow-md transition-all cursor-pointer"
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: feedIdx * 0.05, type: 'spring', stiffness: 300, damping: 25 }}
+                    whileHover={{ y: -2, boxShadow: '0 4px 12px rgba(0,0,0,0.08)' }}
+                    className="bg-white border border-ios-gray-100 rounded-ios-xl p-3 shadow-ios-sm transition-all cursor-pointer"
                     onClick={() => {
                       if (item.type === 'flashcard' || item.type === 'quiz') {
                         handleLoadSavedSet(item);
@@ -2902,14 +2622,14 @@ rel="noopener noreferrer"
                     }}
                   >
                     <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-1.5 text-sm font-medium text-gray-900">
+                      <div className="flex items-center gap-1.5 text-sm font-medium text-ios-gray-900">
                         {item.type === 'flashcard' && <BookOpen size={14} className="text-purple-500" />}
                         {item.type === 'quiz' && <Brain size={14} className="text-orange-500" />}
                         {item.title}
                       </div>
-                      <div className="text-[10px] text-gray-400">{item.createdAt}</div>
+                      <div className="text-[10px] text-ios-gray-400">{item.createdAt}</div>
                     </div>
-                    <div className="mt-1 text-xs text-gray-500 line-clamp-1">
+                    <div className="mt-1 text-xs text-ios-gray-500 line-clamp-1">
                       Sources: {item.sources}
                     </div>
                     <div className="mt-2 flex items-center gap-2">
@@ -2946,10 +2666,10 @@ rel="noopener noreferrer"
                           </a>
                         </>
                       ) : (
-                        <span className="text-xs text-gray-400">No download link</span>
+                        <span className="text-xs text-ios-gray-400">No download link</span>
                       )}
                     </div>
-                  </div>
+                  </motion.div>
                 ))}
               </div>
             </div>
@@ -2977,7 +2697,7 @@ rel="noopener noreferrer"
       {/* 引入弹框：根据以下内容生成音频概览和视频概览 */}
       {showIntroduceModal && (
         <div
-          className="fixed inset-0 z-[300] flex items-center justify-center bg-black/40 p-4"
+          className="fixed inset-0 z-[300] flex items-end sm:items-center justify-center"
           onClick={() => {
             setShowIntroduceModal(false);
             setDeepResearchSuccess(null);
@@ -2986,12 +2706,25 @@ rel="noopener noreferrer"
             setIntroduceUploadSuccess('');
           }}
         >
-          <div
-            className="bg-white rounded-2xl shadow-xl border border-gray-200 w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col"
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 glass-dark"
+          />
+          <motion.div
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+            className="relative bg-white rounded-t-ios-2xl sm:rounded-ios-2xl shadow-ios-xl border border-ios-gray-100 w-full max-w-lg max-h-[90vh] overflow-hidden flex flex-col"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 shrink-0">
-              <h2 className="text-base font-semibold text-gray-900 text-center flex-1">
+            <div className="flex justify-center pt-3 sm:hidden">
+              <div className="w-9 h-1 rounded-full bg-ios-gray-300" />
+            </div>
+            <div className="flex items-center justify-between px-6 py-4 border-b border-ios-gray-100 shrink-0">
+              <h2 className="text-base font-semibold text-ios-gray-900 text-center flex-1">
                 Add sources: upload, URL, or paste text
               </h2>
               <button
@@ -3003,7 +2736,7 @@ rel="noopener noreferrer"
                 setIntroduceTextSuccess('');
                 setIntroduceUploadSuccess('');
               }}
-                className="p-2 hover:bg-gray-100 rounded-lg text-gray-500 hover:text-gray-700 -mr-2"
+                className="p-2 hover:bg-ios-gray-100 rounded-ios text-ios-gray-500 hover:text-ios-gray-700 -mr-2"
               >
                 <X size={20} />
               </button>
@@ -3276,18 +3009,28 @@ rel="noopener noreferrer"
                 </div>
               </div>
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
 
       {/* 产出预览抽屉 */}
       {previewOutput && (
         <div
-          className="fixed inset-0 z-[200] flex items-center justify-center bg-black/40 backdrop-blur-sm"
+          className="fixed inset-0 z-[200] flex items-end sm:items-center justify-center"
           onClick={() => setPreviewOutput(null)}
         >
-          <div
-            className={`bg-white rounded-2xl shadow-xl border border-gray-200 overflow-hidden flex flex-col ${
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 glass-dark"
+          />
+          <motion.div
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+            className={`relative bg-white rounded-t-ios-2xl sm:rounded-ios-2xl shadow-ios-xl border border-ios-gray-100 overflow-hidden flex flex-col ${
               previewOutput.type === 'drawio'
                 ? 'w-[95vw] h-[95vh] min-w-[320px] min-h-[360px]'
                 : 'w-[90vw] h-[90vh] max-w-[1600px] max-h-[90vh] min-w-[320px] min-h-[360px]'
@@ -3295,10 +3038,10 @@ rel="noopener noreferrer"
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white shrink-0">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-ios-gray-100 bg-white shrink-0">
               <div>
-                <h2 className="text-lg font-semibold text-gray-800">{previewOutput.title}</h2>
-                <p className="text-xs text-gray-500 mt-1">Sources: {previewOutput.sources}</p>
+                <h2 className="text-lg font-semibold text-ios-gray-800">{previewOutput.title}</h2>
+                <p className="text-xs text-ios-gray-500 mt-1">Sources: {previewOutput.sources}</p>
               </div>
               <div className="flex items-center gap-2">
                 {previewOutput.url && (
@@ -3306,17 +3049,18 @@ rel="noopener noreferrer"
                     href={previewOutput.url}
                     target="_blank"
                     rel="noreferrer"
-                    className="px-4 py-2 text-sm font-medium text-blue-600 bg-blue-50 hover:bg-blue-100 rounded-lg transition-colors"
+                    className="px-4 py-2 text-sm font-medium text-primary bg-primary/10 hover:bg-primary/20 rounded-ios transition-colors"
                   >
                     Download
                   </a>
                 )}
-                <button
+                <motion.button
+                  whileTap={{ scale: 0.9 }}
                   onClick={() => setPreviewOutput(null)}
-                  className="p-2 hover:bg-gray-200 rounded-lg text-gray-500 hover:text-gray-700 transition-colors"
+                  className="p-2 hover:bg-ios-gray-100 rounded-ios text-ios-gray-500 hover:text-ios-gray-700 transition-colors"
                 >
                   <X size={20} />
-                </button>
+                </motion.button>
               </div>
             </div>
 
@@ -3446,31 +3190,57 @@ rel="noopener noreferrer"
                 </div>
               )}
             </div>
-          </div>
+          </motion.div>
         </div>
       )}
 
       {/* Flashcard Viewer Modal */}
       {showFlashcardViewer && flashcards.length > 0 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowFlashcardViewer(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-2xl max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" onClick={() => setShowFlashcardViewer(false)}>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 glass-dark"
+          />
+          <motion.div
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+            className="relative bg-white rounded-t-ios-2xl sm:rounded-ios-2xl shadow-ios-xl w-full max-w-2xl max-h-[90vh] overflow-auto"
+            onClick={e => e.stopPropagation()}
+          >
             <FlashcardViewer
               flashcards={flashcards}
               onClose={() => setShowFlashcardViewer(false)}
             />
-          </div>
+          </motion.div>
         </div>
       )}
 
       {/* Quiz Container Modal */}
       {showQuizContainer && quizQuestions.length > 0 && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setShowQuizContainer(false)}>
-          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center" onClick={() => setShowQuizContainer(false)}>
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="absolute inset-0 glass-dark"
+          />
+          <motion.div
+            initial={{ y: 100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: 100, opacity: 0 }}
+            transition={{ type: 'spring', stiffness: 300, damping: 30 }}
+            className="relative bg-white rounded-t-ios-2xl sm:rounded-ios-2xl shadow-ios-xl w-full max-w-3xl max-h-[90vh] overflow-auto"
+            onClick={e => e.stopPropagation()}
+          >
             <QuizContainer
               questions={quizQuestions}
               onClose={() => setShowQuizContainer(false)}
             />
-          </div>
+          </motion.div>
         </div>
       )}
     </div>

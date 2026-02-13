@@ -15,7 +15,7 @@ requests>=2.32.0
 supabase>=2.27.0
 
 # ------ LLM / LangChain ------
-openai>=2.16.0
+openai>=1.104.2,<2.0.0
 aisuite>=0.1.14
 langchain==0.3.27
 langchain-community==0.3.29
@@ -106,6 +106,12 @@ google-api-python-client>=2.187.0
 # ------ Audio ------
 librosa>=0.11.0
 soundfile>=0.13.0
+
+# ------ OCR (PaddlePaddle) ------
+paddlepaddle==3.0.0
+paddleocr>=3.4.0
+mineru_vl_utils>=0.1.22
+loguru>=0.7.3
 
 # ------ Misc ------
 appdirs>=1.4.4

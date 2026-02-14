@@ -27,7 +27,7 @@ from fastapi_app.middleware.api_key import APIKeyMiddleware
 from dataflow_agent.utils import get_project_root
 
 # 本地 Embedding 服务端口（Octen-Embedding-0.6B）
-LOCAL_EMBEDDING_PORT = 17997
+LOCAL_EMBEDDING_PORT = 26210
 LOCAL_EMBEDDING_URL = f"http://127.0.0.1:{LOCAL_EMBEDDING_PORT}/v1/embeddings"
 
 

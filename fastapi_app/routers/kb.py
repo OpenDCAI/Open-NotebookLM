@@ -1852,16 +1852,23 @@ async def generate_deep_research_report(
     search_api_key: Optional[str] = Body(None, embed=True),
     search_engine: Optional[str] = Body("google", embed=True),
     search_top_k: int = Body(10, embed=True),
+    # 新增：DeepResearch 完整模式配置
+    use_full_deep_research: bool = Body(True, embed=True),  # 默认使用完整的阿里DeepResearch
+    max_iterations: int = Body(50, embed=True),  # DeepResearch最大迭代次数
+    serper_api_key: Optional[str] = Body(None, embed=True),  # Serper API密钥
+    jina_api_key: Optional[str] = Body(None, embed=True),  # Jina API密钥
 ) -> Dict[str, Any]:
     """
-    Deep Research 报告生成：search → 结果拼成上下文 → 调 LLM 生成长报告 → 保存为 .md 并可选引入。
-    不生成 PDF，.md 可预览、可嵌入。
+    Deep Research 报告生成（默认使用完整版阿里DeepResearch）：
+    - use_full_deep_research=True: 完整版（阿里DeepResearch多轮ReAct推理，深度）【默认】
+    - use_full_deep_research=False: 简化版（搜索 + LLM总结，快速）
     """
     try:
         if not isinstance(page_count, int) or page_count < 1 or page_count > 50:
             raise HTTPException(status_code=400, detail="page_count must be an integer between 1 and 50")
         ts = int(time.time())
         project_root = get_project_root()
+
         # New layout: outputs/{title}_{id}/deep_research/{ts}/
         if notebook_id:
             dr_paths = get_notebook_paths(notebook_id, notebook_title or "", user_id)
@@ -1871,43 +1878,89 @@ async def generate_deep_research_report(
         output_dir.mkdir(parents=True, exist_ok=True)
 
         topic = topic.strip()
-        search_top_k = max(1, min(20, search_top_k))
-        log.info(
-            "[generate-deep-research-report] start: topic=%r, search_top_k=%s, provider=%s, model=%s, language=%s",
-            topic[:150], search_top_k, search_provider, model, language,
-        )
 
-        # 1) 搜索：用 topic 做 Fast Research，拿到 top_k 条结果
-        sources = fast_research_search(
-            topic,
-            top_k=search_top_k,
-            search_provider=search_provider or "serper",
-            search_api_key=search_api_key,
-            search_engine=search_engine or "google",
-        )
-        log.info("[generate-deep-research-report] search 完成: 共 %s 条来源", len(sources))
-        search_context = ""
-        if sources:
-            search_context = "\n\n".join(
-                f"[{i+1}] 标题: {s.get('title', '')}\n链接: {s.get('link', '')}\n摘要: {s.get('snippet', '')}"
-                for i, s in enumerate(sources)
+        # ============================================================================
+        # 模式选择：完整DeepResearch vs 简化版
+        # ============================================================================
+
+        if use_full_deep_research:
+            # 使用完整的阿里DeepResearch（多轮ReAct推理）
+            log.info("[generate-deep-research-report] 使用完整DeepResearch模式: topic=%r, max_iterations=%s", topic[:150], max_iterations)
+
+            # 如果没有传递 serper_api_key，尝试使用 search_api_key 作为回退
+            final_serper_key = serper_api_key or search_api_key
+
+            log.info("[generate-deep-research-report] API配置: serper_api_key=%s, search_api_key=%s, final_serper_key=%s",
+                     "***" if serper_api_key else "None",
+                     "***" if search_api_key else "None",
+                     "***" if final_serper_key else "None")
+
+            # 运行完整DeepResearch（直接传递参数，不依赖环境变量）
+            from fastapi_app.services.deep_research_integration import DeepResearchIntegration
+
+            integration = DeepResearchIntegration(
+                model_name=model,
+                api_base=api_url,
+                api_key=api_key,
+                max_iterations=max_iterations,
+                serper_key=final_serper_key,
+                jina_keys=jina_api_key,
             )
-            log.info("[generate-deep-research-report] search_context 拼接完成: len=%s", len(search_context))
-        else:
-            log.warning("[generate-deep-research-report] no search results, LLM will generate from topic only")
+            result = await integration.run_research(
+                query=topic,
+                max_iterations=max_iterations
+            )
 
-        # 2) LLM：根据 topic + search_context 生成一篇长报告（返回标题 + 正文）
-        report_title, report = generate_report_from_search(
-            topic=topic,
-            search_context=search_context,
-            api_url=api_url,
-            api_key=api_key,
-            model=model,
-            language=language,
-        )
-        if not (report or "").strip():
-            raise HTTPException(status_code=500, detail="LLM did not return report content")
-        log.info("[generate-deep-research-report] LLM 报告生成完成: title=%r, report_len=%s", report_title, len(report))
+            if not result["success"]:
+                raise HTTPException(status_code=500, detail=result.get("error", "DeepResearch failed"))
+
+            # 格式化为Markdown
+            report = integration.format_result_as_markdown(result)
+            report_title = f"DeepResearch: {topic[:50]}"
+
+            log.info("[generate-deep-research-report] 完整DeepResearch完成: iterations=%s, sources=%s",
+                     result.get("iterations", 0), len(result.get("sources", [])))
+
+        else:
+            # 使用简化版（搜索 + LLM总结）
+            search_top_k = max(1, min(20, search_top_k))
+            log.info(
+                "[generate-deep-research-report] 使用简化版模式: topic=%r, search_top_k=%s, provider=%s, model=%s",
+                topic[:150], search_top_k, search_provider, model,
+            )
+
+            # 1) 搜索：用 topic 做 Fast Research，拿到 top_k 条结果
+            sources = fast_research_search(
+                topic,
+                top_k=search_top_k,
+                search_provider=search_provider or "serper",
+                search_api_key=search_api_key or serper_api_key,
+                search_engine=search_engine or "google",
+            )
+            log.info("[generate-deep-research-report] search 完成: 共 %s 条来源", len(sources))
+
+            search_context = ""
+            if sources:
+                search_context = "\n\n".join(
+                    f"[{i+1}] 标题: {s.get('title', '')}\n链接: {s.get('link', '')}\n摘要: {s.get('snippet', '')}"
+                    for i, s in enumerate(sources)
+                )
+                log.info("[generate-deep-research-report] search_context 拼接完成: len=%s", len(search_context))
+            else:
+                log.warning("[generate-deep-research-report] no search results, LLM will generate from topic only")
+
+            # 2) LLM：根据 topic + search_context 生成一篇长报告（返回标题 + 正文）
+            report_title, report = generate_report_from_search(
+                topic=topic,
+                search_context=search_context,
+                api_url=api_url,
+                api_key=api_key,
+                model=model,
+                language=language,
+            )
+            if not (report or "").strip():
+                raise HTTPException(status_code=500, detail="LLM did not return report content")
+            log.info("[generate-deep-research-report] 简化版报告生成完成: title=%r, report_len=%s", report_title, len(report))
 
         # 3) 来源名：固定前缀 [report] + LLM 给的标题，保存为 .md
         safe_title = re.sub(r'[/\\:*?"<>|]', "", (report_title or "").strip()) or "report"
@@ -2864,4 +2917,209 @@ async def get_quiz_set(
         raise
     except Exception as e:
         log.exception("[get-quiz-set] failed")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# DeepResearch Integration
+# ============================================================================
+
+@router.post("/deep-research")
+async def run_deep_research(
+    query: str = Body(..., embed=True),
+    notebook_id: str = Body(..., embed=True),
+    notebook_title: Optional[str] = Body(None, embed=True),
+    user_id: Optional[str] = Body(None, embed=True),
+    email: Optional[str] = Body(None, embed=True),
+    max_iterations: int = Body(50, embed=True),
+):
+    """
+    运行 DeepResearch 深度研究并将结果保存为 source
+
+    Args:
+        query: 研究问题
+        notebook_id: Notebook ID
+        notebook_title: Notebook 标题
+        user_id: 用户 ID
+        email: 用户邮箱
+        max_iterations: 最大迭代次数
+
+    Returns:
+        {
+            "success": bool,
+            "query": str,
+            "answer": str,
+            "source_info": {...},  # 保存的 source 信息
+            "error": str (optional)
+        }
+    """
+    try:
+        from fastapi_app.services.deep_research_integration import DeepResearchIntegration
+
+        log.info(f"[deep-research] 开始深度研究: {query}")
+
+        # 1. 运行完整的 DeepResearch
+        integration = DeepResearchIntegration()
+        result = await integration.run_research(
+            query=query,
+            max_iterations=max_iterations
+        )
+
+        if not result["success"]:
+            return result
+
+        # 2. 将结果保存为 source
+        paths = get_notebook_paths(notebook_id, notebook_title or "", user_id)
+        mgr = SourceManager(paths)
+
+        # 格式化为 Markdown
+        markdown_content = integration.format_result_as_markdown(result)
+
+        # 保存为文本 source
+        source_info = await mgr.import_text(
+            text=markdown_content,
+            title=f"DeepResearch: {query[:50]}"
+        )
+
+        log.info(f"[deep-research] 已保存结果: {source_info.original_path}")
+
+        # 3. 自动 embedding
+        try:
+            vector_base = str(paths.vector_store_dir)
+            file_list = [{"path": str(source_info.original_path)}]
+            await process_knowledge_base_files(
+                file_list=file_list,
+                vector_base=vector_base,
+                email=email or "default",
+                user_id=user_id or "default",
+                notebook_id=notebook_id,
+            )
+            log.info(f"[deep-research] 已完成 embedding")
+        except Exception as e:
+            log.warning(f"[deep-research] Embedding 失败: {e}")
+
+        return {
+            "success": True,
+            "query": query,
+            "answer": result["answer"],
+            "source_info": {
+                "file_type": source_info.file_type,
+                "original_path": str(source_info.original_path),
+                "markdown_path": str(source_info.markdown_path) if source_info.markdown_path else None,
+            },
+            "sources_count": len(result.get("sources", [])),
+        }
+
+    except Exception as e:
+        log.exception("[deep-research] 执行失败")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+# Search & Add Integration
+# ============================================================================
+
+@router.post("/search-and-add")
+async def search_and_add(
+    query: str = Body(..., embed=True),
+    notebook_id: str = Body(..., embed=True),
+    notebook_title: Optional[str] = Body(None, embed=True),
+    user_id: Optional[str] = Body(None, embed=True),
+    email: Optional[str] = Body(None, embed=True),
+    top_k: int = Body(10, embed=True),
+    search_provider: str = Body("serper", embed=True),
+    search_api_key: Optional[str] = Body(None, embed=True),
+):
+    """
+    搜索并爬取 Top K 结果，保存为 source
+
+    Args:
+        query: 搜索查询
+        notebook_id: Notebook ID
+        notebook_title: Notebook 标题
+        user_id: 用户 ID
+        email: 用户邮箱
+        top_k: 返回前 K 个结果
+        search_provider: 搜索引擎提供商
+        search_api_key: 搜索 API 密钥
+
+    Returns:
+        {
+            "success": bool,
+            "query": str,
+            "sources_count": int,
+            "crawled_count": int,
+            "source_info": {...}
+        }
+    """
+    try:
+        from fastapi_app.services.search_and_add_service import SearchAndAddService
+
+        log.info(f"[search-and-add] 开始搜索: {query}, top_k={top_k}")
+
+        # 1. 搜索并爬取
+        service = SearchAndAddService()
+        result = await service.search_and_crawl(
+            query=query,
+            top_k=top_k,
+            search_provider=search_provider,
+            search_api_key=search_api_key,
+        )
+
+        if not result["success"]:
+            return result
+
+        sources = result["sources"]
+        if not sources:
+            return {
+                "success": False,
+                "query": query,
+                "error": "未找到搜索结果"
+            }
+
+        # 2. 将所有结果合并为一个 Markdown 文档
+        paths = get_notebook_paths(notebook_id, notebook_title or "", user_id)
+        mgr = SourceManager(paths)
+
+        markdown_content = service.format_sources_as_markdown(sources)
+
+        # 保存为文本 source
+        source_info = await mgr.import_text(
+            text=markdown_content,
+            title=f"Search: {query[:50]}"
+        )
+
+        log.info(f"[search-and-add] 已保存 {len(sources)} 个结果: {source_info.original_path}")
+
+        # 3. 自动 embedding
+        try:
+            vector_base = str(paths.vector_store_dir)
+            file_list = [{"path": str(source_info.original_path)}]
+            await process_knowledge_base_files(
+                file_list=file_list,
+                vector_base=vector_base,
+                email=email or "default",
+                user_id=user_id or "default",
+                notebook_id=notebook_id,
+            )
+            log.info(f"[search-and-add] 已完成 embedding")
+        except Exception as e:
+            log.warning(f"[search-and-add] Embedding 失败: {e}")
+
+        crawled_count = sum(1 for s in sources if s["crawl_success"])
+
+        return {
+            "success": True,
+            "query": query,
+            "sources_count": len(sources),
+            "crawled_count": crawled_count,
+            "source_info": {
+                "file_type": source_info.file_type,
+                "original_path": str(source_info.original_path),
+                "markdown_path": str(source_info.markdown_path) if source_info.markdown_path else None,
+            }
+        }
+
+    except Exception as e:
+        log.exception("[search-and-add] 执行失败")
         raise HTTPException(status_code=500, detail=str(e))

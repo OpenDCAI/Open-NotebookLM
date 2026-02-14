@@ -1,0 +1,40 @@
+--- a/fastapi_app/deep_research/react_agent.py
++++ b/fastapi_app/deep_research/react_agent.py
+@@ -110,11 +110,32 @@ class MultiTurnReactAgent(FnCallAgent):
+         return f"vllm server error!!!"
+
+     def count_tokens(self, messages):
+-        tokenizer = AutoTokenizer.from_pretrained(self.llm_local_path)
+-        full_prompt = tokenizer.apply_chat_template(messages, tokenize=False)
+-        tokens = tokenizer(full_prompt, return_tensors="pt")
+-        token_count = len(tokens["input_ids"][0])
+-
++        """
++        估算消息的 token 数量
++        使用 tiktoken 或简单估算，避免依赖特定模型的 tokenizer
++        """
++        try:
++            # 方案 1: 尝试使用 tiktoken（OpenAI 的 tokenizer）
++            import tiktoken
++            encoding = tiktoken.get_encoding("cl100k_base")
++
++            # 将消息转换为文本
++            full_text = ""
++            for msg in messages:
++                role = msg.get("role", "")
++                content = msg.get("content", "")
++                full_text += f"{role}: {content}\n"
++
++            token_count = len(encoding.encode(full_text))
++        except:
++            # 方案 2: 如果 tiktoken 不可用，使用简单估算
++            # 平均每个 token 约 4 个字符（英文）或 1.5 个字符（中文）
++            full_text = ""
++            for msg in messages:
++                content = msg.get("content", "")
++                full_text += content
++            # 使用保守估算：每 3 个字符 = 1 token
++            token_count = len(full_text) // 3
+         return token_count
+
+     def _run(self, data: str, model: str, **kwargs) -> List[List[Message]]:

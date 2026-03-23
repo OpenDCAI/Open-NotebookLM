@@ -544,3 +544,27 @@ class Paper2DrawioState(MainState):
     output_xml_path: str = ""      # XML 文件路径
     output_png_path: str = ""      # PNG 导出路径
     output_svg_path: str = ""      # SVG 导出路径
+
+
+# ==================== Data Insight Request ====================
+@dataclass
+class DataInsightRequest(MainRequest):
+    """Data insight discovery request"""
+    file_ids: List[str] = field(default_factory=list)  # Uploaded data file paths
+    output_mode: str = "concise"  # "concise" | "detailed"
+    analysis_goal: Optional[str] = None  # Optional custom analysis goal
+
+
+# ==================== Data Insight State ====================
+@dataclass
+class DataInsightState(MainState):
+    """Data insight discovery state"""
+    request: DataInsightRequest = field(default_factory=DataInsightRequest)
+    result_path: str = ""
+    
+    # Results from DM insight analysis
+    synthesized_insights: List[str] = field(default_factory=list)
+    raw_insights: List[str] = field(default_factory=list)
+    summary: str = ""
+    detailed_appendix: Dict[str, Any] = field(default_factory=dict)
+

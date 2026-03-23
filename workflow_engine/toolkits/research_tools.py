@@ -52,7 +52,7 @@ def fetch_page_text(url: str, max_chars: int = 50000) -> str:
         "User-Agent": "Mozilla/5.0 (compatible; OpenNotebook/1.0; +https://opennotebook.ai)"
     }
     try:
-        with httpx.Client(timeout=20, headers=headers, follow_redirects=True) as client:
+        with httpx.Client(timeout=20, headers=headers, follow_redirects=True, proxies=False) as client:
             resp = client.get(url.strip())
             resp.raise_for_status()
             content_type = (resp.headers.get("content-type") or "").lower()
@@ -88,7 +88,7 @@ def serpapi_search(query: str, api_key: str, engine: str = "google", num: int = 
         "api_key": api_key,
         "num": num,
     }
-    with httpx.Client(timeout=20) as client:
+    with httpx.Client(timeout=20, proxies=False) as client:
         resp = client.get("https://serpapi.com/search.json", params=params)
         resp.raise_for_status()
         data = resp.json()
@@ -119,7 +119,7 @@ def google_cse_search(
         "num": max(1, min(10, num)),
         "start": max(1, start),
     }
-    with httpx.Client(timeout=20) as client:
+    with httpx.Client(timeout=20, proxies=False) as client:
         resp = client.get("https://www.googleapis.com/customsearch/v1", params=params)
         resp.raise_for_status()
         data = resp.json()
@@ -141,7 +141,7 @@ def brave_search(query: str, api_key: str, count: int = 10) -> List[Dict[str, An
     """Brave Search API."""
     headers = {"X-Subscription-Token": api_key}
     params = {"q": query, "count": max(1, min(20, count))}
-    with httpx.Client(timeout=20, headers=headers) as client:
+    with httpx.Client(timeout=20, headers=headers, proxies=False) as client:
         resp = client.get("https://api.search.brave.com/res/v1/web/search", params=params)
         resp.raise_for_status()
         data = resp.json()
@@ -181,7 +181,7 @@ def bocha_web_search(
         "Authorization": f"Bearer {api_key.strip()}",
         "Content-Type": "application/json",
     }
-    with httpx.Client(timeout=25) as client:
+    with httpx.Client(timeout=25, proxies=False) as client:
         resp = client.post(BOCHA_WEB_SEARCH_URL, json=payload, headers=headers)
         resp.raise_for_status()
         body = resp.json()

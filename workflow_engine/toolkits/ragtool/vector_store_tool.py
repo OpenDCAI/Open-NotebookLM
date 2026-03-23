@@ -274,9 +274,10 @@ class VectorStoreManager:
         
         vecs = []
         # Batch processing to avoid payload limits
-        batch_size = 10 
-        
-        with httpx.Client(timeout=60.0) as client:
+        batch_size = 10
+
+        # Disable proxy to avoid issues with unavailable proxy servers
+        with httpx.Client(timeout=60.0, proxies=False) as client:
             for i in range(0, len(texts), batch_size):
                 batch = texts[i:i+batch_size]
                 # Replace newlines which can negatively affect performance

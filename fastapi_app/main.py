@@ -35,10 +35,13 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from fastapi_app.routers import kb, kb_embedding, files, paper2drawio, paper2ppt, auth
+from fastapi_app.routers import kb, kb_embedding, files, paper2drawio, paper2ppt, auth, data_insight
 from fastapi_app.middleware.api_key import APIKeyMiddleware
 from fastapi_app.middleware.logging import LoggingMiddleware
 from workflow_engine.utils import get_project_root
+
+# 导入workflow模块以触发所有workflow注册
+from workflow_engine import workflow
 
 # 本地 Embedding 服务端口（Octen-Embedding-0.6B）
 LOCAL_EMBEDDING_PORT = 26210
@@ -152,6 +155,7 @@ def create_app() -> FastAPI:
     app.include_router(paper2drawio.router, prefix="/api/v1", tags=["Paper2Drawio"])
     app.include_router(paper2ppt.router, prefix="/api/v1", tags=["Paper2PPT"])
     app.include_router(auth.router, prefix="/api/v1", tags=["Auth"])
+    app.include_router(data_insight.router, prefix="/api/v1", tags=["Data Insight"])
 
     # 静态文件：/outputs 下的文件（兼容 URL 中 %40 与 磁盘 @ 两种路径）
     project_root = get_project_root()

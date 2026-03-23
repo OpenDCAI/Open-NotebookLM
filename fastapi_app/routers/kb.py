@@ -118,7 +118,7 @@ def _text_to_pdf(text: str, output_path: str) -> None:
     doc.close()
 
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".png", ".jpg", ".jpeg", ".mp4", ".md"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".png", ".jpg", ".jpeg", ".mp4", ".md", ".csv", ".txt", ".db", ".json", ".jsonl", ".xlsx", ".xls", ".parquet", ".ndjson"}
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 DOC_EXTENSIONS = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".md", ".markdown"}
@@ -329,14 +329,14 @@ def _append_images_to_pptx(pptx_path: Path, image_paths: List[Path]) -> None:
 
 @router.post("/upload")
 async def upload_kb_file(
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
     email: str = Form(...),
     user_id: str = Form(...),
     notebook_id: Optional[str] = Form(None),
     notebook_title: Optional[str] = Form(None),
 ):
     """
-    Upload a file to the notebook's knowledge base directory.
+    Upload multiple files to the notebook's knowledge base directory.
     New layout: outputs/{title}_{id}/sources/{stem}/original/
     Fallback: also writes to legacy kb_data path for backward compat.
     """
@@ -345,77 +345,89 @@ async def upload_kb_file(
     if not notebook_id:
         raise HTTPException(status_code=400, detail="notebook_id is required for per-notebook storage")
 
-    file_ext = Path(file.filename).suffix.lower()
-    if file_ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(ALLOWED_EXTENSIONS)}"
-        )
+    uploaded_files = []
+    paths = get_notebook_paths(notebook_id, notebook_title or "", email or user_id)
+    mgr = SourceManager(paths)
 
-    try:
-        filename = file.filename or f"unnamed_{user_id}"
-        filename = os.path.basename(filename)
+    for file in files:
+        file_ext = Path(file.filename).suffix.lower()
+        if file_ext not in ALLOWED_EXTENSIONS:
+            log.warning(f"Skipping unsupported file: {file.filename}")
+            continue
 
-        # --- New notebook-centric layout ---
-        paths = get_notebook_paths(notebook_id, notebook_title or "", email or user_id)
-        mgr = SourceManager(paths)
-
-        # Save uploaded bytes to a temp location first, then import
-        tmp_dir = paths.root / "_tmp"
-        tmp_dir.mkdir(parents=True, exist_ok=True)
-        tmp_path = tmp_dir / filename
-        with open(tmp_path, "wb") as buffer:
-            shutil.copyfileobj(file.file, buffer)
-
-        source_info = await mgr.import_file(tmp_path, filename)
-
-        # Clean up temp
         try:
-            tmp_path.unlink(missing_ok=True)
-        except Exception:
-            pass
+            filename = file.filename or f"unnamed_{user_id}"
+            filename = os.path.basename(filename)
 
-        # Build static URL from the original path in new layout
-        project_root = get_project_root()
-        rel = source_info.original_path.relative_to(project_root)
-        static_path = "/" + rel.as_posix()
+            # Save uploaded bytes to a temp location first, then import
+            tmp_dir = paths.root / "_tmp"
+            tmp_dir.mkdir(parents=True, exist_ok=True)
+            tmp_path = tmp_dir / filename
+            with open(tmp_path, "wb") as buffer:
+                shutil.copyfileobj(file.file, buffer)
 
-        # --- Also write to legacy path for backward compat ---
-        legacy_dir = _notebook_dir(email, notebook_id)
-        legacy_dir.mkdir(parents=True, exist_ok=True)
-        legacy_path = legacy_dir / filename
-        if not legacy_path.exists():
-            shutil.copy2(str(source_info.original_path), str(legacy_path))
+            source_info = await mgr.import_file(tmp_path, filename)
 
-        # Auto-embed using new vector_store path
-        embedded = False
-        try:
-            vector_base = str(paths.vector_store_dir)
-            mineru_base = str(paths.source_mineru_dir(filename))
-            file_list = [{"path": str(source_info.original_path)}]
-            await process_knowledge_base_files(
-                file_list=file_list,
-                base_dir=vector_base,
-                mineru_output_base=mineru_base,
-            )
-            embedded = True
-            log.info("[upload] auto-embedding done: %s", filename)
-        except Exception as emb_err:
-            log.warning("[upload] auto-embedding failed for %s: %s", filename, emb_err)
+            # Clean up temp
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
 
-        return {
-            "success": True,
-            "filename": filename,
-            "file_size": os.path.getsize(source_info.original_path),
-            "storage_path": str(source_info.original_path),
-            "static_url": static_path,
-            "file_type": file.content_type,
-            "embedded": embedded,
-        }
+            # Build static URL from the original path in new layout
+            project_root = get_project_root()
+            rel = source_info.original_path.relative_to(project_root)
+            static_path = "/" + rel.as_posix()
 
-    except Exception as e:
-        print(f"Error uploading file: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+            # --- Also write to legacy path for backward compat ---
+            legacy_dir = _notebook_dir(email, notebook_id)
+            legacy_dir.mkdir(parents=True, exist_ok=True)
+            legacy_path = legacy_dir / filename
+            if not legacy_path.exists():
+                shutil.copy2(str(source_info.original_path), str(legacy_path))
+
+            # Auto-embed using new vector_store path
+            embedded = False
+            try:
+                vector_base = str(paths.vector_store_dir)
+                mineru_base = str(paths.source_mineru_dir(filename))
+                file_list = [{"path": str(source_info.original_path)}]
+                # 使用本地embedding服务
+                local_embedding_url = os.getenv("EMBEDDING_API_URL", "http://127.0.0.1:26210/v1/embeddings")
+                await process_knowledge_base_files(
+                    file_list=file_list,
+                    base_dir=vector_base,
+                    mineru_output_base=mineru_base,
+                    api_url=local_embedding_url,
+                )
+                embedded = True
+                log.info("[upload] auto-embedding done: %s", filename)
+            except Exception as emb_err:
+                log.warning("[upload] auto-embedding failed for %s: %s", filename, emb_err)
+
+            uploaded_files.append({
+                "filename": filename,
+                "file_size": os.path.getsize(source_info.original_path),
+                "storage_path": str(source_info.original_path),
+                "static_url": static_path,
+                "file_type": file.content_type,
+                "embedded": embedded,
+            })
+
+        except Exception as e:
+            log.error(f"Error uploading file {file.filename}: {e}")
+            uploaded_files.append({
+                "filename": file.filename,
+                "error": str(e),
+                "success": False
+            })
+
+    return {
+        "success": True,
+        "files": uploaded_files,
+        "total_uploaded": len([f for f in uploaded_files if "error" not in f]),
+        "total_failed": len([f for f in uploaded_files if "error" in f]),
+    }
 
 
 def _sanitize_md_filename(title: str, prefix: str = "doc") -> str:

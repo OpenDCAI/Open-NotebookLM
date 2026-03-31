@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ChevronLeft, Plus, Share2, Settings, MessageSquare,
@@ -13,7 +13,7 @@ import { getApiSettings } from '../services/apiSettingsService';
 import { fetchWithCache, invalidateCacheByPrefix } from '../services/clientCache';
 import type { KnowledgeFile, ChatMessage, ToolType } from '../types';
 import ReactMarkdown from 'react-markdown';
-import { MermaidPreview } from '../components/knowledge-base/tools/MermaidPreview';
+import { MindMapPreview } from '../components/knowledge-base/tools/MindMapPreview';
 import { SettingsModal } from '../components/SettingsModal';
 import DrawioInlineEditor from '../components/DrawioInlineEditor';
 import { FlashcardViewer } from '../components/flashcards/FlashcardViewer';
@@ -175,6 +175,16 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   const chatPersistSkippedRef = React.useRef(false);
   const conversationIdRef = React.useRef<string | null>(null);
   const [inputMsg, setInputMsg] = useState('');
+  const handleMindmapNodeClick = useCallback((question: string) => {
+    setInputMsg(question);
+    setActiveTool('chat');
+    setChatSubView('current');
+    setPreviewOutput(null);
+    setTimeout(() => {
+      const input = document.querySelector<HTMLInputElement>('input[type="text"]');
+      input?.focus();
+    }, 100);
+  }, []);
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [dataExtractDatasources, setDataExtractDatasources] = useState<DataExtractDatasource[]>([]);
   const [dataExtractDatasourceId, setDataExtractDatasourceId] = useState<string>('');
@@ -4084,7 +4094,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
 
             {toolOutput && activeTool === 'mindmap' && toolOutput.mindmap_code && (
               <div className="bg-white border border-gray-200 rounded-xl p-4">
-                <MermaidPreview mermaidCode={toolOutput.mindmap_code} title="思维导图" />
+                <MindMapPreview mermaidCode={toolOutput.mindmap_code} title="思维导图" onNodeClick={handleMindmapNodeClick} />
               </div>
             )}
 
@@ -4598,14 +4608,14 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="absolute inset-0 glass-dark"
+            className="absolute inset-0 bg-black/40 backdrop-blur-sm"
           />
           <motion.div
             initial={{ y: 100, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 100, opacity: 0 }}
             transition={{ type: 'spring', stiffness: 300, damping: 30 }}
-            className={`relative bg-white rounded-t-ios-2xl sm:rounded-ios-2xl shadow-ios-xl border border-ios-gray-100 overflow-hidden flex flex-col ${
+            className={`relative bg-white rounded-t-2xl sm:rounded-2xl shadow-xl border border-gray-200 overflow-hidden flex flex-col ${
               previewOutput.type === 'drawio'
                 ? 'w-[95vw] h-[95vh] min-w-[320px] min-h-[360px]'
                 : 'w-[90vw] h-[90vh] max-w-[1600px] max-h-[90vh] min-w-[320px] min-h-[360px]'
@@ -4613,13 +4623,13 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
             onClick={(e) => e.stopPropagation()}
           >
             {/* Header */}
-            <div className="flex items-center justify-between px-4 py-3 border-b border-ios-gray-100 bg-white shrink-0">
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white shrink-0">
               <div>
                 <h2 className="text-lg font-semibold text-ios-gray-800">{previewOutput.title}</h2>
                 <p className="text-xs text-ios-gray-500 mt-1">来源：{previewOutput.sources}</p>
               </div>
               <div className="flex items-center gap-2">
-                {previewOutput.url && (
+                {previewOutput.url && previewOutput.type !== 'mindmap' && (
                   <a
                     href={previewOutput.url}
                     target="_blank"
@@ -4716,9 +4726,10 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
               {previewOutput.type === 'mindmap' && previewOutput.mermaidCode && (
                 <div className="h-full flex items-center justify-center">
                   <div className="w-full h-full bg-white rounded-xl shadow-lg p-6">
-                    <MermaidPreview 
-                      mermaidCode={previewOutput.mermaidCode} 
-                      title="思维导图预览" 
+                    <MindMapPreview
+                      mermaidCode={previewOutput.mermaidCode}
+                      title="思维导图预览"
+                      onNodeClick={handleMindmapNodeClick}
                     />
                   </div>
                 </div>

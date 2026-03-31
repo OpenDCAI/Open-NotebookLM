@@ -16,16 +16,29 @@ export interface ApiSettings {
 }
 
 const STORAGE_KEY_PREFIX = 'kb_api_settings_';
+const TRIAL_STORAGE_SUFFIXES = ['default', 'local', 'global'] as const;
+
+function isTrialStorageUser(userId: string | null): boolean {
+  return !userId || TRIAL_STORAGE_SUFFIXES.includes(userId as typeof TRIAL_STORAGE_SUFFIXES[number]);
+}
+
+function getStorageKeys(userId: string | null): string[] {
+  if (isTrialStorageUser(userId)) {
+    return TRIAL_STORAGE_SUFFIXES.map((suffix) => `${STORAGE_KEY_PREFIX}${suffix}`);
+  }
+  return [`${STORAGE_KEY_PREFIX}${userId}`];
+}
 
 /**
  * Get API settings for a user (or global if userId is null)
  */
 export function getApiSettings(userId: string | null): ApiSettings | null {
   try {
-    const key = userId ? `${STORAGE_KEY_PREFIX}${userId}` : `${STORAGE_KEY_PREFIX}global`;
-    const stored = localStorage.getItem(key);
-    if (stored) {
-      return JSON.parse(stored);
+    for (const key of getStorageKeys(userId)) {
+      const stored = localStorage.getItem(key);
+      if (stored) {
+        return JSON.parse(stored);
+      }
     }
   } catch (err) {
     console.error('Failed to load API settings:', err);
@@ -45,8 +58,10 @@ export function getApiSettings(userId: string | null): ApiSettings | null {
  */
 export function saveApiSettings(userId: string | null, settings: ApiSettings): void {
   try {
-    const key = userId ? `${STORAGE_KEY_PREFIX}${userId}` : `${STORAGE_KEY_PREFIX}global`;
-    localStorage.setItem(key, JSON.stringify(settings));
+    const serialized = JSON.stringify(settings);
+    for (const key of getStorageKeys(userId)) {
+      localStorage.setItem(key, serialized);
+    }
   } catch (err) {
     console.error('Failed to save API settings:', err);
   }

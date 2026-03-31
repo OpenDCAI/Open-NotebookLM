@@ -75,6 +75,26 @@ class AppSettings(BaseSettings):
     LOCAL_EMBEDDING_CUDA_VISIBLE_DEVICES: Optional[str] = None
     LOCAL_EMBEDDING_GPU_MEMORY_UTILIZATION: float = 0.3
 
+    # ── GraphRAG ──────────────────────────────────────────────────────────────
+    GRAPHRAG_LLM_MODEL: str = "gpt-5"              # chat model for entity/community extraction
+    GRAPHRAG_EMBEDDING_MODEL: str = "text-embedding-3-small"
+    GRAPHRAG_OUTPUT_DIR: str = "outputs/graphrag_kb"  # workspace root, layout: {dir}/{email}/{nb_id}/
+    GRAPHRAG_CMD: str = ""                          # graphrag CLI path; auto-detected from PATH if empty
+    GRAPHRAG_CHUNK_SIZE: int = 512                  # chars per chunk; also written to settings.yaml chunks.size
+    GRAPHRAG_CHUNK_OVERLAP: int = 64
+    GRAPHRAG_RESPONSE_TYPE: str = "Single Paragraph"  # passed to local/global_search response_type
+    GRAPHRAG_SUBGRAPH_PRUNE_ENABLED: bool = True    # run LLM subgraph pruning after each query
+    GRAPHRAG_SUBGRAPH_PRUNE_MAX_EDGES_INPUT: int = 80  # truncate input to pruner to this many edges
+    GRAPHRAG_MAX_HIGHLIGHT_HINTS: int = 10          # max highlight_hints returned (0 = unlimited)
+
+    # ── KGGen (optional triple extraction, disabled by default) ───────────────
+    KGGEN_MODEL: str = "deepseek-v3.2"
+    KGGEN_PER_CHUNK: bool = True                    # True = per-chunk calls; False = full-text single call
+    KGGEN_LOG_CHUNK_INTERVAL: int = 10              # log every N chunks (0 = first/last only)
+
+    # ── Judge (answer confidence scoring) ─────────────────────────────────────
+    JUDGE_MODEL: str = "gpt-5"                      # returns judge_score [0,1] and judge_rationale
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

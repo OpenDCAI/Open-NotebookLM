@@ -41,6 +41,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from fastapi_app.routers import auth, data_extract, files, kb, kb_embedding, paper2drawio, paper2ppt
+from fastapi_app.routers import graphrag_kb
 from fastapi_app.middleware.api_key import APIKeyMiddleware
 from fastapi_app.middleware.logging import LoggingMiddleware
 from workflow_engine.utils import get_project_root
@@ -476,6 +477,8 @@ def create_app() -> FastAPI:
     app.include_router(paper2drawio.router, prefix="/api/v1", tags=["Paper2Drawio"])
     app.include_router(paper2ppt.router, prefix="/api/v1", tags=["Paper2PPT"])
     app.include_router(auth.router, prefix="/api/v1", tags=["Auth"])
+    # GraphRAG 知识库：/api/v1/graphrag-kb/{index,query,merge,chunk-snippet} → wa_graphrag_kb → wf_graphrag_kb
+    app.include_router(graphrag_kb.router, prefix="/api/v1", tags=["GraphRAG KB"])
 
     # 静态文件：/outputs 下的文件（兼容 URL 中 %40 与 磁盘 @ 两种路径）
     project_root = get_project_root()

@@ -17,19 +17,19 @@ charset-normalizer==3.4.4
 supabase==2.27.2
 
 # ------ LLM / LangChain ------
-openai==2.16.0
-aisuite>=0.1.14
-langchain==0.3.27
-langchain-chroma==0.2.6
-langchain-community==0.3.29
-langchain-core==0.3.76
-langchain-openai==0.3.33
-langchain-text-splitters==0.3.11
-langgraph==0.6.7
-langgraph-checkpoint==2.1.1
-langgraph-prebuilt==0.6.4
-langgraph-sdk==0.2.6
-sseclient-py>=1.8.0
+# openai==2.16.0
+# aisuite>=0.1.14
+# langchain==0.3.27
+# langchain-chroma==0.2.6
+# langchain-community==0.3.29
+# langchain-core==0.3.76
+# langchain-openai==0.3.33
+# langchain-text-splitters==0.3.11
+# langgraph==0.6.7
+# langgraph-checkpoint==2.1.1
+# langgraph-prebuilt==0.6.4
+# langgraph-sdk==0.2.6
+# sseclient-py>=1.8.0
 
 # ------ Vector Store / Embedding ------
 chromadb==1.5.5
@@ -130,7 +130,7 @@ google-api-python-client>=2.187.0
 librosa>=0.11.0
 soundfile>=0.13.0
 qwen-tts==0.1.1
-fireredtts2==0.1
+#fireredtts2==0.1
 
 # ------ OCR (PaddlePaddle / Local Serving) ------
 paddlepaddle==3.2.0
@@ -163,3 +163,5 @@ IPython==8.18.1
 
 # ------ Dev / Test ------
 pytest>=9.0.0
+
+graphrag==2.7.2

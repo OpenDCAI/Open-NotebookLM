@@ -23,6 +23,9 @@ function getApiBaseUrl(): string {
 
 export const API_BASE_URL = getApiBaseUrl();
 
+/** GraphRAG KB REST 前缀（相对 API_BASE_URL） */
+export const GRAPHRAG_KB_BASE = '/api/v1/graphrag-kb';
+
 // API key for backend authentication
 export const API_KEY = import.meta.env.VITE_API_KEY || 'df-internal-2024-workflow-key';
 

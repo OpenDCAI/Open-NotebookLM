@@ -13,6 +13,7 @@ from workflow_engine.agentroles import create_agent
 from workflow_engine.utils import get_project_root
 
 log = get_logger(__name__)
+_mindmap_structure_logged_once = False
 
 # Try importing office libraries
 try:
@@ -156,34 +157,78 @@ def create_kb_mindmap_graph() -> GenericGraphBuilder:
         return state
 
     async def analyze_structure_node(state: KBMindMapState) -> KBMindMapState:
+        """Skip — merged into generate_mermaid_node for single-pass generation."""
+        state.content_structure = "merged"
+        return state
+
+    async def generate_mermaid_node(state: KBMindMapState) -> KBMindMapState:
         """
-        Analyze content structure using LLM
+        Single-pass: analyze documents and generate Markdown mindmap directly.
         """
         if not state.file_contents:
-            state.content_structure = "No content available for analysis."
+            state.mermaid_code = "# Error\n## No content available"
             return state
 
-        # Format file contents
         contents_str = ""
         for item in state.file_contents:
             contents_str += f"=== {item['filename']} ===\n{item['content']}\n\n"
 
-        # Structure analysis prompt
         language = state.request.language
         max_depth = state.request.max_depth
-        prompt = f"""你是一位专业的知识结构分析师。请分析以下文档内容，提取出层级化的知识结构。
 
-要求：
-1. 识别主要主题和子主题
-2. 提取关键概念和要点
-3. 建立清晰的层级关系（最多{max_depth}层）
-4. 使用{language}语言
-5. 输出格式为层级化的文本结构，使用缩进表示层级
+        prompt = f"""请基于以下文档内容，生成一张层级清晰、主题归纳明确、适合快速把握全文结构的思维导图。你的目标是把文章压缩成一张"知识地图"，让读者能够迅速理解这篇文章的核心主题、主要模块、关键内容，以及各部分之间的层级关系。
+
+请按照下面的方法完成：
+
+先通读全文，识别文章真正的中心主题，用一句高度概括的话作为根节点。这个根节点需要能够覆盖全文主旨，而不是局部内容。输出时将根节点作为**一级标题（#）**呈现。
+
+然后围绕中心主题，提炼出最能代表全文结构的主分支，优先控制在 4–8 个范围内，并将它们作为**二级标题（##）**呈现。主分支要能够代表全文最重要的几个结构板块。请优先从文章本身的结构、论述重心、主题模块、关键信息簇中提炼主分支，使它们能够共同构成全文的主干。
+
+接着在每个主分支下继续拆分 2–4 个子主题，并将它们作为**三级标题（###）**呈现。子主题要承接上级主题，概括该部分最值得保留的核心内容，例如关键概念、主要论点、重要机制、核心步骤、代表性案例、主要证据、结果表现、应用场景、影响因素、行动建议等。
+
+需要时继续向下拆分更细的层级，整体层级最多{max_depth}层（使用 # 到 {'#' * max_depth} 表示）。请根据内容复杂度自然决定展开深度，使层级既完整又紧凑。使用{language}语言。
+
+整张思维导图要体现出一种知识整理型、结构概览型、主题分解型的风格。重点是帮助读者快速理解全文内容版图，而不是只罗列摘要句子。请让结构体现出"从总到分、由主到次、层层展开"的组织逻辑。
+
+请根据文章类型，自适应选择最合适的组织框架：
+
+研究型、分析型文章：背景、问题、核心观点、方法机制、证据结果、意义影响、局限延伸
+新闻、时评、纪实型文章：主题事件、背景脉络、关键事实、各方观点、原因影响、趋势走向
+科普、说明型文章：核心概念、原理机制、特征表现、应用场景、常见理解、总结启发
+教程、方法型文章：目标、前提条件、步骤模块、关键技巧、注意事项、应用建议
+商业、产品、行业文章：对象定位、背景环境、核心策略、运行方式、优势价值、风险挑战、发展趋势
+访谈、观点型文章：核心立场、主要观点、支撑理由、经验案例、延伸启示
+
+节点命名请尽量简洁而有信息量。每个节点都使用适合放入思维导图框中的短语式表达，让人一眼就能理解该节点要表达的重点。
+
+请将语义接近、作用相同、共同服务于同一主题的信息归并到同一分支下，形成稳定的主题模块。请优先把能够解释全文结构的内容放在上层节点，把例子、数据、条件、补充说明放在下层节点。
+
+特别注意：如果原文包含关键数据、时间、比例、数量、金额、指标或实验结果，请在相关节点中保留这些具体信息。在涉及结果、变化、比较、规模、金额、比例、时间、指标和实验表现时，请优先使用原文中的具体数字和定量信息来命名或补充节点内容。
+
+生成标准：
+
+1. 忠实反映原文主线，保留关键数据和定量结果
+2. 节点之间要有明确层级关系
+3. 同一级节点尽量保持并列、均衡、可比较
+4. 优先保留能够帮助理解全文框架的内容
+5. 让整张图看起来像一张"文章结构与知识重点总览图"
+6. 读者即使不读原文，也能通过这张导图把握文章的大体结构与核心内容
+
+输出格式要求：
+
+1. 使用 Markdown 标题格式：# 根节点，## 主分支，### 子主题，#### 及以下为进一步展开层级
+2. 最终结果直接以 Markdown 主体输出，内容从根节点开始展开
+3. 采用纯 Markdown 标题结构呈现结果
 
 文档内容：
 {contents_str}
 
-请输出层级化的知识结构："""
+请严格按照文档内容前的要求来完成，特别注意：
+1. 采用纯 Markdown 标题结构（# ## ### ####），不要使用代码块或其他格式
+2. 保留原文中的关键数据、数字和定量信息
+3. 节点简洁有信息量，用短语式表达而非长句
+4. 层级清晰，从总到分、由主到次
+5. 不要输出任何解释或额外文字，直接从根节点开始输出："""
 
         try:
             agent = create_agent(
@@ -197,63 +242,9 @@ def create_kb_mindmap_graph() -> GenericGraphBuilder:
             temp_state = MainState(request=state.request)
             res_state = await agent.execute(temp_state, prompt=prompt)
 
-            state.content_structure = _extract_text_result(res_state, "kb_prompt_agent") or "[Structure analysis failed]"
-        except Exception as e:
-            log.error(f"Structure analysis failed: {e}")
-            state.content_structure = f"[Structure analysis error: {e}]"
-
-        return state
-
-    async def generate_mermaid_node(state: KBMindMapState) -> KBMindMapState:
-        """
-        Generate Mermaid mindmap syntax using LLM
-        """
-        if not state.content_structure or state.content_structure.startswith("["):
-            state.mermaid_code = "mindmap\n  root((Error))\n    No content structure available"
-            return state
-
-        # Mermaid generation prompt
-        style = state.request.mindmap_style
-        prompt = f"""你是一位专业的Mermaid图表生成专家。请根据以下知识结构，生成Mermaid mindmap语法。
-
-知识结构：
-{state.content_structure}
-
-要求：
-1. 使用Mermaid mindmap语法
-2. 风格：{style}
-3. 保持层级关系清晰
-4. 节点名称简洁明了
-5. 只输出Mermaid代码，不要有其他解释
-
-Mermaid mindmap语法示例：
-```
-mindmap
-  root((中心主题))
-    主题1
-      子主题1.1
-      子主题1.2
-    主题2
-      子主题2.1
-```
-
-请生成Mermaid mindmap代码："""
-
-        try:
-            agent = create_agent(
-                name="kb_prompt_agent",
-                model_name=state.request.model,
-                chat_api_url=state.request.chat_api_url,
-                temperature=0.5,
-                parser_type="text"
-            )
-
-            temp_state = MainState(request=state.request)
-            res_state = await agent.execute(temp_state, prompt=prompt)
-
             mermaid_raw = _extract_text_result(res_state, "kb_prompt_agent")
             if mermaid_raw:
-                # Extract mermaid code from markdown code blocks if present
+                # Extract content from markdown code blocks if present
                 if "```" in mermaid_raw:
                     lines = mermaid_raw.split("\n")
                     in_code_block = False
@@ -268,10 +259,10 @@ mindmap
                 else:
                     state.mermaid_code = mermaid_raw
             else:
-                state.mermaid_code = "mindmap\n  root((Error))\n    Generation failed"
+                state.mermaid_code = "# Error\n## Generation failed"
         except Exception as e:
-            log.error(f"Mermaid generation failed: {e}")
-            state.mermaid_code = f"mindmap\n  root((Error))\n    {str(e)}"
+            log.error(f"Mindmap generation failed: {e}")
+            state.mermaid_code = f"# Error\n## {str(e)}"
 
         # Save mermaid code to file
         try:

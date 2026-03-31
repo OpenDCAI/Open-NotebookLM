@@ -6,7 +6,7 @@ import { UploadView } from './UploadView';
 import { OutputView } from './OutputView';
 import { SettingsView } from './SettingsView';
 import { RightPanel } from './RightPanel';
-import { MermaidPreview } from './tools/MermaidPreview';
+import { MindMapPreview } from './tools/MindMapPreview';
 import { supabase } from '../../lib/supabase';
 import { useAuthStore } from '../../stores/authStore';
 import { useToast } from '../../hooks/useToast';
@@ -496,7 +496,7 @@ const KnowledgeBase = () => {
                             />
 
                             {mindmapPreviewCode ? (
-                              <MermaidPreview mermaidCode={mindmapPreviewCode} title="思维导图预览" />
+                              <MindMapPreview mermaidCode={mindmapPreviewCode} title="思维导图预览" />
                             ) : (
                               <div className="text-xs text-gray-500">暂无可预览内容</div>
                             )}

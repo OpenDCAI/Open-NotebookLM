@@ -6,7 +6,7 @@ import { UploadView } from './UploadView';
 import { OutputView } from './OutputView';
 import { SettingsView } from './SettingsView';
 import { RightPanel } from './RightPanel';
-import { MermaidPreview } from './tools/MermaidPreview';
+import { MindMapPreview } from './tools/MindMapPreview';
 import { supabase } from '../../lib/supabase';
 import { useAuthStore } from '../../stores/authStore';
 import { X, Eye, Trash2, FileText, Image, Video, Link as LinkIcon, Headphones } from 'lucide-react';
@@ -493,7 +493,7 @@ const KnowledgeBase = () => {
                             />
 
                             {mindmapPreviewCode ? (
-                              <MermaidPreview mermaidCode={mindmapPreviewCode} title="Mind map preview" />
+                              <MindMapPreview mermaidCode={mindmapPreviewCode} title="Mind map preview" />
                             ) : (
                               <div className="text-xs text-gray-500">No preview</div>
                             )}

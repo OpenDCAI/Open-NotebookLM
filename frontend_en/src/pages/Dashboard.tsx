@@ -3,8 +3,6 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Settings, Plus, User, Loader2, BookOpen, Key, CheckCircle2, LogOut, Info } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { apiFetch } from '../config/api';
-import { API_URL_OPTIONS, DEFAULT_LLM_API_URL } from '../config/api';
-import { getApiSettings, saveApiSettings, type ApiSettings, type SearchProvider, type SearchEngine } from '../services/apiSettingsService';
 import { fetchWithCache, getCachedValue, setCachedValue } from '../services/clientCache';
 
 export interface Notebook {
@@ -32,11 +30,6 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0, supabaseConfigured }: {
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState('');
   const [configOpen, setConfigOpen] = useState(false);
-  const [apiUrl, setApiUrl] = useState(DEFAULT_LLM_API_URL);
-  const [apiKey, setApiKey] = useState('');
-  const [searchProvider, setSearchProvider] = useState<SearchProvider>('serper');
-  const [searchApiKey, setSearchApiKey] = useState('');
-  const [searchEngine, setSearchEngine] = useState<SearchEngine>('google');
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
 
@@ -44,28 +37,9 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0, supabaseConfigured }: {
   const effectiveEmail = user?.email || '';
   const notebookListCacheKey = `notebooks:${effectiveUserId}:${effectiveEmail || 'anonymous'}`;
 
-  useEffect(() => {
-    const s = getApiSettings(effectiveUserId);
-    if (s) {
-      setApiUrl(s.apiUrl || DEFAULT_LLM_API_URL);
-      setApiKey(s.apiKey || '');
-      setSearchProvider((s.searchProvider as SearchProvider) || 'serper');
-      setSearchApiKey(s.searchApiKey || '');
-      setSearchEngine((s.searchEngine as SearchEngine) || 'google');
-    }
-  }, [effectiveUserId]);
-
   const handleSaveConfig = () => {
     setConfigSaving(true);
     setConfigSaved(false);
-    const settings: ApiSettings = {
-      apiUrl: apiUrl.trim(),
-      apiKey: apiKey.trim(),
-      searchProvider,
-      searchApiKey: searchApiKey.trim(),
-      searchEngine,
-    };
-    saveApiSettings(effectiveUserId, settings);
     setConfigSaved(true);
     setTimeout(() => {
       setConfigSaving(false);
@@ -227,75 +201,11 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0, supabaseConfigured }: {
         <section className="mb-8 p-6 bg-white rounded-ios-xl border border-ios-gray-100 shadow-ios">
           <h3 className="text-lg font-semibold text-ios-gray-900 mb-4 flex items-center gap-2">
             <Key size={20} />
-            Home config (used when you open a notebook)
+            Settings
           </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div className="space-y-4">
-              <h4 className="text-sm font-medium text-ios-gray-600 flex items-center gap-1.5">LLM API</h4>
-              <div>
-                <label className="block text-xs font-medium text-ios-gray-500 mb-1">API URL</label>
-                <select
-                  value={apiUrl}
-                  onChange={(e) => setApiUrl(e.target.value)}
-                  className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
-                >
-                  {[apiUrl, ...API_URL_OPTIONS].filter((v, i, a) => a.indexOf(v) === i).map((url: string) => (
-                    <option key={url} value={url}>{url}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-ios-gray-500 mb-1">API Key</label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="sk-..."
-                  className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
-                />
-              </div>
-            </div>
-            <div className="space-y-4">
-              <h4 className="text-sm font-medium text-ios-gray-600 flex items-center gap-1.5">Search API</h4>
-              <div>
-                <label className="block text-xs font-medium text-ios-gray-500 mb-1">Search provider</label>
-                <select
-                  value={searchProvider}
-                  onChange={(e) => setSearchProvider(e.target.value as SearchProvider)}
-                  className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
-                >
-                  <option value="serper">Serper (Google, env)</option>
-                  <option value="serpapi">SerpAPI (Google/Baidu)</option>
-                  <option value="bocha">Bocha</option>
-                </select>
-              </div>
-              {(searchProvider === 'serpapi' || searchProvider === 'bocha') && (
-                <div>
-                  <label className="block text-xs font-medium text-ios-gray-500 mb-1">Search API Key</label>
-                  <input
-                    type="password"
-                    value={searchApiKey}
-                    onChange={(e) => setSearchApiKey(e.target.value)}
-                    placeholder={searchProvider === 'bocha' ? 'Bocha API Key' : 'SerpAPI Key'}
-                    className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
-                  />
-                </div>
-              )}
-              {searchProvider === 'serpapi' && (
-                <div>
-                  <label className="block text-xs font-medium text-ios-gray-500 mb-1">Search engine</label>
-                  <select
-                    value={searchEngine}
-                    onChange={(e) => setSearchEngine(e.target.value as SearchEngine)}
-                    className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
-                  >
-                    <option value="google">Google</option>
-                    <option value="baidu">Baidu</option>
-                  </select>
-                </div>
-              )}
-            </div>
-          </div>
+          <p className="text-sm text-ios-gray-500">
+            All API configuration (LLM, embedding, TTS, search) is managed on the server via environment variables. No client-side keys are required.
+          </p>
           <div className="mt-4 flex justify-end">
             <motion.button
               whileTap={{ scale: 0.97 }}

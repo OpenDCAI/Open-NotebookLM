@@ -378,8 +378,9 @@ def create_kb_podcast_graph() -> GenericGraphBuilder:
             err_str = str(e)
             if "503" in err_str or "model_not_found" in err_str or "model not found" in err_str.lower():
                 state.audio_path = (
-                    "[TTS 模型不可用：当前 API 不支持所选 TTS 模型（如 gemini-2.5-pro-preview-tts）。"
-                    "请到「播客」设置中更换 TTS 模型，或使用支持该模型的 API 服务商。]"
+                    "[TTS 模型不可用：当前 API 不支持所选 TTS 模型。"
+                    "请优先使用在线 Gemini TTS（gemini-2.5-pro-preview-tts），"
+                    "或切换到支持该模型的 API 服务商。]"
                 )
             else:
                 state.audio_path = f"[Audio generation error: {e}]"

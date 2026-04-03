@@ -13,6 +13,24 @@ log = get_logger(__name__)
 router = APIRouter(prefix="/kb", tags=["Knowledge Base Embedding"])
 
 
+def _infer_mineru_output_base(local_path: Path) -> Optional[str]:
+    """
+    Reuse notebook source-tree MinerU cache when the file lives under:
+    outputs/{user}/{notebook}/sources/{stem}/original/{file}
+    """
+    try:
+        resolved = local_path.resolve()
+        parts = resolved.parts
+        if "sources" not in parts or "original" not in parts:
+            return None
+        original_idx = parts.index("original")
+        source_root = Path(*parts[:original_idx])
+        mineru_dir = source_root / "mineru"
+        return str(mineru_dir)
+    except Exception:
+        return None
+
+
 def _vector_store_dir(email: Optional[str], notebook_id: Optional[str]):
     """Per-notebook vector store: outputs/kb_data/{email}/{notebook_id}/vector_store"""
     project_root = get_project_root()
@@ -124,32 +142,35 @@ async def create_embedding(
         if not process_list:
             return {"success": False, "message": "No valid files found to process."}
 
-        # New layout: use NotebookPaths for vector store & MinerU paths
+        # New layout: use NotebookPaths for vector store path
         if notebook_id:
             nb_paths = get_notebook_paths(notebook_id, notebook_title or "", user_email)
             vector_store_dir = nb_paths.vector_store_dir
-            mineru_output_base = nb_paths.sources_dir
         else:
             vector_store_dir = _vector_store_dir(user_email, notebook_id)
-            safe_nb = (notebook_id or "_shared").replace("/", "_").replace("\\", "_")[:128]
-            safe_email = _sanitize_user_id(user_email) if user_email else "default"
-            mineru_output_base = project_root / "outputs" / "kb_mineru" / safe_email / safe_nb
 
         vector_store_dir.mkdir(parents=True, exist_ok=True)
-        mineru_output_base.mkdir(parents=True, exist_ok=True)
+        manifest: Dict[str, Any] = {"files": []}
 
-        # 入库只用本地 embedding（Octen），不传 api_url，由 VectorStoreManager 使用环境变量 EMBEDDING_API_URL
-        manifest = await process_knowledge_base_files(
-            process_list,
-            base_dir=str(vector_store_dir),
-            api_url=None,
-            api_key=api_key,
-            model_name=model_name,
-            multimodal_model=multimodal_model,
-            image_model=image_model,
-            video_model=video_model,
-            mineru_output_base=str(mineru_output_base),
-        )
+        # Process files one by one so each PDF can reuse its own sources/{stem}/mineru cache.
+        for item in process_list:
+            item_path = Path(str(item["path"])).resolve()
+            kwargs: Dict[str, Any] = {
+                "file_list": [item],
+                "base_dir": str(vector_store_dir),
+                "api_url": None,
+                "api_key": api_key,
+                "model_name": model_name,
+                "multimodal_model": multimodal_model,
+                "image_model": image_model,
+                "video_model": video_model,
+            }
+
+            inferred_mineru = _infer_mineru_output_base(item_path)
+            if inferred_mineru:
+                kwargs["mineru_output_base"] = inferred_mineru
+
+            manifest = await process_knowledge_base_files(**kwargs)
 
         current_paths = {str(Path(p.get("path", "")).resolve()) for p in process_list if p.get("path")}
         failed = [

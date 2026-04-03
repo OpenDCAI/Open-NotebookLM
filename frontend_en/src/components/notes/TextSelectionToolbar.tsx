@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Sparkles, BookOpen, AlignLeft, ChevronDown, Send, Copy, X } from 'lucide-react';
 import { apiFetch } from '../../config/api';
-import { getApiSettings } from '../../services/apiSettingsService';
 import type { KnowledgeFile } from '../../types';
 
 interface TextSelectionToolbarProps {
@@ -66,7 +65,6 @@ export const TextSelectionToolbar: React.FC<TextSelectionToolbarProps> = ({
   }, [onClose]);
 
   const callAI = async (instruction: string): Promise<string> => {
-    const apiSettings = getApiSettings(user?.id || null);
     const selectedFilePaths = files
       .filter(f => selectedFileIds.has(f.id))
       .map(f => f.url)
@@ -85,8 +83,6 @@ export const TextSelectionToolbar: React.FC<TextSelectionToolbarProps> = ({
         files: selectedFilePaths,
         query: prompt,
         history: [],
-        api_key: apiSettings?.apiKey?.trim() || undefined,
-        api_url: apiSettings?.apiUrl?.trim() || undefined,
       }),
     });
     const data = await res.json();

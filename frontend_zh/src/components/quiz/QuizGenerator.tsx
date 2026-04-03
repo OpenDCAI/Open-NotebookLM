@@ -29,10 +29,8 @@ export const QuizGenerator: React.FC<QuizGeneratorProps> = ({
     }
 
     const settings = getApiSettings(userId);
-    if (!settings?.apiUrl || !settings?.apiKey) {
-      setError('Please configure API URL and API Key in Settings first');
-      return;
-    }
+    const apiUrl = settings?.apiUrl?.trim() || '';
+    const apiKey = settings?.apiKey?.trim() || '';
 
     setLoading(true);
     setError(null);
@@ -48,8 +46,8 @@ export const QuizGenerator: React.FC<QuizGeneratorProps> = ({
           notebook_id: notebookId,
           email: email,
           user_id: userId,
-          api_url: settings.apiUrl,
-          api_key: settings.apiKey,
+          ...(apiUrl ? { api_url: apiUrl } : {}),
+          ...(apiKey ? { api_key: apiKey } : {}),
           model: 'deepseek-v3.2',
           question_count: questionCount,
           language: 'en',

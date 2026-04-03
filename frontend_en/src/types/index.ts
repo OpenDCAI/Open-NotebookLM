@@ -12,6 +12,9 @@ export interface KnowledgeFile {
   uploadTime: string;
   isEmbedded?: boolean;
   kbFileId?: string;
+  vectorStatus?: string;
+  vectorReady?: boolean;
+  vectorError?: string | null;
 }
 
 export interface ChatMessage {

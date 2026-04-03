@@ -14,7 +14,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
   const userIdForSettings = user?.id ?? 'default';
   const [apiUrl, setApiUrl] = useState(DEFAULT_LLM_API_URL);
   const [apiKey, setApiKey] = useState('');
-  const [searchProvider, setSearchProvider] = useState<SearchProvider>('serper');
+  const [searchProvider, setSearchProvider] = useState<SearchProvider>('bocha');
   const [searchApiKey, setSearchApiKey] = useState('');
   const [searchEngine, setSearchEngine] = useState<SearchEngine>('google');
   const [saving, setSaving] = useState(false);
@@ -26,13 +26,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
       if (settings) {
         setApiUrl(settings.apiUrl || DEFAULT_LLM_API_URL);
         setApiKey(settings.apiKey || '');
-        setSearchProvider((settings.searchProvider as SearchProvider) || 'serper');
+        setSearchProvider((settings.searchProvider as SearchProvider) || 'bocha');
         setSearchApiKey(settings.searchApiKey || '');
         setSearchEngine((settings.searchEngine as SearchEngine) || 'google');
       } else {
         setApiUrl(DEFAULT_LLM_API_URL);
         setApiKey('');
-        setSearchProvider('serper');
+        setSearchProvider('bocha');
         setSearchApiKey('');
         setSearchEngine('google');
       }

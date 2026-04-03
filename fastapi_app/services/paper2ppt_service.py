@@ -16,7 +16,7 @@ from fastapi_app.schemas import (
     PPTGenerationRequest,
 )
 from fastapi_app.utils import _from_outputs_url, _to_outputs_url
-from fastapi_app.workflow_adapters.wa_paper2ppt import (
+from fastapi_app.services.wa_paper2ppt import (
     run_paper2page_content_refine_wf_api,
     run_paper2page_content_wf_api,
     run_paper2ppt_full_pipeline,

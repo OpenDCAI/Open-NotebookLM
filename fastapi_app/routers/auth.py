@@ -13,6 +13,36 @@ import logging
 log = logging.getLogger(__name__)
 
 
+def _should_use_secure_cookie(request: Request) -> bool:
+    forwarded_proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip().lower()
+    if forwarded_proto:
+        return forwarded_proto == "https"
+    return request.url.scheme == "https"
+
+
+def _set_auth_cookies(request: Request, response: Response, access_token: str, refresh_token: str, access_max_age: int) -> None:
+    secure_cookie = _should_use_secure_cookie(request)
+    # Local dev over plain HTTP cannot persist `Secure` cookies.
+    same_site = "lax"
+
+    response.set_cookie(
+        key="sb-access-token",
+        value=access_token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite=same_site,
+        max_age=access_max_age
+    )
+    response.set_cookie(
+        key="sb-refresh-token",
+        value=refresh_token,
+        httponly=True,
+        secure=secure_cookie,
+        samesite=same_site,
+        max_age=60 * 60 * 24 * 30
+    )
+
+
 def ensure_user_directory(user_email: str) -> None:
     """确保用户目录存在"""
     try:
@@ -65,7 +95,7 @@ async def get_auth_config() -> Dict[str, Any]:
 
 
 @router.post("/login")
-async def login(request: LoginRequest, response: Response) -> Dict[str, Any]:
+async def login(request: LoginRequest, response: Response, raw_request: Request) -> Dict[str, Any]:
     """Login via backend proxy"""
     log.info(f"Login attempt for email: {request.email}")
     supabase = get_supabase_client()
@@ -86,22 +116,12 @@ async def login(request: LoginRequest, response: Response) -> Dict[str, Any]:
             # 确保用户目录存在
             ensure_user_directory(request.email)
 
-            # 设置 HTTP-only cookie
-            response.set_cookie(
-                key="sb-access-token",
-                value=result.session.access_token,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                max_age=result.session.expires_in
-            )
-            response.set_cookie(
-                key="sb-refresh-token",
-                value=result.session.refresh_token,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                max_age=60 * 60 * 24 * 30  # 30 days
+            _set_auth_cookies(
+                raw_request,
+                response,
+                result.session.access_token,
+                result.session.refresh_token,
+                result.session.expires_in,
             )
 
             return {
@@ -119,7 +139,7 @@ async def login(request: LoginRequest, response: Response) -> Dict[str, Any]:
 
 
 @router.post("/signup")
-async def signup(request: SignupRequest, response: Response) -> Dict[str, Any]:
+async def signup(request: SignupRequest, response: Response, raw_request: Request) -> Dict[str, Any]:
     """Signup via backend proxy"""
     supabase = get_supabase_client()
     if not supabase:
@@ -135,21 +155,12 @@ async def signup(request: SignupRequest, response: Response) -> Dict[str, Any]:
             # 确保用户目录存在
             ensure_user_directory(request.email)
 
-            response.set_cookie(
-                key="sb-access-token",
-                value=result.session.access_token,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                max_age=result.session.expires_in
-            )
-            response.set_cookie(
-                key="sb-refresh-token",
-                value=result.session.refresh_token,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                max_age=60 * 60 * 24 * 30
+            _set_auth_cookies(
+                raw_request,
+                response,
+                result.session.access_token,
+                result.session.refresh_token,
+                result.session.expires_in,
             )
 
             return {
@@ -187,21 +198,12 @@ async def refresh_token(request: Request, response: Response) -> Dict[str, Any]:
         result = supabase.auth.refresh_session(refresh_token)
 
         if result.session:
-            response.set_cookie(
-                key="sb-access-token",
-                value=result.session.access_token,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                max_age=result.session.expires_in
-            )
-            response.set_cookie(
-                key="sb-refresh-token",
-                value=result.session.refresh_token,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                max_age=60 * 60 * 24 * 30
+            _set_auth_cookies(
+                request,
+                response,
+                result.session.access_token,
+                result.session.refresh_token,
+                result.session.expires_in,
             )
 
             return {
@@ -226,7 +228,7 @@ async def logout(response: Response) -> Dict[str, Any]:
 
 
 @router.post("/verify")
-async def verify_otp(request: VerifyOtpRequest, response: Response) -> Dict[str, Any]:
+async def verify_otp(request: VerifyOtpRequest, response: Response, raw_request: Request) -> Dict[str, Any]:
     """Verify OTP token"""
     supabase = get_supabase_client()
     if not supabase:
@@ -243,21 +245,12 @@ async def verify_otp(request: VerifyOtpRequest, response: Response) -> Dict[str,
             # 确保用户目录存在
             ensure_user_directory(request.email)
 
-            response.set_cookie(
-                key="sb-access-token",
-                value=result.session.access_token,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                max_age=result.session.expires_in
-            )
-            response.set_cookie(
-                key="sb-refresh-token",
-                value=result.session.refresh_token,
-                httponly=True,
-                secure=True,
-                samesite="lax",
-                max_age=60 * 60 * 24 * 30
+            _set_auth_cookies(
+                raw_request,
+                response,
+                result.session.access_token,
+                result.session.refresh_token,
+                result.session.expires_in,
             )
 
             return {
@@ -316,4 +309,3 @@ async def get_session(request: Request) -> Dict[str, Any]:
             return {"user": None}
     except Exception:
         return {"user": None}
-

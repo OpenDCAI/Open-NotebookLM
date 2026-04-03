@@ -14,6 +14,60 @@ log = get_logger(__name__)
 # 全局模型缓存
 _qwen_native_model = None
 
+_GEMINI_TTS_MODEL_FALLBACKS = {
+    "gemini-2.5-flash-tts": "gemini-2.5-pro-preview-tts",
+}
+
+_GEMINI_TTS_VOICES = {
+    "Puck",
+    "Charon",
+    "Kore",
+    "Fenrir",
+    "Aoede",
+    "Enceladus",
+    "Iapetus",
+    "Algieba",
+    "Despina",
+    "Algenib",
+    "Rasalgethi",
+    "Achernar",
+    "Alnilam",
+    "Schedar",
+    "Gacrux",
+    "Pulcherrima",
+    "Achird",
+    "Zubenelgenubi",
+    "Vindemiatrix",
+    "Sadachbia",
+    "Sadaltager",
+    "Sulafat",
+    "Orus",
+    "Orbit",
+    "Trochilidae",
+    "Zephyr",
+}
+
+
+def _normalize_api_tts_model(model: str) -> str:
+    normalized = (model or "").strip()
+    fallback = _GEMINI_TTS_MODEL_FALLBACKS.get(normalized.lower())
+    if fallback:
+        log.warning(f"[TTS] 模型 {normalized} 当前不可用，自动切换为 {fallback}")
+        return fallback
+    return normalized
+
+
+def _normalize_api_tts_voice(model: str, voice_name: str) -> str:
+    normalized_model = (model or "").lower()
+    normalized_voice = (voice_name or "").strip()
+    if "gemini" in normalized_model and "tts" in normalized_model:
+        if normalized_voice in _GEMINI_TTS_VOICES:
+            return normalized_voice
+        if normalized_voice:
+            log.warning(f"[TTS] Gemini TTS 不支持音色 {normalized_voice}，自动切换为 Puck")
+        return "Puck"
+    return normalized_voice
+
 def split_tts_text(content: str, limit: int) -> List[str]:
     if limit is None or limit <= 0:
         return [content]
@@ -259,15 +313,17 @@ async def generate_speech_bytes_async(
             log.warning(f"[TTS] 本地 TTS 失败: {type(e).__name__}: {str(e) or repr(e)}，回退到 API")
 
     # 回退到 API-based TTS
-    provider = get_provider(api_url, model)
+    api_tts_model = _normalize_api_tts_model(model)
+    api_tts_voice = _normalize_api_tts_voice(api_tts_model, voice_name)
+    provider = get_provider(api_url, api_tts_model)
     log.info(f"TTS using Provider: {provider.__class__.__name__}")
 
     try:
         url, payload, is_stream = provider.build_tts_request(
             api_url=api_url,
-            model=model,
+            model=api_tts_model,
             text=text,
-            voice_name=voice_name,
+            voice_name=api_tts_voice,
             **kwargs
         )
     except NotImplementedError:

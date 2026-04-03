@@ -65,7 +65,7 @@ def _build_service(
     api_key: Optional[str] = None,
     model: Optional[str] = None,
 ) -> DataExtractService:
-    from fastapi_app.workflow_adapters.wa_data_extract import SQLBotAdapter
+    from fastapi_app.services.wa_data_extract import SQLBotAdapter
 
     adapter = SQLBotAdapter(
         llm_api_base=api_url,

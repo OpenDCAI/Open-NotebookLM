@@ -18,13 +18,13 @@ from workflow_engine.state import IntelligentQARequest, IntelligentQAState, KBPo
 from workflow_engine.toolkits.ragtool.vector_store_tool import process_knowledge_base_files, VectorStoreManager
 from workflow_engine.utils import get_project_root
 from workflow_engine.logger import get_logger
-from workflow_engine.workflow import run_workflow
+from workflow_engine.workflow import run_workflow, list_workflows
 
 log = get_logger(__name__)
 from fastapi_app.config import settings
 from fastapi_app.schemas import Paper2PPTRequest
 from fastapi_app.utils import _from_outputs_url, _to_outputs_url
-from fastapi_app.workflow_adapters.wa_paper2ppt import _init_state_from_request
+from fastapi_app.services.wa_paper2ppt import _init_state_from_request
 from fastapi_app.dependencies.auth import get_supabase_admin_client
 from fastapi_app.notebook_paths import NotebookPaths, get_notebook_paths, _sanitize_user_id
 from fastapi_app.source_manager import SourceManager
@@ -668,6 +668,17 @@ async def import_url_as_source(
     except Exception as e:
         log.warning("[import-url-as-source] failed to write JSON record: %s", e)
 
+    embedded = False
+    try:
+        await process_knowledge_base_files(
+            file_list=[{"path": str(source_info.original_path)}],
+            base_dir=str(paths.vector_store_dir),
+        )
+        embedded = True
+        log.info("[import-url-as-source] auto-embedding done: %s", source_info.original_path.name)
+    except Exception as emb_err:
+        log.warning("[import-url-as-source] auto-embedding failed for %s: %s", source_info.original_path.name, emb_err)
+
     return {
         "success": True,
         "filename": source_info.original_path.name,
@@ -675,6 +686,7 @@ async def import_url_as_source(
         "storage_path": str(source_info.original_path),
         "static_url": static_path,
         "id": f"file-{source_info.original_path.name}",
+        "embedded": embedded,
     }
 
 
@@ -782,19 +794,86 @@ def _build_chat_request(
     if not local_files:
         log.warning("[chat] No valid local files found, will rely on RAG only")
 
+    resolved_api_url, resolved_api_key = _require_llm_config(api_url, api_key)
+
     return IntelligentQARequest(
         file_ids=local_files,
         query=query,
         history=history,
         vector_store_base_dir=_resolve_vector_store_dir(email, notebook_id),
-        chat_api_url=api_url or os.getenv("DF_API_URL"),
-        api_key=api_key or os.getenv("DF_API_KEY"),
+        chat_api_url=resolved_api_url,
+        api_key=resolved_api_key,
         model=model,
     )
 
 
+def _resolve_llm_api_url(explicit_api_url: Optional[str] = None) -> str:
+    return (
+        (explicit_api_url or "").strip()
+        or str(getattr(settings, "LLM_API_URL", "") or "").strip()
+        or str(os.getenv("LLM_API_URL", "")).strip()
+        or str(os.getenv("DF_API_URL", "")).strip()
+    )
+
+
+def _resolve_llm_api_key(explicit_api_key: Optional[str] = None) -> str:
+    return (
+        (explicit_api_key or "").strip()
+        or str(getattr(settings, "LLM_API_KEY", "") or "").strip()
+        or str(os.getenv("LLM_API_KEY", "")).strip()
+        or str(os.getenv("DF_API_KEY", "")).strip()
+        or str(os.getenv("OPENAI_API_KEY", "")).strip()
+    )
+
+
+def _require_llm_config(
+    explicit_api_url: Optional[str] = None,
+    explicit_api_key: Optional[str] = None,
+) -> tuple[str, str]:
+    resolved_api_url = _resolve_llm_api_url(explicit_api_url)
+    resolved_api_key = _resolve_llm_api_key(explicit_api_key)
+
+    if not resolved_api_url or not resolved_api_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Missing LLM API configuration on the backend. Please set LLM_API_URL and LLM_API_KEY in fastapi_app/.env.",
+        )
+
+    return resolved_api_url, resolved_api_key
+
+
+def _resolve_search_provider(explicit_provider: Optional[str] = None) -> str:
+    return ((explicit_provider or "").strip() or str(getattr(settings, "SEARCH_PROVIDER", "serper"))).lower()
+
+
+def _resolve_search_api_key(provider: str, explicit_api_key: Optional[str] = None) -> str:
+    if explicit_api_key and explicit_api_key.strip():
+        return explicit_api_key.strip()
+
+    provider = _resolve_search_provider(provider)
+    if provider == "serper":
+        return str(getattr(settings, "SERPER_API_KEY", "") or os.getenv("SERPER_API_KEY", "")).strip()
+    if provider == "serpapi":
+        return str(getattr(settings, "SERPAPI_KEY", "") or os.getenv("SERPAPI_KEY", "")).strip()
+    if provider == "bocha":
+        return str(getattr(settings, "BOCHA_API_KEY", "") or os.getenv("BOCHA_API_KEY", "")).strip()
+    return ""
+
+
 def _jsonl_line(payload: Dict[str, Any]) -> bytes:
     return (json.dumps(payload, ensure_ascii=False) + "\n").encode("utf-8")
+
+
+def _require_workflow_available(name: str, *, feature_label: str, missing_detail: Optional[str] = None) -> None:
+    available = list_workflows()
+    if name in available:
+        return
+
+    detail = missing_detail or (
+        f"{feature_label} 所需工作流 '{name}' 不可用。"
+        f" 当前可用工作流: {list(available.keys())}"
+    )
+    raise HTTPException(status_code=503, detail=detail)
 
 
 @router.post("/chat")
@@ -1221,243 +1300,18 @@ def _save_output_record(
         log.warning("_save_output_record failed: %s", e)
 
 
-# ---------- 1.3 笔记本（目录）与后端联动 ----------
-def _notebooks_local_path(user_id: str) -> Path:
-    root = get_project_root()
-    safe_id = _sanitize_user_id(user_id)
-    base = root / "outputs" / safe_id
-    base.mkdir(parents=True, exist_ok=True)
-    return base / "_notebooks.json"
-
-
-def _list_notebooks_local(user_id: str) -> List[Dict[str, Any]]:
-    path = _notebooks_local_path(user_id)
-    if not path.exists():
-        return []
-    try:
-        raw = path.read_text(encoding="utf-8")
-        data = json.loads(raw)
-        return data if isinstance(data, list) else []
-    except Exception as e:
-        log.warning("_list_notebooks_local read failed: %s", e)
-        return []
-
-
-def _create_notebook_local(user_id: str, name: str, description: str = "") -> Dict[str, Any]:
-    path = _notebooks_local_path(user_id)
-    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-    nb_id = f"local_{int(time.time() * 1000)}_{os.urandom(4).hex()}"
-    new_nb = {
-        "id": nb_id,
-        "name": name,
-        "description": description or "",
-        "created_at": now,
-        "updated_at": now,
-    }
-    notebooks = _list_notebooks_local(user_id)
-    notebooks.insert(0, new_nb)
-    try:
-        path.write_text(json.dumps(notebooks, ensure_ascii=False, indent=2), encoding="utf-8")
-    except Exception as e:
-        log.warning("_create_notebook_local write failed: %s", e)
-        raise HTTPException(status_code=500, detail="Failed to save notebook locally")
-    return new_nb
-
-
 # 不做用户管理时使用的默认用户，数据从 outputs/local 取
 DEFAULT_USER_ID = "local"
 DEFAULT_EMAIL = "local"
-
-
-@router.get("/notebooks")
-async def list_notebooks(
-    email: Optional[str] = None,
-    user_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """List notebooks from local filesystem."""
-    # Prefer email for directory naming (more readable than UUID)
-    dir_id = (email or "").strip() or (user_id or "").strip() or DEFAULT_USER_ID
-    rows = _list_notebooks_local(dir_id)
-    email_for_path = (email or "").strip() or DEFAULT_EMAIL
-    for row in rows:
-        nb_id = row.get("id")
-        if nb_id:
-            count = 0
-            # New layout count
-            try:
-                paths = get_notebook_paths(nb_id, row.get("name", ""), dir_id)
-                if paths.sources_dir.exists():
-                    count += sum(1 for d in paths.sources_dir.iterdir() if d.is_dir() and (d / "original").exists())
-            except Exception:
-                pass
-            # Legacy count (avoid double-counting)
-            nb_dir = _notebook_dir(email_for_path, nb_id)
-            try:
-                if nb_dir.exists():
-                    file_count = sum(1 for _ in nb_dir.iterdir() if _.is_file() and _.name != LINK_SOURCES_FILENAME)
-                    link_count = len(_load_link_sources(nb_dir))
-                    count = max(count, file_count + link_count)
-            except Exception:
-                pass
-            row["sources"] = count
-        else:
-            row.setdefault("sources", 0)
-    return {"success": True, "notebooks": rows}
-
-
-@router.get("/files")
-async def list_notebook_files(
-    user_id: Optional[str] = None,
-    notebook_id: Optional[str] = None,
-    email: Optional[str] = None,
-    notebook_title: Optional[str] = None,
-) -> Dict[str, Any]:
-    """List files in a notebook. Merge JSON records, notebook sources, and legacy link sources."""
-    from fastapi_app.kb_records import get_source_records
-
-    uid = (user_id or "").strip() or DEFAULT_USER_ID
-    em = (email or "").strip() or DEFAULT_EMAIL
-    if not notebook_id:
-        return {"success": True, "files": []}
-
-    files: List[Dict[str, Any]] = []
-    seen_keys: set[str] = set()
-    records = get_source_records(user_email=em, notebook_id=notebook_id)
-    seen_names: set[str] = set()
-    project_root = get_project_root()
-
-    def _normalize_key(name: str = "", url: str = "", file_type: str = "") -> str:
-        normalized_url = (url or "").strip().rstrip("/")
-        if normalized_url:
-            return f"url:{normalized_url}"
-        return f"{(file_type or '').strip().lower()}::{(name or '').strip()}"
-
-    def _append_file(entry: Dict[str, Any]) -> None:
-        key = _normalize_key(
-            name=str(entry.get("name") or ""),
-            url=str(entry.get("static_url") or entry.get("url") or ""),
-            file_type=str(entry.get("file_type") or entry.get("source_type") or ""),
-        )
-        if key in seen_keys:
-            return
-        seen_keys.add(key)
-        name = str(entry.get("name") or "").strip()
-        if name:
-            seen_names.add(name)
-        files.append(entry)
-
-    for r in records:
-        _append_file({
-            "id": f"file-{r['file_name']}-{int(r.get('created_at', 0))}",
-            "name": r["file_name"],
-            "url": r["static_url"],
-            "static_url": r["static_url"],
-            "file_size": r.get("file_size", 0),
-            "file_type": r.get("file_type", ""),
-        })
-
-    # --- 1) Read from new layout: outputs/{title}_{id}/sources/ ---
-    try:
-        paths = get_notebook_paths(notebook_id, notebook_title or "", em or uid)
-        sources_dir = paths.sources_dir
-        if sources_dir.exists():
-            for src_dir in sorted(sources_dir.iterdir()):
-                if not src_dir.is_dir():
-                    continue
-                orig_dir = src_dir / "original"
-                if not orig_dir.exists():
-                    continue
-                for f in orig_dir.iterdir():
-                    if not f.is_file():
-                        continue
-                    rel = f.relative_to(project_root)
-                    static_url = "/" + rel.as_posix()
-                    stat = f.stat()
-                    _append_file({
-                        "id": f"file-{f.name}-{stat.st_mtime_ns}",
-                        "name": f.name,
-                        "url": static_url,
-                        "static_url": static_url,
-                        "file_size": stat.st_size,
-                        "file_type": (f.suffix or "").lower() or "application/octet-stream",
-                    })
-    except Exception as e:
-        log.warning("[list_notebook_files] new layout read failed: %s", e)
-
-    # --- 2) Fallback: read from legacy kb_data/{email}/{notebook_id}/ ---
-    nb_dir = _notebook_dir(em, notebook_id)
-    link_static_urls: set = set()
-    try:
-        if nb_dir.exists():
-            link_sources_path = nb_dir / LINK_SOURCES_FILENAME
-            if link_sources_path.exists():
-                try:
-                    raw = link_sources_path.read_text(encoding="utf-8")
-                    link_list = json.loads(raw)
-                    if isinstance(link_list, list):
-                        for item in link_list:
-                            su = item.get("static_url") or ""
-                            if su:
-                                link_static_urls.add(su.rstrip("/"))
-                except Exception:
-                    pass
-            for f in nb_dir.iterdir():
-                if not f.is_file():
-                    continue
-                if f.name == LINK_SOURCES_FILENAME:
-                    continue
-                if f.name in seen_names:
-                    continue
-                rel = f.relative_to(project_root)
-                static_url = "/" + rel.as_posix().replace("@", "%40")
-                if static_url.rstrip("/") in link_static_urls:
-                    continue
-                stat = f.stat()
-                _append_file({
-                    "id": f"file-{f.name}-{stat.st_mtime_ns}",
-                    "name": f.name,
-                    "url": static_url,
-                    "static_url": static_url,
-                    "file_size": stat.st_size,
-                    "file_type": (f.suffix or "").lower() or "application/octet-stream",
-                })
-            # Link sources
-            if link_sources_path.exists():
-                try:
-                    raw = link_sources_path.read_text(encoding="utf-8")
-                    link_list = json.loads(raw)
-                    if isinstance(link_list, list):
-                        for i, item in enumerate(link_list):
-                            link_id = item.get("id") or f"link-{i}-{hash(item.get('link', '')) % 10**8}"
-                            static_url = item.get("static_url") or ""
-                            link_url = item.get("link") or ""
-                            url = static_url or link_url
-                            _append_file({
-                                "id": link_id,
-                                "name": (item.get("title") or item.get("link") or "Link")[:200],
-                                "url": url,
-                                "static_url": url,
-                                "file_size": 0,
-                                "file_type": "link",
-                                "source_type": "link",
-                                "snippet": item.get("snippet") or "",
-                            })
-                except Exception as e:
-                    log.warning("list_notebook_files link_sources read failed: %s", e)
-    except Exception as e:
-        log.warning("list_notebook_files legacy read failed: %s", e)
-
-    files.sort(key=lambda x: (x.get("file_type") == "link", x.get("name", "")))
-    return {"success": True, "files": files}
 
 
 @router.post("/fast-research")
 async def fast_research(
     query: str = Body(..., embed=True),
     top_k: int = Body(10, embed=True),
-    search_provider: Optional[str] = Body("serper", embed=True),
+    search_provider: Optional[str] = Body(None, embed=True),
     search_api_key: Optional[str] = Body(None, embed=True),
-    search_engine: Optional[str] = Body("google", embed=True),
+    search_engine: Optional[str] = Body(None, embed=True),
     google_cse_id: Optional[str] = Body(None, embed=True),
 ) -> Dict[str, Any]:
     """
@@ -1470,11 +1324,13 @@ async def fast_research(
     - bocha：博查 AI 网页搜索（https://api.bocha.cn），传 search_api_key（Bearer 鉴权）
     """
     top_k = max(1, min(20, top_k))
+    resolved_provider = _resolve_search_provider(search_provider)
+    resolved_search_api_key = _resolve_search_api_key(resolved_provider, search_api_key)
     sources = fast_research_search(
         query,
         top_k=top_k,
-        search_provider=search_provider or "serper",
-        search_api_key=search_api_key,
+        search_provider=resolved_provider,
+        search_api_key=resolved_search_api_key or None,
         search_engine=search_engine or "google",
         google_cse_id=google_cse_id,
     )
@@ -1483,134 +1339,6 @@ async def fast_research(
         "query": query,
         "sources": sources,
     }
-
-
-def _pdf_to_markdown(local_path: str) -> str:
-    """将本地 PDF 提取为可读文本/简单 markdown，用于前端展示。"""
-    text_parts: List[str] = []
-    try:
-        doc = fitz.open(local_path)
-        for i in range(len(doc)):
-            page = doc[i]
-            block_list = page.get_text("blocks")
-            for block in block_list:
-                # block: (x0, y0, x1, y1, "text", block_no, block_type)
-                if len(block) >= 5 and block[4].strip():
-                    text_parts.append(block[4].strip())
-        doc.close()
-    except Exception as e:
-        log.warning("_pdf_to_markdown failed for %s: %s", local_path, e)
-        return ""
-    return "\n\n".join(text_parts)
-
-
-def _manifest_path_for_storage_path(storage_path: str) -> Optional[Path]:
-    """
-    根据来源文件路径（如 /outputs/kb_data/default/notebook_id/xxx.pdf）推断该笔记本的
-    vector_store 目录并返回 knowledge_manifest.json 路径；若无法推断则返回 None。
-    """
-    raw = _from_outputs_url((storage_path or "").strip())
-    p = Path(raw)
-    if not p.is_absolute():
-        p = (get_project_root() / raw).resolve()
-    parts = p.parts
-    if "kb_data" not in parts:
-        return None
-    idx = parts.index("kb_data")
-    if idx + 2 >= len(parts):
-        return None
-    email = parts[idx + 1]
-    notebook_id = parts[idx + 2]
-    root = get_project_root()
-    safe_nb = (notebook_id or "_shared").replace("/", "_").replace("\\", "_")[:128]
-    manifest_path = root / "outputs" / "kb_data" / email / safe_nb / "vector_store" / "knowledge_manifest.json"
-    return manifest_path if manifest_path.exists() else None
-
-
-@router.post("/get-source-display-content")
-async def get_source_display_content(
-    path: str = Body(..., embed=True),
-    notebook_id: Optional[str] = Body(None, embed=True),
-    email: Optional[str] = Body(None, embed=True),
-) -> Dict[str, Any]:
-    """
-    返回用于前端展示的来源内容。若该来源已建索引且存在 MinerU 产出的 MD，则返回该 MD 内容；
-    否则返回 from_mineru=false，前端可回退到 parse-local-file / fetch-page-content。
-    """
-    if not path or not path.strip():
-        return {"content": None, "from_mineru": False}
-    raw = _from_outputs_url(path.strip())
-    abs_path = Path(raw)
-    if not abs_path.is_absolute():
-        abs_path = (get_project_root() / raw).resolve()
-    if not abs_path.exists() or not abs_path.is_file():
-        return {"content": None, "from_mineru": False}
-    abs_str = str(abs_path.resolve())
-    manifest_path = _manifest_path_for_storage_path(path)
-    if not manifest_path:
-        return {"content": None, "from_mineru": False}
-    try:
-        with open(manifest_path, "r", encoding="utf-8") as f:
-            manifest = json.load(f)
-    except Exception:
-        return {"content": None, "from_mineru": False}
-    for file_record in (manifest.get("files") or []):
-        orig = (file_record.get("original_path") or "").strip()
-        if not orig:
-            continue
-        if Path(orig).resolve() == abs_path.resolve():
-            md_path = file_record.get("processed_md_path")
-            if md_path and Path(md_path).exists():
-                try:
-                    content = Path(md_path).read_text(encoding="utf-8", errors="replace")
-                    return {"content": content, "from_mineru": True}
-                except Exception:
-                    pass
-            break
-    return {"content": None, "from_mineru": False}
-
-
-@router.post("/parse-local-file")
-async def parse_local_file(path_or_url: str = Body(..., embed=True)) -> Dict[str, Any]:
-    """
-    解析本地文件内容，用于来源详情展示。支持 PDF：提取为文本/简单 markdown。
-    path_or_url: 前端传来的路径，如 /outputs/kb_data/default/notebook_id/2025-6.pdf
-    """
-    if not path_or_url or not path_or_url.strip():
-        raise HTTPException(status_code=400, detail="path_or_url is required")
-    raw = _from_outputs_url(path_or_url.strip())
-    p = Path(raw)
-    if not p.is_absolute():
-        p = (get_project_root() / raw).resolve()
-    if not p.exists() or not p.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
-    suffix = (p.suffix or "").lower()
-    if suffix == ".pdf":
-        content = _pdf_to_markdown(str(p))
-        return {"success": True, "content": content or "[PDF 无文本或解析失败]", "format": "markdown"}
-    if suffix in (".md", ".txt", ".markdown"):
-        try:
-            content = p.read_text(encoding="utf-8", errors="replace")
-            return {"success": True, "content": content, "format": "markdown" if suffix == ".md" else "text"}
-        except Exception as e:
-            log.warning("parse_local_file read text failed: %s", e)
-            raise HTTPException(status_code=500, detail=str(e))
-    raise HTTPException(status_code=400, detail="Unsupported file type for preview (only .pdf, .md, .txt)")
-
-
-@router.post("/fetch-page-content")
-async def fetch_page_content(url: str = Body(..., embed=True)) -> Dict[str, Any]:
-    """
-    抓取 URL 对应页面的正文文本，用于来源详情展示（解析后的内容，可乱序但可读）。
-    """
-    if not url or not (url.startswith("http://") or url.startswith("https://")):
-        raise HTTPException(status_code=400, detail="Invalid url")
-    try:
-        content = fetch_page_text(url, max_chars=50000)
-        return {"success": True, "content": content}
-    except Exception as e:
-        log.warning("fetch_page_content failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 def _load_link_sources(nb_dir: Path) -> List[Dict[str, Any]]:
@@ -1762,37 +1490,6 @@ async def import_link_sources(
     return {"success": True, "imported": imported, "embedded": embedded}
 
 
-@router.post("/notebooks")
-async def create_notebook(
-    name: str = Body(..., embed=True),
-    description: Optional[str] = Body(None, embed=True),
-    user_id: str = Body(..., embed=True),
-    email: Optional[str] = Body(None, embed=True),
-) -> Dict[str, Any]:
-    """Create a notebook using local JSON file.
-    Also creates the new outputs/{user_id}/{title}_{id}/sources/ directory."""
-    # Prefer email for directory naming (more readable than UUID)
-    dir_id = (email or "").strip() or user_id
-    try:
-        nb_data = _create_notebook_local(dir_id, name, description or "")
-    except HTTPException:
-        raise
-    except Exception as e:
-        log.warning("create_notebook local failed: %s", e)
-        return {"success": False, "message": str(e)}
-
-    # Create new directory structure
-    if nb_data and nb_data.get("id"):
-        try:
-            paths = get_notebook_paths(nb_data["id"], name, dir_id)
-            paths.sources_dir.mkdir(parents=True, exist_ok=True)
-            log.info("[create_notebook] created dir: %s", paths.root)
-        except Exception as e:
-            log.warning("[create_notebook] dir creation failed: %s", e)
-
-    return {"success": True, "notebook": nb_data}
-
-
 @router.post("/generate-ppt")
 async def generate_ppt_from_kb(
     file_path: Optional[str] = Body(None, embed=True),
@@ -1806,8 +1503,8 @@ async def generate_ppt_from_kb(
     email: str = Body(..., embed=True),
     notebook_id: Optional[str] = Body(None, embed=True),
     notebook_title: Optional[str] = Body(None, embed=True),
-    api_url: str = Body(..., embed=True),
-    api_key: str = Body(..., embed=True),
+    api_url: Optional[str] = Body(None, embed=True),
+    api_key: Optional[str] = Body(None, embed=True),
     style: str = Body("modern", embed=True),
     language: str = Body("zh", embed=True),
     page_count: int = Body(10, embed=True),
@@ -1818,6 +1515,20 @@ async def generate_ppt_from_kb(
     Generate PPT from knowledge base file. Outputs under user/notebook dir.
     """
     try:
+        _require_workflow_available(
+            "kb_page_content",
+            feature_label="PPT 生成",
+        )
+        _require_workflow_available(
+            "paper2ppt_parallel_consistent_style",
+            feature_label="PPT 生成",
+            missing_detail=(
+                "PPT 生成功能当前不可用：后端未加载工作流 'paper2ppt_parallel_consistent_style'。"
+                " 通常是缺少可选依赖 'paddle' / 'paddleocr' 导致启动时跳过了该工作流。"
+            ),
+        )
+
+        api_url, api_key = _require_llm_config(api_url, api_key)
         # 兼容前端传 file_paths 为数组或单个字符串；保证多选时每项一个来源
         if file_paths is not None:
             raw_list = file_paths if isinstance(file_paths, list) else [file_paths] if file_paths else []
@@ -2150,17 +1861,17 @@ async def generate_deep_research_report(
     email: str = Body(..., embed=True),
     notebook_id: Optional[str] = Body(None, embed=True),
     notebook_title: Optional[str] = Body(None, embed=True),
-    api_url: str = Body(..., embed=True),
-    api_key: str = Body(..., embed=True),
+    api_url: Optional[str] = Body(None, embed=True),
+    api_key: Optional[str] = Body(None, embed=True),
     language: str = Body("zh", embed=True),
     style: str = Body("modern", embed=True),
     page_count: int = Body(10, embed=True),
     model: str = Body("deepseek-v3.2", embed=True),
     gen_fig_model: str = Body("gemini-2.5-flash-image", embed=True),
     add_as_source: bool = Body(True, embed=True),
-    search_provider: Optional[str] = Body("serper", embed=True),
+    search_provider: Optional[str] = Body(None, embed=True),
     search_api_key: Optional[str] = Body(None, embed=True),
-    search_engine: Optional[str] = Body("google", embed=True),
+    search_engine: Optional[str] = Body(None, embed=True),
     search_top_k: int = Body(10, embed=True),
     # 新增：DeepResearch 完整模式配置
     use_full_deep_research: bool = Body(True, embed=True),  # 默认使用完整的阿里DeepResearch
@@ -2174,6 +1885,7 @@ async def generate_deep_research_report(
     - use_full_deep_research=False: 简化版（搜索 + LLM总结，快速）
     """
     try:
+        api_url, api_key = _require_llm_config(api_url, api_key)
         if not isinstance(page_count, int) or page_count < 1 or page_count > 50:
             raise HTTPException(status_code=400, detail="page_count must be an integer between 1 and 50")
         ts = int(time.time())
@@ -2198,7 +1910,7 @@ async def generate_deep_research_report(
             log.info("[generate-deep-research-report] 使用完整DeepResearch模式: topic=%r, max_iterations=%s", topic[:150], max_iterations)
 
             # 如果没有传递 serper_api_key，尝试使用 search_api_key 作为回退
-            final_serper_key = serper_api_key or search_api_key
+            final_serper_key = serper_api_key or search_api_key or _resolve_search_api_key("serper", None)
 
             log.info("[generate-deep-research-report] API配置: serper_api_key=%s, search_api_key=%s, final_serper_key=%s",
                      "***" if serper_api_key else "None",
@@ -2243,8 +1955,12 @@ async def generate_deep_research_report(
             sources = fast_research_search(
                 topic,
                 top_k=search_top_k,
-                search_provider=search_provider or "serper",
-                search_api_key=search_api_key or serper_api_key,
+                search_provider=_resolve_search_provider(search_provider),
+                search_api_key=(
+                    search_api_key
+                    or serper_api_key
+                    or _resolve_search_api_key(search_provider or "serper", None)
+                ),
                 search_engine=search_engine or "google",
             )
             log.info("[generate-deep-research-report] search 完成: 共 %s 条来源", len(sources))
@@ -2384,8 +2100,8 @@ async def generate_podcast_from_kb(
     email: str = Body(..., embed=True),
     notebook_id: Optional[str] = Body(None, embed=True),
     notebook_title: Optional[str] = Body(None, embed=True),
-    api_url: str = Body(..., embed=True),
-    api_key: str = Body(..., embed=True),
+    api_url: Optional[str] = Body(None, embed=True),
+    api_key: Optional[str] = Body(None, embed=True),
     model: str = Body("deepseek-v3.2", embed=True),
     tts_model: str = Body("gemini-2.5-pro-preview-tts", embed=True),
     voice_name: str = Body("Kore", embed=True),
@@ -2397,6 +2113,7 @@ async def generate_podcast_from_kb(
     从知识库生成播客。支持本地文件与「搜索引入」的 URL：URL 优先用已存 .md，否则抓取后写临时 .md 再参与生成。
     """
     try:
+        api_url, api_key = _require_llm_config(api_url, api_key)
         # Validate TTS mode restrictions
         if podcast_mode == "dialog":
             tts_lower = tts_model.lower()
@@ -2598,8 +2315,8 @@ async def generate_mindmap_from_kb(
     email: str = Body(..., embed=True),
     notebook_id: Optional[str] = Body(None, embed=True),
     notebook_title: Optional[str] = Body(None, embed=True),
-    api_url: str = Body(..., embed=True),
-    api_key: str = Body(..., embed=True),
+    api_url: Optional[str] = Body(None, embed=True),
+    api_key: Optional[str] = Body(None, embed=True),
     model: str = Body("deepseek-v3.2", embed=True),
     mindmap_style: str = Body("default", embed=True),
     max_depth: int = Body(3, embed=True),
@@ -2609,6 +2326,7 @@ async def generate_mindmap_from_kb(
     从知识库生成思维导图。支持本地文件与「搜索引入」的 URL：路径用 _resolve_local_path；URL 优先用已存 .md，否则抓取后写临时 .md。
     """
     try:
+        api_url, api_key = _require_llm_config(api_url, api_key)
         project_root = get_project_root()
         ts = int(time.time())
         # New layout: outputs/{title}_{id}/mindmap/{ts}/
@@ -2776,8 +2494,8 @@ async def generate_drawio_from_kb(
     email: str = Body(..., embed=True),
     notebook_id: Optional[str] = Body(None, embed=True),
     notebook_title: Optional[str] = Body(None, embed=True),
-    api_url: str = Body(..., embed=True),
-    api_key: str = Body(..., embed=True),
+    api_url: Optional[str] = Body(None, embed=True),
+    api_key: Optional[str] = Body(None, embed=True),
     model: str = Body("deepseek-v3.2", embed=True),
     diagram_type: str = Body("auto", embed=True),
     diagram_style: str = Body("default", embed=True),
@@ -2847,14 +2565,15 @@ async def generate_flashcards(
     user_id: str = Body(..., embed=True),
     notebook_id: Optional[str] = Body(None, embed=True),
     notebook_title: Optional[str] = Body(None, embed=True),
-    api_url: str = Body(..., embed=True),
-    api_key: str = Body(..., embed=True),
+    api_url: Optional[str] = Body(None, embed=True),
+    api_key: Optional[str] = Body(None, embed=True),
     model: str = Body("deepseek-v3.2", embed=True),
     language: str = Body("zh", embed=True),
     card_count: int = Body(20, embed=True),
 ):
     """从知识库文件生成闪卡"""
     try:
+        api_url, api_key = _require_llm_config(api_url, api_key)
         from fastapi_app.services.flashcard_service import generate_flashcards_with_llm
 
         local_paths = []
@@ -2946,14 +2665,15 @@ async def generate_quiz(
     user_id: str = Body(..., embed=True),
     notebook_id: Optional[str] = Body(None, embed=True),
     notebook_title: Optional[str] = Body(None, embed=True),
-    api_url: str = Body(..., embed=True),
-    api_key: str = Body(..., embed=True),
+    api_url: Optional[str] = Body(None, embed=True),
+    api_key: Optional[str] = Body(None, embed=True),
     model: str = Body("deepseek-v3.2", embed=True),
     language: str = Body("en", embed=True),
     question_count: int = Body(10, embed=True),
 ):
     """生成 Quiz 测验题目"""
     try:
+        api_url, api_key = _require_llm_config(api_url, api_key)
         from fastapi_app.services.quiz_service import generate_quiz_with_llm
 
         local_paths = []
@@ -3265,7 +2985,7 @@ async def search_and_add(
     user_id: Optional[str] = Body(None, embed=True),
     email: Optional[str] = Body(None, embed=True),
     top_k: int = Body(10, embed=True),
-    search_provider: str = Body("serper", embed=True),
+    search_provider: Optional[str] = Body(None, embed=True),
     search_api_key: Optional[str] = Body(None, embed=True),
 ):
     """
@@ -3301,8 +3021,8 @@ async def search_and_add(
         result = await service.search_and_crawl(
             query=query,
             top_k=top_k,
-            search_provider=search_provider,
-            search_api_key=search_api_key,
+            search_provider=_resolve_search_provider(search_provider),
+            search_api_key=_resolve_search_api_key(search_provider, search_api_key) or None,
         )
 
         if not result["success"]:

@@ -70,6 +70,11 @@ def get_embedded_file_paths(state: IntelligentQAState) -> set:
         embedded = set()
         for f in manifest_files:
             orig = f.get("original_path") or ""
+            status = str(f.get("status") or "").strip().lower()
+            chunks_count = int(f.get("chunks_count") or 0)
+            media_desc_count = int(f.get("media_desc_count") or 0)
+            if status != "embedded" and chunks_count <= 0 and media_desc_count <= 0:
+                continue
             if orig:
                 try:
                     embedded.add(str(Path(orig).resolve()))
@@ -482,6 +487,11 @@ def create_intelligent_qa_graph() -> GenericGraphBuilder:
             embedded = set()
             for f in manifest_files:
                 orig = f.get("original_path") or ""
+                status = str(f.get("status") or "").strip().lower()
+                chunks_count = int(f.get("chunks_count") or 0)
+                media_desc_count = int(f.get("media_desc_count") or 0)
+                if status != "embedded" and chunks_count <= 0 and media_desc_count <= 0:
+                    continue
                 if orig:
                     try:
                         embedded.add(str(Path(orig).resolve()))

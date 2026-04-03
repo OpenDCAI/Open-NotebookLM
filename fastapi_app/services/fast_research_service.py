@@ -26,10 +26,11 @@ log = get_logger(__name__)
 SERPER_API_URL = "https://google.serper.dev/search"
 
 
-def _serper_search(query: str, top_k: int) -> List[Dict[str, Any]]:
+def _serper_search(query: str, top_k: int, api_key: Optional[str] = None) -> List[Dict[str, Any]]:
     """Serper (google.serper.dev) 仅支持 Google。"""
-    api_key = os.environ.get("SERPER_API_KEY", "").strip()
+    api_key = (api_key or os.environ.get("SERPER_API_KEY", "")).strip()
     if not api_key:
+        log.warning("[fast_research] serper 缺少 API key")
         return []
     payload = {"q": query, "num": min(top_k, 20)}
     headers = {"X-API-KEY": api_key, "Content-Type": "application/json"}
@@ -65,18 +66,19 @@ def fast_research_search(
     统一搜索入口，返回 [{ "title", "link", "snippet" }]。
     - search_provider: "serper" | "serpapi" | "google_cse" | "brave" | "bocha"
     - search_engine: 仅 serpapi 时有效，"google" | "baidu"
-    - search_api_key: serpapi / google_cse / brave / bocha 必填；serper 用环境变量 SERPER_API_KEY
+    - search_api_key: serpapi / google_cse / brave / bocha 必填；serper 可传入或使用环境变量 SERPER_API_KEY
     """
     top_k = max(1, min(50, top_k))
     provider = (search_provider or "serper").lower().strip()
     log.info("[fast_research] search: query=%r, top_k=%s, provider=%s", query[:200], top_k, provider)
 
+    api_key = (search_api_key or "").strip()
+
     if provider == "serper":
-        results = _serper_search(query, min(20, top_k))
+        results = _serper_search(query, min(20, top_k), api_key=api_key or None)
         log.info("[fast_research] serper 返回 %s 条来源: %s", len(results), [r.get("title", "")[:50] for r in results])
         return results
 
-    api_key = (search_api_key or "").strip()
     if not api_key:
         log.warning("[fast_research] %s 需要 search_api_key", provider)
         return []

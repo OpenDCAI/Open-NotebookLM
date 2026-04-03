@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Bot, Send, X, ChevronDown, ChevronUp, Copy } from 'lucide-react';
 import { apiFetch } from '../../config/api';
-import { getApiSettings } from '../../services/apiSettingsService';
 import { Badge, BadgeGroup } from '../ui';
 import type { KnowledgeFile } from '../../types';
 
@@ -78,7 +77,6 @@ export const AIPanel: React.FC<AIPanelProps> = ({
     setLoading(true);
     setAiResponse('');
     try {
-      const apiSettings = getApiSettings(user?.id || null);
       const selectedFilePaths = files
         .filter(f => selectedFileIds.has(f.id))
         .map(f => f.url)
@@ -104,8 +102,6 @@ export const AIPanel: React.FC<AIPanelProps> = ({
           history: [],
           email: user?.email || user?.id || undefined,
           notebook_id: notebook?.id || undefined,
-          api_key: apiSettings?.apiKey?.trim() || undefined,
-          api_url: apiSettings?.apiUrl?.trim() || undefined,
         }),
       });
       const data = await res.json();

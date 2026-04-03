@@ -18,7 +18,10 @@ from workflow_engine.toolkits.multimodaltool.req_img import (
     generate_or_edit_and_save_image_async, 
     gemini_multi_image_edit_async
 )
-from workflow_engine.toolkits.multimodaltool.ppt_tool import convert_images_dir_to_pdf_and_ppt_api
+from workflow_engine.toolkits.multimodaltool.ppt_tool import (
+    convert_images_dir_to_pdf_and_ppt_api,
+    convert_images_dir_to_pptx_full_bleed,
+)
 
 log = get_logger(__name__)
 
@@ -723,8 +726,12 @@ def create_paper2ppt_parallel_consistent_graph() -> GenericGraphBuilder:  # noqa
             use_api_inpaint=False,
         )
 
+        pptx_out = convert_images_dir_to_pptx_full_bleed(
+            input_dir=str(img_dir),
+            output_pptx_path=str(pptx_path),
+        )
         setattr(state, "ppt_pdf_path", out.get("pdf") or str(pdf_path))
-        setattr(state, "ppt_pptx_path", None)
+        setattr(state, "ppt_pptx_path", pptx_out or str(pptx_path))
         return state
 
     nodes = {

@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Sparkles, Loader2, AlertCircle } from 'lucide-react';
 import { apiFetch } from '../../config/api';
-import { getApiSettings } from '../../services/apiSettingsService';
 
 interface FlashcardGeneratorProps {
   selectedFiles: string[];
@@ -29,12 +28,6 @@ export const FlashcardGenerator: React.FC<FlashcardGeneratorProps> = ({
     }
 
     // 获取 API 配置
-    const settings = getApiSettings(userId);
-    if (!settings?.apiUrl || !settings?.apiKey) {
-      setError('Please configure API URL and API Key in Settings first');
-      return;
-    }
-
     setLoading(true);
     setError(null);
 
@@ -49,8 +42,6 @@ export const FlashcardGenerator: React.FC<FlashcardGeneratorProps> = ({
           notebook_id: notebookId,
           email: email,
           user_id: userId,
-          api_url: settings.apiUrl,
-          api_key: settings.apiKey,
           model: 'deepseek-v3.2',
           card_count: cardCount,
           language: 'en',

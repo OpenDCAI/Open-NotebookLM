@@ -9,8 +9,7 @@ import {
 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { apiFetch } from '../config/api';
-import { getApiSettings } from '../services/apiSettingsService';
-import { fetchWithCache, invalidateCacheByPrefix } from '../services/clientCache';
+import { getApiSettings } from '../services/apiSettingsService';import { fetchWithCache, invalidateCacheByPrefix } from '../services/clientCache';
 import type { KnowledgeFile, ChatMessage, ToolType } from '../types';
 import ReactMarkdown from 'react-markdown';
 import { MermaidPreview } from '../components/knowledge-base/tools/MermaidPreview';
@@ -131,6 +130,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     setId?: string;
     noteContent?: string;
   }>>([]);
+  const [editingNote, setEditingNote] = useState<{ title: string; blocks?: any[] } | null>(null);
 
   // Settings modal
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -276,7 +276,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     drawio: { llmModel: 'deepseek-v3.2', diagramType: 'auto', diagramStyle: 'default', language: 'zh' },
     flashcard: { llmModel: 'deepseek-v3.2', language: 'zh', cardCount: '20' },
     quiz: { llmModel: 'deepseek-v3.2', language: 'zh', questionCount: '10' },
-    podcast: { llmModel: 'deepseek-v3.2', ttsType: 'qwen-tts-local', ttsModel: 'qwen-tts', voiceName: 'vivian', podcastMode: 'monologue', podcastLanguage: 'zh' },
+    podcast: { llmModel: 'deepseek-v3.2', ttsType: 'gemini-tts-online', ttsModel: 'gemini-2.5-pro-preview-tts', voiceName: 'Puck', voiceNameB: 'Charon', podcastMode: 'monologue', podcastLanguage: 'zh' },
     video: { llmModel: 'deepseek-v3.2' },
     note: {},
   };
@@ -305,13 +305,8 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     });
   };
 
-  // 是否已配置 API（用于鲁棒提醒）
-  const apiConfigured = (() => {
-    const settings = getApiSettings(effectiveUser?.id || null);
-    const url = settings?.apiUrl?.trim();
-    const key = settings?.apiKey?.trim();
-    return !!(url && key);
-  })();
+  // 是否已配置 API（后端统一管理，前端始终视为已配置）
+  const apiConfigured = true;
 
   const getOutputStorageKey = () => {
     const uid = effectiveUser?.id || effectiveUser?.email || '';
@@ -383,12 +378,13 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     return 'ppt';
   };
 
-  const getOutputTitle = (type: 'ppt' | 'mindmap' | 'podcast' | 'drawio' | 'flashcard' | 'quiz') => {
+  const getOutputTitle = (type: 'ppt' | 'mindmap' | 'podcast' | 'drawio' | 'flashcard' | 'quiz' | 'note') => {
     if (type === 'mindmap') return '思维导图';
     if (type === 'podcast') return '播客生成';
     if (type === 'drawio') return 'DrawIO 图表';
     if (type === 'flashcard') return '闪卡';
     if (type === 'quiz') return '测验';
+    if (type === 'note') return '笔记';
     return 'PPT 生成';
   };
 
@@ -463,11 +459,11 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
           console.log('[fetchOutputHistory] Processing', data.files.length, 'files');
           for (const item of data.files) {
             const url = item.download_url || item.url || '';
-            const type = (item.output_type as 'ppt' | 'mindmap' | 'podcast' | 'drawio' | 'flashcard' | 'quiz') || inferOutputType(item.file_name || url);
+            const type = (item.output_type as 'ppt' | 'mindmap' | 'podcast' | 'drawio' | 'flashcard' | 'quiz' | 'note') || inferOutputType(item.file_name || url);
             const output = {
               id: item.id || url || `output_${Date.now()}`,
               type,
-              title: getOutputTitle(type),
+              title: type === 'note' ? (item.title || item.file_name || getOutputTitle(type)) : getOutputTitle(type),
               sources: '历史产出',
               url,
               createdAt: item.created_at ? new Date(item.created_at).toLocaleString() : new Date().toLocaleString(),
@@ -556,8 +552,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       filtered.forEach((item: any) => {
         if (item?.original_path) {
           const key = getOutputsPath(item.original_path);
-          // 出现在向量列表里即视为已入库（后端 manifest 可能无 status 字段）
-          statusMap[key] = item.status || 'embedded';
+          statusMap[key] = item.status || 'not_embedded';
         }
       });
       setVectorStatusByPath(statusMap);
@@ -604,6 +599,39 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     return originalPath;
   };
 
+  const getFileVectorStatus = (file: KnowledgeFile) => {
+    if (file.vectorStatus) return file.vectorStatus;
+    const pathStatus = vectorStatusByPath[getOutputsPath(file.url)];
+    return pathStatus || 'not_embedded';
+  };
+
+  const getVectorStatusMeta = (status: string) => {
+    switch (status) {
+      case 'embedded':
+        return {
+          label: 'Indexed',
+          className: 'bg-green-50 text-green-600',
+        };
+      case 'failed':
+        return {
+          label: 'Index failed',
+          className: 'bg-red-50 text-red-600',
+        };
+      case 'pending':
+      case 'processing':
+      case 'embedding':
+        return {
+          label: 'Indexing',
+          className: 'bg-amber-50 text-amber-700',
+        };
+      default:
+        return {
+          label: 'Not indexed',
+          className: 'bg-slate-100 text-slate-500',
+        };
+    }
+  };
+
   const markEmbedded = async (file?: KnowledgeFile, storagePath?: string) => {
     const storageKey = `kb_files_${effectiveUser?.id || 'dev'}`;
     const stored = localStorage.getItem(storageKey);
@@ -625,18 +653,6 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     if (!key) return;
     setVectorActionLoading(prev => ({ ...prev, [key]: true }));
     try {
-      const settings = getApiSettings(effectiveUser?.id || null);
-      let apiUrl = settings?.apiUrl?.trim() || '';
-      const apiKey = settings?.apiKey?.trim() || '';
-      if (!apiUrl || !apiKey) {
-        const msg = '请先在设置中配置 API URL 和 API Key';
-        setVectorError(msg);
-        showToast(msg, 'warning');
-        return;
-      }
-      if (!apiUrl.includes('/embeddings')) {
-        apiUrl = `${apiUrl.replace(/\/$/, '')}/embeddings`;
-      }
       const filePath = getOutputsPath(item.original_path);
       if (!filePath) {
         setVectorError('无法获取文件路径');
@@ -644,8 +660,6 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       }
       const body: Record<string, unknown> = {
         files: [{ path: filePath, description: '' }],
-        api_url: apiUrl,
-        api_key: apiKey,
         model_name: retrievalModel
       };
       if (effectiveUser?.email || effectiveUser?.id) body.email = effectiveUser.email || effectiveUser.id;
@@ -930,9 +944,13 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                 type: mapFileType(row.file_type || row.name?.split('.').pop() || ''),
                 size: formatSize(row.file_size || 0),
                 uploadTime: '',
-                isEmbedded: false,
+                isEmbedded: !!row.vector_ready,
                 desc: '',
                 url: row.url || row.static_url,
+                kbFileId: row.kb_file_id || undefined,
+                vectorStatus: row.vector_status || 'not_embedded',
+                vectorReady: !!row.vector_ready,
+                vectorError: row.vector_error || null,
               }));
             },
             { useStaleOnError: true }
@@ -1130,13 +1148,10 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   const runFastResearch = async () => {
     if (!fastResearchQuery.trim()) return;
     const settings = getApiSettings(effectiveUser?.id || null);
-    const searchProvider = (settings?.searchProvider as 'serper' | 'serpapi' | 'bocha') || 'serper';
+    const searchProvider = (settings?.searchProvider as 'serper' | 'serpapi' | 'bocha') || 'bocha';
     const searchEngine = (settings?.searchEngine as 'google' | 'baidu') || 'google';
     const searchApiKey = settings?.searchApiKey?.trim() ?? '';
-    if ((searchProvider === 'serpapi' || searchProvider === 'bocha') && !searchApiKey) {
-      setFastResearchError('请先在右上角「设置」中配置搜索 API Key');
-      return;
-    }
+    const shouldUseBackendSearchDefault = searchProvider === 'serper' && !searchApiKey;
     setFastResearchLoading(true);
     setFastResearchError('');
     setFastResearchSources([]);
@@ -1145,10 +1160,10 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       const body: Record<string, unknown> = {
         query: fastResearchQuery.trim(),
         top_k: 10,
-        search_provider: searchProvider,
-        search_engine: searchEngine,
       };
-      body.search_api_key = searchApiKey;
+      if (!shouldUseBackendSearchDefault) body.search_provider = searchProvider;
+      if (!shouldUseBackendSearchDefault && searchProvider === 'serpapi') body.search_engine = searchEngine;
+      if (searchApiKey) body.search_api_key = searchApiKey;
       const res = await apiFetch('/api/v1/kb/fast-research', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -1323,17 +1338,10 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     const settings = getApiSettings(effectiveUser?.id || null);
     const apiUrl = settings?.apiUrl?.trim() || '';
     const apiKey = settings?.apiKey?.trim() || '';
-    const searchProvider = (settings?.searchProvider as 'serper' | 'serpapi' | 'bocha') || 'serper';
+    const searchProvider = (settings?.searchProvider as 'serper' | 'serpapi' | 'bocha') || 'bocha';
     const searchEngine = (settings?.searchEngine as 'google' | 'baidu') || 'google';
     const searchApiKey = settings?.searchApiKey?.trim() ?? '';
-    if (!apiUrl || !apiKey) {
-      setDeepResearchError('请先在设置中配置 API');
-      return;
-    }
-    if (!searchApiKey) {
-      setDeepResearchError('请先在设置中配置搜索 API Key');
-      return;
-    }
+    const shouldUseBackendSearchDefault = searchProvider === 'serper' && !searchApiKey;
     if (!notebook?.id || !effectiveUser?.email) {
       setDeepResearchError('请先选择笔记本');
       return;
@@ -1350,14 +1358,14 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
           email: effectiveUser.email || effectiveUser.id,
           notebook_id: notebook.id,
           notebook_title: notebook?.title || notebook?.name || '',
-          api_url: apiUrl,
-          api_key: apiKey,
           language: 'zh',
           add_as_source: true,
-          search_provider: searchProvider,
-          search_api_key: searchApiKey,
-          search_engine: searchEngine,
-          search_top_k: 10
+          search_top_k: 10,
+          ...(apiUrl ? { api_url: apiUrl } : {}),
+          ...(apiKey ? { api_key: apiKey } : {}),
+          ...(!shouldUseBackendSearchDefault ? { search_provider: searchProvider } : {}),
+          ...(!shouldUseBackendSearchDefault && searchProvider === 'serpapi' ? { search_engine: searchEngine } : {}),
+          ...(searchApiKey ? { search_api_key: searchApiKey } : {}),
         })
       });
       if (!res.ok) {
@@ -1548,8 +1556,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       }));
 
       const settings = getApiSettings(effectiveUser?.id || null);
-      const assistantMessageId = (Date.now() + 1).toString();
-      const assistantTime = new Date().toLocaleTimeString();
+      const assistantMessageId = (Date.now() + 1).toString();      const assistantTime = new Date().toLocaleTimeString();
       let streamedContent = '';
       let streamedDetails: ChatMessage['details'] | undefined;
       let streamedSourceMapping: ChatMessage['sourceMapping'] | undefined;
@@ -1589,8 +1596,6 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
           history: history,
           email: effectiveUser?.email || effectiveUser?.id || undefined,
           notebook_id: notebook?.id || undefined,
-          api_url: settings?.apiUrl?.trim() || undefined,
-          api_key: settings?.apiKey?.trim() || undefined
         })
       });
 
@@ -1710,23 +1715,12 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       const selectedFileUrls = selectedFiles.map(f => f.url).filter(Boolean) as string[];
       const selectedNames = selectedFiles.map(f => f.name).filter(Boolean);
 
-      const settings = getApiSettings(user?.id || null);
-      const apiUrl = settings?.apiUrl?.trim() || '';
-      const apiKey = settings?.apiKey?.trim() || '';
-      if (!apiUrl || !apiKey) {
-        showToast('请先在设置中配置 API URL 和 API Key', 'warning');
-        setToolLoading(false);
-        return;
-      }
-
       let endpoint = '';
       const baseBody: any = {
         user_id: effectiveUser?.id || 'default',
         email: effectiveUser?.email || effectiveUser?.id || 'default',
         notebook_id: notebook?.id || undefined,
         notebook_title: notebook?.title || notebook?.name || '',
-        api_url: apiUrl,
-        api_key: apiKey
       };
 
       switch (tool) {
@@ -1805,13 +1799,18 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
         };
       } else if (tool === 'podcast') {
         const cfg = getStudioConfig('podcast');
+        const requestedTtsModel = (cfg.ttsModel || '').trim();
+        const isLocalQwen = (cfg.ttsType || 'gemini-tts-online') === 'qwen-tts-local';
+        const resolvedTtsModel = isLocalQwen
+          ? 'qwen-tts'
+          : (requestedTtsModel || 'gemini-2.5-pro-preview-tts');
         bodyData = {
           ...baseBody,
           file_paths: selectedFileUrls,
           model: cfg.llmModel || 'deepseek-v3.2',
-          tts_model: cfg.ttsModel || 'qwen-tts',
-          voice_name: cfg.voiceName || 'vivian',
-          voice_name_b: cfg.voiceNameB || 'uncle_fu',
+          tts_model: resolvedTtsModel,
+          voice_name: cfg.voiceName || (isLocalQwen ? 'vivian' : 'Puck'),
+          voice_name_b: cfg.voiceNameB || (isLocalQwen ? 'uncle_fu' : 'Charon'),
           podcast_mode: cfg.podcastMode || 'monologue',
           language: cfg.podcastLanguage || 'zh'
         };
@@ -1866,7 +1865,16 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
         body: JSON.stringify(bodyData)
       });
 
-      if (!res.ok) throw new Error('Generation failed');
+      if (!res.ok) {
+        let msg = 'Generation failed';
+        try {
+          const errData = await res.json();
+          msg = errData?.detail || errData?.message || msg;
+        } catch {
+          msg = await res.text() || msg;
+        }
+        throw new Error(msg);
+      }
 
       const data = await res.json();
       setToolOutput(data);
@@ -1968,7 +1976,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
 
     } catch (err) {
       console.error('Tool generation error:', err);
-      showToast('生成失败，请重试', 'error');
+      showToast((err as Error)?.message || '生成失败，请重试', 'error');
     } finally {
       setToolLoading(false);
     }
@@ -2511,11 +2519,18 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                             {file.name}
                           </div>
                           <div className="mt-1 flex items-center gap-2">
-                            {(file.isEmbedded || file.kbFileId || vectorStatusByPath[getOutputsPath(file.url)] === 'embedded' || vectorFiles.some((v: any) => getOutputsPath(v?.original_path) === getOutputsPath(file.url))) && (
-                              <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-50 text-green-600">
-                                已入库
-                              </span>
-                            )}
+                            {(() => {
+                              const vectorStatus = getFileVectorStatus(file);
+                              const meta = getVectorStatusMeta(vectorStatus);
+                              return (
+                                <span
+                                  className={`text-[10px] px-2 py-0.5 rounded-full ${meta.className}`}
+                                  title={file.vectorError || undefined}
+                                >
+                                  {meta.label}
+                                </span>
+                              );
+                            })()}
                           </div>
                         </div>
                         <input
@@ -2634,7 +2649,11 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
               initialTitle={editingNote?.title}
               initialBlocks={editingNote?.blocks}
               onSaved={(noteInfo) => {
-                setTimeout(() => fetchFiles(), 1000);
+                setTimeout(() => {
+                  fetchFiles();
+                  refreshVectorList();
+                  refreshOutputHistory();
+                }, 300);
                 const newNote = {
                   id: `note-${Date.now()}`,
                   type: 'note' as const,
@@ -2955,7 +2974,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                 })()}
                 {studioSettingsTool === 'podcast' && (() => {
                   const c = getStudioConfig('podcast');
-                  const ttsType = c.ttsType || 'qwen-tts-local';
+                  const ttsType = c.ttsType || 'gemini-tts-online';
                   const isQwen = ttsType === 'qwen-tts-local';
                   const isGemini = ttsType === 'gemini-tts-online';
                   const podcastMode = c.podcastMode || 'monologue';
@@ -3019,7 +3038,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                               updates.podcastMode = 'monologue';
                               updates.voiceName = 'vivian';
                             } else {
-                              updates.ttsModel = 'gemini-2.5-flash-tts';
+                              updates.ttsModel = 'gemini-2.5-pro-preview-tts';
                               updates.voiceName = 'Puck';
                               updates.voiceNameB = 'Charon';
                             }
@@ -3478,25 +3497,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
             </div>
 
             <div className="flex-1 overflow-y-auto p-6 space-y-5">
-              {/* 搜索与 API 统一在「设置」中配置，此处仅展示当前来源并跳转 */}
-              {(() => {
-                const s = getApiSettings(effectiveUser?.id || null);
-                const prov = (s?.searchProvider as string) || 'serper';
-                const eng = (s?.searchEngine as string) || 'google';
-                const label = prov === 'serper' ? 'Serper (Google)' : prov === 'bocha' ? '博查' : `SerpAPI (${eng === 'baidu' ? '百度' : 'Google'})`;
-                return (
-                  <div className="flex items-center justify-between gap-2 py-1.5 px-3 rounded-lg bg-gray-50 border border-gray-100">
-                    <span className="text-xs text-gray-600">当前搜索来源：{label}</span>
-                    <button
-                      type="button"
-                      onClick={() => { setShowIntroduceModal(false); setShowSettingsModal(true); }}
-                      className="text-xs font-medium text-blue-600 hover:text-blue-800"
-                    >
-                      去设置
-                    </button>
-                  </div>
-                );
-              })()}
+              {/* 搜索由后端统一配置（env），前端无需设置 */}
 
               {/* 两个选项：Search 引入 | Deep Research */}
               <div className="flex gap-2 p-1 bg-gray-100 rounded-xl">

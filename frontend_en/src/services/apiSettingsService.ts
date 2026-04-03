@@ -1,5 +1,6 @@
 /**
- * API Settings Service - Manage user's LLM + Search API configuration
+ * API Settings Service - kept for per-user frontend defaults/backward compatibility.
+ * Server-side env vars remain the primary source of truth.
  */
 
 import { DEFAULT_LLM_API_URL } from '../config/api';
@@ -17,32 +18,40 @@ export interface ApiSettings {
 
 const STORAGE_KEY_PREFIX = 'kb_api_settings_';
 
-/**
- * Get API settings for a user (or global if userId is null)
- */
-export function getApiSettings(userId: string | null): ApiSettings | null {
+function normalizeApiSettings(settings: Partial<ApiSettings>): ApiSettings {
+  const searchApiKey = settings.searchApiKey || '';
+  let searchProvider = settings.searchProvider;
+
+  if (!searchProvider) {
+    searchProvider = 'bocha';
+  }
+  if (searchProvider === 'serper' && !searchApiKey.trim()) {
+    searchProvider = 'bocha';
+  }
+
+  return {
+    apiUrl: settings.apiUrl || DEFAULT_LLM_API_URL,
+    apiKey: settings.apiKey || '',
+    searchProvider,
+    searchApiKey,
+    searchEngine: settings.searchEngine || 'google',
+  };
+}
+
+export function getApiSettings(userId: string | null): ApiSettings {
   try {
     const key = userId ? `${STORAGE_KEY_PREFIX}${userId}` : `${STORAGE_KEY_PREFIX}global`;
     const stored = localStorage.getItem(key);
     if (stored) {
-      return JSON.parse(stored);
+      return normalizeApiSettings(JSON.parse(stored));
     }
   } catch (err) {
     console.error('Failed to load API settings:', err);
   }
-  
-  return {
-    apiUrl: DEFAULT_LLM_API_URL,
-    apiKey: '',
-    searchProvider: 'serper',
-    searchApiKey: '',
-    searchEngine: 'google',
-  };
+
+  return normalizeApiSettings({});
 }
 
-/**
- * Save API settings for a user
- */
 export function saveApiSettings(userId: string | null, settings: ApiSettings): void {
   try {
     const key = userId ? `${STORAGE_KEY_PREFIX}${userId}` : `${STORAGE_KEY_PREFIX}global`;

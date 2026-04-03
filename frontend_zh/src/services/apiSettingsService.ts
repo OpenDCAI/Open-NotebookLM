@@ -17,6 +17,26 @@ export interface ApiSettings {
 
 const STORAGE_KEY_PREFIX = 'kb_api_settings_';
 
+function normalizeApiSettings(settings: Partial<ApiSettings>): ApiSettings {
+  const searchApiKey = settings.searchApiKey || '';
+  let searchProvider = settings.searchProvider;
+
+  if (!searchProvider) {
+    searchProvider = 'bocha';
+  }
+  if (searchProvider === 'serper' && !searchApiKey.trim()) {
+    searchProvider = 'bocha';
+  }
+
+  return {
+    apiUrl: settings.apiUrl || DEFAULT_LLM_API_URL,
+    apiKey: settings.apiKey || '',
+    searchProvider,
+    searchApiKey,
+    searchEngine: settings.searchEngine || 'google',
+  };
+}
+
 /**
  * Get API settings for a user (or global if userId is null)
  */
@@ -25,19 +45,13 @@ export function getApiSettings(userId: string | null): ApiSettings | null {
     const key = userId ? `${STORAGE_KEY_PREFIX}${userId}` : `${STORAGE_KEY_PREFIX}global`;
     const stored = localStorage.getItem(key);
     if (stored) {
-      return JSON.parse(stored);
+      return normalizeApiSettings(JSON.parse(stored));
     }
   } catch (err) {
     console.error('Failed to load API settings:', err);
   }
   
-  return {
-    apiUrl: DEFAULT_LLM_API_URL,
-    apiKey: '',
-    searchProvider: 'serper',
-    searchApiKey: '',
-    searchEngine: 'google',
-  };
+  return normalizeApiSettings({});
 }
 
 /**

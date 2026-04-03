@@ -468,20 +468,24 @@ def paddle_ocr(bgr: np.ndarray, drop_score: int = DROP_SCORE):
     """
     h, w = bgr.shape[:2]
 
-    # ocr_result: List[List[ [box, (text, score)], ... ]]
-    ocr_result = PADDLE_OCR.ocr(bgr, cls=True)
+    # PaddleOCR 2.x 支持 cls=True；3.x 已移除该参数，且返回结构改为 dict 列表。
+    try:
+        ocr_result = PADDLE_OCR.ocr(bgr, cls=True)
+    except TypeError as e:
+        if "unexpected keyword argument 'cls'" not in str(e):
+            raise
+        ocr_result = PADDLE_OCR.ocr(bgr)
     lines = []
 
     if not ocr_result:
         return lines
 
-    # 通常一页对应 ocr_result[0]
-    for line in ocr_result[0]:
-        box, (text, score) = line
+    def _append_line(box, text, score) -> None:
         if not text:
-            continue
-        if score * 100.0 < drop_score:
-            continue
+            return
+        score_100 = float(score * 100.0 if float(score) <= 1.0 else float(score))
+        if score_100 < drop_score:
+            return
 
         # box 是四点多边形：[ [x1,y1], [x2,y2], [x3,y3], [x4,y4] ]
         xs = [p[0] for p in box]
@@ -494,11 +498,28 @@ def paddle_ocr(bgr: np.ndarray, drop_score: int = DROP_SCORE):
         y1 = max(0, min(h - 1, y1))
         y2 = max(0, min(h, y2))
         if x2 <= x1 or y2 <= y1:
-            continue
+            return
 
         bbox = [float(x1), float(y1), float(x2), float(y2)]
-        # 保持 0-100 置信度范围，和原 Tesseract 逻辑兼容
-        lines.append((bbox, text.strip(), float(score * 100.0)))
+        lines.append((bbox, str(text).strip(), score_100))
+
+    first_item = ocr_result[0] if isinstance(ocr_result, list) and ocr_result else ocr_result
+
+    # PaddleOCR 3.x: [{'dt_polys': ..., 'rec_texts': ..., 'rec_scores': ...}, ...]
+    if isinstance(first_item, dict):
+        page_results = ocr_result if isinstance(ocr_result, list) else [ocr_result]
+        for page in page_results:
+            boxes = page.get("dt_polys") or []
+            texts = page.get("rec_texts") or []
+            scores = page.get("rec_scores") or []
+            for box, text, score in zip(boxes, texts, scores):
+                _append_line(box, text, score)
+        return lines
+
+    # PaddleOCR 2.x: [[ [box, (text, score)], ... ]]
+    for line in ocr_result[0]:
+        box, (text, score) = line
+        _append_line(box, text, score)
 
     return lines
 
@@ -1160,6 +1181,46 @@ def images_to_pdf_and_ppt(
         )
 
     return result
+
+
+def images_to_pptx_full_bleed(
+    image_paths: Sequence[str],
+    output_pptx_path: str,
+) -> str:
+    """
+    将页面图片直接铺满写入 PPTX。
+
+    这是一个保底导出路径：不依赖 OCR 重建文本版式，但能稳定产出可打开的 PPTX。
+    """
+    prs = Presentation()
+    prs.slide_width = Inches(SLIDE_W_IN)
+    prs.slide_height = Inches(SLIDE_H_IN)
+    blank_layout = prs.slide_layouts[6] if len(prs.slide_layouts) > 6 else prs.slide_layouts[-1]
+
+    for img_path in image_paths:
+        slide = prs.slides.add_slide(blank_layout)
+        slide.shapes.add_picture(
+            str(img_path),
+            0,
+            0,
+            width=prs.slide_width,
+            height=prs.slide_height,
+        )
+
+    prs.save(output_pptx_path)
+    return output_pptx_path
+
+
+def convert_images_dir_to_pptx_full_bleed(
+    input_dir: str,
+    output_pptx_path: str,
+) -> str:
+    image_paths = list_images_in_dir(input_dir)
+    version_pattern = re.compile(r"_v\\d+(?=\\.[^.]+$)", re.IGNORECASE)
+    image_paths = [p for p in image_paths if not version_pattern.search(os.path.basename(p))]
+    if not image_paths:
+        raise ValueError(f"No images found in {input_dir!r}")
+    return images_to_pptx_full_bleed(image_paths, output_pptx_path)
 
 
 def convert_images_dir_to_pdf_and_ppt(

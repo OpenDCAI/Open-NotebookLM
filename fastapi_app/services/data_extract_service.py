@@ -15,7 +15,7 @@ from fastapi_app.notebook_paths import get_notebook_paths
 from fastapi_app.config import settings as app_settings
 from fastapi_app.source_manager import SourceManager
 from fastapi_app.utils import _from_outputs_url, _to_outputs_url
-from fastapi_app.workflow_adapters.wa_data_extract import SQLBotAdapter
+from fastapi_app.services.wa_data_extract import SQLBotAdapter
 from workflow_engine.utils import get_project_root
 
 

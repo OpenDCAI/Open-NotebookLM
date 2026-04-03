@@ -4,7 +4,6 @@ import pickle
 import shutil
 import subprocess
 import uuid
-import httpx
 import numpy as np
 import faiss
 import asyncio
@@ -20,6 +19,7 @@ from workflow_engine.toolkits.multimodaltool.req_videos import call_video_unders
 from workflow_engine.toolkits.multimodaltool.req_understanding import call_image_understanding_async
 import workflow_engine.utils as utils
 from workflow_engine.logger import get_logger
+from fastapi_app.services.embedding_service import EmbeddingService
 
 log = get_logger(__name__)
 
@@ -64,43 +64,19 @@ class VectorStoreManager:
         video_model: str = "gemini-2.5-flash",
         mineru_output_base: Optional[str] = None,
     ):
-        """
-        Manage Vector Store (Faiss) and File Manifest.
-        
-        Args:
-            base_dir: Root directory for storing processed files and index.
-            project_name: Name of the project.
-            embedding_api_url: URL for embedding API.
-            embedding_model: Model name for embedding.
-            api_key: API Key for embedding service.
-            multimodal_model: Legacy parameter for multimodal understanding.
-            image_model: Model name for image understanding.
-            video_model: Model name for video understanding.
-            mineru_output_base: If set, MinerU full output (md, images, model.json, content_list.json, etc.)
-                is written to {mineru_output_base}/{file_id}/ so each source has a dedicated folder under outputs.
-        """
         self.base_dir = Path(base_dir)
         self.mineru_output_base = Path(mineru_output_base) if mineru_output_base else None
         self.project_name = project_name
-        self.embedding_api_url = embedding_api_url if embedding_api_url is not None else _default_embedding_api_url()
-        self.embedding_model = embedding_model if embedding_model is not None else _default_embedding_model()
+        self.embedding_service = EmbeddingService()
         self.api_key = api_key or os.getenv("DF_API_KEY")
-        
-        # Multimodal config
         self.multimodal_model = multimodal_model
         self.image_model = image_model
         self.video_model = video_model
-        
-        # Fallback to multimodal_model if specific models not provided or default
         if self.image_model == "gemini-2.5-flash" and self.multimodal_model != "gemini-2.5-flash":
              self.image_model = self.multimodal_model
         if self.video_model == "gemini-2.5-flash" and self.multimodal_model != "gemini-2.5-flash":
              self.video_model = self.multimodal_model
-        # Assume chat endpoint is at same host, replace /embeddings with nothing (base url)
-        if "/embeddings" in self.embedding_api_url:
-            self.multimodal_api_url = self.embedding_api_url.replace("/embeddings", "")
-        else:
-            self.multimodal_api_url = self.embedding_api_url
+        self.multimodal_api_url = os.getenv("DEFAULT_LLM_API_URL", "http://123.129.219.111:3000/v1/")
         
         # Directories
         self.processed_dir = self.base_dir / "processed"
@@ -263,44 +239,16 @@ class VectorStoreManager:
         return results
 
     def _call_embedding_api(self, texts: List[str]) -> np.ndarray:
-        """Call Embedding API (OpenAI compatible)."""
+        """调用 Embedding API"""
         if not texts:
             return np.array([])
-            
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-        }
-        
-        vecs = []
-        # Batch processing to avoid payload limits
-        batch_size = 10 
-        
-        with httpx.Client(timeout=60.0) as client:
-            for i in range(0, len(texts), batch_size):
-                batch = texts[i:i+batch_size]
-                # Replace newlines which can negatively affect performance
-                batch = [t.replace("\n", " ") for t in batch]
-                
-                try:
-                    resp = client.post(
-                        self.embedding_api_url,
-                        headers=headers,
-                        json={"model": self.embedding_model, "input": batch},
-                    )
-                    resp.raise_for_status()
-                    data = resp.json()
-                    data_items = data.get("data") or []
-                    if len(data_items) != len(batch):
-                        raise RuntimeError(
-                            f"Embedding API returned {len(data_items)} vectors for {len(batch)} inputs"
-                        )
-                    # Ensure order is preserved
-                    batch_vecs = [item["embedding"] for item in data_items]
-                    vecs.extend(batch_vecs)
-                except Exception as e:
-                    log.error(f"Embedding API error: {e}")
-                    raise RuntimeError(f"Failed to embed texts: {e}")
+        texts = [t.replace("\n", " ") for t in texts]
+        try:
+            embeddings = self.embedding_service.embed_sync(texts)
+            return np.array(embeddings, dtype=np.float32)
+        except Exception as e:
+            log.error(f"Embedding error: {e}")
+            raise RuntimeError(f"Failed to embed: {e}")
 
         arr = np.asarray(vecs, dtype=np.float32)
         if arr.ndim != 2:

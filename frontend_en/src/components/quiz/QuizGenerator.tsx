@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Brain, Loader2, AlertCircle } from 'lucide-react';
 import { apiFetch } from '../../config/api';
-import { getApiSettings } from '../../services/apiSettingsService';
 
 interface QuizGeneratorProps {
   selectedFiles: string[];
@@ -28,12 +27,6 @@ export const QuizGenerator: React.FC<QuizGeneratorProps> = ({
       return;
     }
 
-    const settings = getApiSettings(userId);
-    if (!settings?.apiUrl || !settings?.apiKey) {
-      setError('Please configure API URL and API Key in Settings first');
-      return;
-    }
-
     setLoading(true);
     setError(null);
 
@@ -48,8 +41,6 @@ export const QuizGenerator: React.FC<QuizGeneratorProps> = ({
           notebook_id: notebookId,
           email: email,
           user_id: userId,
-          api_url: settings.apiUrl,
-          api_key: settings.apiKey,
           model: 'deepseek-v3.2',
           question_count: questionCount,
           language: 'en',

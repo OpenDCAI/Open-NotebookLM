@@ -13,6 +13,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
   const { user } = useAuthStore();
   const userIdForSettings = user?.id ?? 'default';
   const [apiUrl, setApiUrl] = useState(DEFAULT_LLM_API_URL);
+  const [customApiUrl, setCustomApiUrl] = useState('');
+  const [isCustomUrl, setIsCustomUrl] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [searchProvider, setSearchProvider] = useState<SearchProvider>('serper');
   const [searchApiKey, setSearchApiKey] = useState('');
@@ -24,13 +26,19 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
     if (open) {
       const settings = getApiSettings(userIdForSettings);
       if (settings) {
-        setApiUrl(settings.apiUrl || DEFAULT_LLM_API_URL);
+        const savedUrl = settings.apiUrl || DEFAULT_LLM_API_URL;
+        const isSavedUrlCustom = !API_URL_OPTIONS.includes(savedUrl);
+        setApiUrl(isSavedUrlCustom ? API_URL_OPTIONS[0] : savedUrl);
+        setCustomApiUrl(isSavedUrlCustom ? savedUrl : '');
+        setIsCustomUrl(isSavedUrlCustom);
         setApiKey(settings.apiKey || '');
         setSearchProvider((settings.searchProvider as SearchProvider) || 'serper');
         setSearchApiKey(settings.searchApiKey || '');
         setSearchEngine((settings.searchEngine as SearchEngine) || 'google');
       } else {
         setApiUrl(DEFAULT_LLM_API_URL);
+        setCustomApiUrl('');
+        setIsCustomUrl(false);
         setApiKey('');
         setSearchProvider('serper');
         setSearchApiKey('');
@@ -42,8 +50,10 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
   const handleSave = () => {
     setSaving(true);
     setSaved(false);
+    // 如果是自定义 URL，使用自定义输入的值
+    const finalApiUrl = isCustomUrl ? customApiUrl.trim() : apiUrl;
     saveApiSettings(userIdForSettings, {
-      apiUrl: apiUrl.trim(),
+      apiUrl: finalApiUrl,
       apiKey: apiKey.trim(),
       searchProvider,
       searchApiKey: searchApiKey.trim(),
@@ -54,6 +64,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
       setSaving(false);
       setSaved(false);
     }, 1500);
+  };
+
+  const handleApiUrlChange = (value: string) => {
+    if (value === '__CUSTOM__') {
+      setIsCustomUrl(true);
+    } else {
+      setIsCustomUrl(false);
+      setApiUrl(value);
+    }
   };
 
   if (!open) return null;
@@ -86,15 +105,27 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ open, onClose }) =
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1.5">API URL</label>
-            <select
-              value={apiUrl}
-              onChange={(e) => setApiUrl(e.target.value)}
-              className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
-            >
-              {[apiUrl, ...API_URL_OPTIONS].filter((v, i, a) => a.indexOf(v) === i).map((url: string) => (
-                <option key={url} value={url}>{url}</option>
-              ))}
-            </select>
+            <div className="space-y-2">
+              <select
+                value={isCustomUrl ? '__CUSTOM__' : apiUrl}
+                onChange={(e) => handleApiUrlChange(e.target.value)}
+                className="w-full px-4 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+              >
+                {API_URL_OPTIONS.map((url: string) => (
+                  <option key={url} value={url}>{url}</option>
+                ))}
+                <option value="__CUSTOM__">自定义 URL...</option>
+              </select>
+              {isCustomUrl && (
+                <input
+                  type="text"
+                  value={customApiUrl}
+                  onChange={(e) => setCustomApiUrl(e.target.value)}
+                  placeholder="https://your-api-endpoint.com/v1"
+                  className="w-full px-4 py-2.5 bg-white border border-blue-300 rounded-xl text-gray-800 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent transition-all"
+                />
+              )}
+            </div>
             <p className="mt-1 text-xs text-gray-400">OpenAI 兼容接口地址，如 api.openai.com/v1 或自建服务</p>
           </div>
 

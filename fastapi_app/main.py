@@ -40,7 +40,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
-from fastapi_app.routers import auth, data_extract, files, kb, kb_embedding, paper2drawio, paper2ppt
+from fastapi_app.routers import auth, data_extract, files, kb, kb_embedding, paper2drawio, paper2ppt, table_processing
 from fastapi_app.middleware.api_key import APIKeyMiddleware
 from fastapi_app.middleware.logging import LoggingMiddleware
 from workflow_engine.utils import get_project_root
@@ -473,6 +473,7 @@ def create_app() -> FastAPI:
     app.include_router(kb_embedding.router, prefix="/api/v1", tags=["Knowledge Base Embedding"])
     app.include_router(files.router, prefix="/api/v1", tags=["Files"])
     app.include_router(data_extract.router, prefix="/api/v1", tags=["Data Extract"])
+    app.include_router(table_processing.router, prefix="/api/v1", tags=["Table Processing"])
     app.include_router(paper2drawio.router, prefix="/api/v1", tags=["Paper2Drawio"])
     app.include_router(paper2ppt.router, prefix="/api/v1", tags=["Paper2PPT"])
     app.include_router(auth.router, prefix="/api/v1", tags=["Auth"])

@@ -249,8 +249,10 @@ class BaseAgent(ABC):
 
             # 创建执行策略
             from workflow_engine.agentroles.cores.strategies import StrategyFactory
+            # 获取 mode：可能是枚举.value 或字符串
+            mode_value = execution_config.mode.value if hasattr(execution_config.mode, 'value') else execution_config.mode
             self._execution_strategy = StrategyFactory.create(
-                execution_config.mode.value,
+                mode_value,
                 self,
                 execution_config
             )
@@ -433,7 +435,8 @@ class BaseAgent(ABC):
         ptg = PromptsTemplateGenerator(state.request.language)
         
         # 渲染系统提示词
-        sys_prompt = ptg.render(self.system_prompt_template_name)
+        sys_params = self.get_task_prompt_params(pre_tool_results)
+        sys_prompt = ptg.render(self.system_prompt_template_name, **sys_params)
         
         # 添加解析器格式说明（VLM 模式可能不需要）
         format_instruction = self.parser.get_format_instruction()

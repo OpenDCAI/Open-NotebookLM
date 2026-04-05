@@ -57,6 +57,19 @@ type DataExtractMessage = {
   error?: string | null;
 };
 
+type TableProcessingMessage = {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  time: string;
+  sql?: string;
+  columns?: string[];
+  rows?: Record<string, any>[];
+  rowCount?: number;
+  exportUrl?: string;
+  error?: string | null;
+};
+
 type DataExtractArtifact = {
   id: string;
   session_id: string;
@@ -191,6 +204,18 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   ]);
   const [dataExtractLoading, setDataExtractLoading] = useState(false);
   const [dataExtractSyncing, setDataExtractSyncing] = useState(false);
+
+  // Table processing states
+  const [tableProcessingInput, setTableProcessingInput] = useState('');
+  const [tableProcessingMessages, setTableProcessingMessages] = useState<TableProcessingMessage[]>([
+    { id: 'table-processing-welcome', role: 'assistant', content: '选择 CSV 数据源后，输入自然语言指令进行智能处理。', time: new Date().toLocaleTimeString() }
+  ]);
+  const [tableProcessingResult, setTableProcessingResult] = useState<any>(null);
+  const [tableProcessingLoading, setTableProcessingLoading] = useState(false);
+  const [tableProcessingFormat, setTableProcessingFormat] = useState<'json' | 'csv' | 'markdown' | 'dict'>('csv');
+  const [tableProcessingSubView, setTableProcessingSubView] = useState<'current' | 'history'>('current');
+  const [tableProcessingSessions, setTableProcessingSessions] = useState<Array<{id:string; title:string; updated_at:string; instruction:string;}>>([]);
+
   const [chatLoadingStage, setChatLoadingStage] = useState('思考中...');
 
   // 对话历史：本地持久化
@@ -249,7 +274,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   // Output preview
   const [previewOutput, setPreviewOutput] = useState<{
     id: string;
-    type: 'ppt' | 'mindmap' | 'podcast' | 'drawio' | 'flashcard' | 'quiz';
+    type: 'ppt' | 'mindmap' | 'podcast' | 'drawio' | 'flashcard' | 'quiz' | 'note';
     title: string;
     sources: string;
     url?: string;
@@ -364,8 +389,10 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
 
   // Studio tools
   const dataExtractTool = { icon: <BarChart2 className="text-emerald-500" />, label: '智能取数', id: 'data_extract' as ToolType };
+  const tableProcessingTool = { icon: <Filter className="text-indigo-500" />, label: '智能处理', id: 'table_processing' as ToolType };
   const studioTools: Array<{icon: React.ReactNode, label: string, id: ToolType}> = [
     dataExtractTool,
+    tableProcessingTool,
     { icon: <ImageIcon className="text-orange-500" />, label: 'PPT生成', id: 'ppt' },
     { icon: <BrainCircuit className="text-purple-500" />, label: '思维导图', id: 'mindmap' },
     // DrawIO 图表功能暂时隐藏，后续修复
@@ -379,12 +406,13 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   ];
 
   // Studio：每个功能卡片各自配置，点卡片上的「…」翻转进该卡片的设置
-  type StudioToolId = 'data_extract' | 'ppt' | 'mindmap' | 'drawio' | 'flashcard' | 'quiz' | 'podcast' | 'video' | 'note';
+  type StudioToolId = 'data_extract' | 'table_processing' | 'ppt' | 'mindmap' | 'drawio' | 'flashcard' | 'quiz' | 'podcast' | 'video' | 'note';
   const [studioPanelView, setStudioPanelView] = useState<'tools' | 'settings'>('tools');
   const [studioSettingsTool, setStudioSettingsTool] = useState<StudioToolId | null>(null);
   const STORAGE_STUDIO_CONFIG = `kb_studio_config_${effectiveUser?.id || 'default'}`;
   const defaultByTool: Record<StudioToolId, Record<string, string>> = {
     data_extract: { resultFormat: 'json', executionStrategy: 'auto' },
+    table_processing: { resultFormat: 'csv', llmModel: 'gpt-4o' },
     ppt: { llmModel: 'deepseek-v3.2', genFigModel: 'gemini-2.5-flash-image', stylePreset: 'modern', stylePrompt: '', language: 'zh', page_count: '10' },
     mindmap: { llmModel: 'deepseek-v3.2', mindmapStyle: 'default' },
     drawio: { llmModel: 'deepseek-v3.2', diagramType: 'auto', diagramStyle: 'default', language: 'zh' },
@@ -1084,7 +1112,9 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     return candidate.includes('.csv') || candidate.includes('text/csv');
   };
 
-  const selectedCsvFiles = files.filter(f => selectedIds.has(f.id) && f.type === 'dataset' && isCsvDataExtractFile(f));
+  const selectedCsvFiles = files.filter(
+    f => selectedIds.has(f.id) && f.type === 'dataset' && isCsvDataExtractFile(f) && Boolean(f.url)
+  );
   const selectedCsvFileUrls = new Set(
     selectedCsvFiles
       .map(file => file.url)
@@ -1169,7 +1199,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   };
 
   const fetchDataExtractDatasources = async () => {
-    if (!notebook?.id) return;
+    if (!notebook?.id) return [];
     try {
       const params = new URLSearchParams({
         notebook_id: notebook.id,
@@ -1182,8 +1212,10 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       const data = await res.json();
       const list = Array.isArray(data?.datasources) ? data.datasources : [];
       setDataExtractDatasources(list);
+      return list;
     } catch (err) {
       console.error('Failed to fetch data extract datasources:', err);
+      return [];
     }
   };
 
@@ -1384,8 +1416,24 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       return;
     }
     if (!dataExtractSessionId && activeDataExtractDatasourceIds.length === 0) {
-      alert(selectedCsvFiles.length > 0 ? '请先同步选中的 CSV 数据源' : '请先同步并选择一个数据源');
-      return;
+      if (selectedCsvFiles.length > 0) {
+        showToast('正在同步选中的 CSV 数据源，请稍候...', 'success');
+        await handleSyncDataExtractSources();
+
+        const refreshedDatasources = await fetchDataExtractDatasources();
+        const selectedCsvFileUrlsSet = new Set(selectedCsvFiles.map(f => f.url).filter((url): url is string => Boolean(url)));
+        const refreshedActive = selectedCsvFileUrlsSet.size > 0
+          ? refreshedDatasources.filter((ds: DataExtractDatasource) => selectedCsvFileUrlsSet.has(ds.file_path))
+          : refreshedDatasources;
+
+        if (refreshedActive.length === 0) {
+          alert('同步成功后未检测到数据源，请稍后刷新或检查后再试。');
+          return;
+        }
+      } else {
+        alert('请先同步并选择一个数据源');
+        return;
+      }
     }
 
     const userMsg: DataExtractMessage = {
@@ -1447,6 +1495,124 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     } finally {
       setDataExtractLoading(false);
     }
+  };
+
+  const handleTableProcessing = async () => {
+    if (!notebook?.id) {
+      alert('请先创建或选择一个笔记本');
+      return;
+    }
+    if (!tableProcessingInput.trim()) {
+      alert('请先输入处理指令');
+      return;
+    }
+    if (selectedCsvFiles.length === 0) {
+      alert('请先选择至少一个 CSV 数据源');
+      return;
+    }
+
+    const userMessage: TableProcessingMessage = {
+      id: `table-processing-user-${Date.now()}`,
+      role: 'user',
+      content: tableProcessingInput,
+      time: new Date().toLocaleTimeString(),
+    };
+    setTableProcessingMessages(prev => [...prev, userMessage]);
+
+    setTableProcessingLoading(true);
+    setTableProcessingResult(null);
+
+    // 获取 API 配置
+    const settings = getApiSettings(effectiveUser?.id || null);
+    const apiUrl = settings?.apiUrl?.trim() || '';
+    const apiKey = settings?.apiKey?.trim() || '';
+
+    try {
+      const tableConfig = getStudioConfig('table_processing');
+      const res = await apiFetch('/api/v1/table-processing/process', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebook?.title || notebook?.name || '',
+          user_id: effectiveUser.id || 'default',
+          email: effectiveUser.email || effectiveUser.id || 'default',
+          datasources: selectedCsvFiles.map(f => ({ name: f.name, url: f.url! })),
+          instruction: tableProcessingInput,
+          output_format: tableProcessingFormat,
+          title: '智能表格处理',
+          api_key: apiKey || undefined,
+          api_url: apiUrl || undefined,
+          model: tableConfig.llmModel || 'gpt-4o',
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        throw new Error(text || 'Table processing failed');
+      }
+      const data = await res.json();
+      setTableProcessingResult(data);
+
+      // 成功时固定返回"处理成功！"，失败时显示错误信息
+      const assistantContent = data?.success === false
+        ? (data?.content || data?.error || '处理失败，请稍后重试')
+        : '处理成功！';
+
+      const assistantMessage: TableProcessingMessage = {
+        id: `table-processing-assistant-${Date.now()}`,
+        role: 'assistant',
+        content: assistantContent,
+        time: new Date().toLocaleTimeString(),
+        sql: typeof data?.sql === 'string' ? data.sql : undefined,
+        columns: Array.isArray(data?.columns) ? data.columns : undefined,
+        rows: Array.isArray(data?.rows) ? data.rows : undefined,
+        rowCount: typeof data?.row_count === 'number'
+          ? data.row_count
+          : typeof data?.rowCount === 'number'
+            ? data.rowCount
+            : undefined,
+        exportUrl: typeof data?.processed_file_url === 'string' ? data.processed_file_url : undefined,
+      };
+      setTableProcessingMessages(prev => [...prev, assistantMessage]);
+
+      setTableProcessingSessions(prev => [
+        {
+          id: `${Date.now()}`,
+          title: `智能处理 ${new Date().toLocaleString()}`,
+          updated_at: new Date().toISOString(),
+          instruction: tableProcessingInput,
+        },
+        ...prev,
+      ]);
+      setTableProcessingSubView('current');
+      showToast('表格处理完成', 'success');
+    } catch (error) {
+      console.error('Table processing error:', error);
+      const errMsg = (error as any)?.message || String(error);
+      setTableProcessingMessages(prev => [...prev, {
+        id: `table-processing-assistant-error-${Date.now()}`,
+        role: 'assistant',
+        content: `处理失败：${errMsg}`,
+        time: new Date().toLocaleTimeString(),
+      }]);
+      showToast('表格处理失败，请检查日志', 'error');
+    } finally {
+      setTableProcessingLoading(false);
+      setTableProcessingInput('');
+    }
+  };
+
+  const handleNewTableProcessingSession = () => {
+    setTableProcessingSubView('current');
+    setTableProcessingInput('');
+    setTableProcessingMessages([
+      { id: 'table-processing-welcome', role: 'assistant', content: '选择 CSV 数据源后，输入自然语言指令进行智能处理。', time: new Date().toLocaleTimeString() }
+    ]);
+    setTableProcessingResult(null);
+  };
+
+  const handleShowTableProcessingHistory = () => {
+    setTableProcessingSubView('history');
   };
 
   const handleToggleSelect = (id: string) => {
@@ -1920,7 +2086,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       uploadQueue.length > 1
         ? `已添加 ${uploadQueue.length} 个文件，正在处理`
         : `已添加 ${uploadQueue[0].name}，正在处理`,
-      'info'
+      'success'
     );
 
     let successCount = 0;
@@ -2217,6 +2383,10 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       };
 
       switch (tool) {
+        case 'table_processing':
+          setActiveTool('table_processing');
+          setToolLoading(false);
+          return;
         case 'mindmap':
           endpoint = '/api/v1/kb/generate-mindmap';
           break;
@@ -3123,6 +3293,172 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
               initialBlocks={editingNote?.blocks}
             />
           </div>
+        ) : activeTool === 'table_processing' ? (
+          <main className="flex-1 flex flex-col relative bg-white min-w-[300px] overflow-hidden">
+            <div className="flex items-center justify-between px-6 py-3 border-b border-ios-gray-100 shrink-0">
+              <div>
+                <span className="text-sm font-medium text-ios-gray-900">智能处理</span>
+                <p className="text-xs text-ios-gray-400 mt-1">根据自然语言处理选中表格并返回结果</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleNewTableProcessingSession}
+                  className="px-3 py-1.5 text-sm font-medium rounded-ios border border-ios-gray-200 text-ios-gray-700 hover:bg-ios-gray-50"
+                >
+                  新建对话
+                </button>
+                <button
+                  type="button"
+                  onClick={handleShowTableProcessingHistory}
+                  className="px-3 py-1.5 text-sm font-medium rounded-ios border border-ios-gray-200 text-ios-gray-700 hover:bg-ios-gray-50"
+                >
+                  对话历史
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-8">
+              {tableProcessingSubView === 'history' ? (
+                <div className="max-w-[900px] mx-auto w-full">
+                  <div className="flex items-center justify-between mb-3">
+                    <h3 className="text-sm font-semibold text-gray-500">智能处理历史</h3>
+                    <button
+                      type="button"
+                      onClick={() => setTableProcessingSubView('current')}
+                      className="text-sm text-blue-600 hover:underline"
+                    >
+                      返回当前
+                    </button>
+                  </div>
+                  {tableProcessingSessions.length === 0 ? (
+                    <div className="rounded-2xl border border-ios-gray-100 bg-white px-4 py-6 text-sm text-ios-gray-400">暂无历史记录</div>
+                  ) : (
+                    <ul className="space-y-2">
+                      {tableProcessingSessions.map(session => (
+                        <li key={session.id}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setTableProcessingSubView('current');
+                              setTableProcessingInput(session.instruction);
+                              setTableProcessingResult(null);
+                            }}
+                            className="w-full text-left rounded-2xl border border-ios-gray-100 bg-white px-4 py-3 hover:border-blue-300 hover:bg-blue-50/40 transition-colors"
+                          >
+                            <div className="flex items-center justify-between gap-3">
+                              <div>
+                                <div className="text-sm font-medium text-ios-gray-900">{session.title}</div>
+                                <div className="mt-1 text-xs text-ios-gray-500">{new Date(session.updated_at).toLocaleString()}</div>
+                              </div>
+                              <span className="text-xs text-ios-gray-400">指令：{session.instruction}</span>
+                            </div>
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ) : (
+                <div className="max-w-[900px] mx-auto space-y-4">
+                  {selectedCsvFiles.length > 0 && (
+                    <div className="mb-4 p-3 bg-green-100 border border-green-300 rounded-lg">
+                      <p className="text-green-800 font-semibold">已选 CSV 文件:</p>
+                      <ul className="list-disc list-inside mt-2">
+                        {selectedCsvFiles.map((file, index) => (
+                          <li key={index} className="text-green-700">{file.name}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  <div className="space-y-3">
+                    {tableProcessingMessages.map(msg => (
+                      <div
+                        key={msg.id}
+                        className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}
+                      >
+                        <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 shadow-ios-sm ${msg.role === 'assistant' ? 'bg-gradient-to-br from-indigo-100 to-indigo-200 text-indigo-700' : 'bg-gradient-to-br from-ios-gray-200 to-ios-gray-300 text-ios-gray-600'}`}>
+                          {msg.role === 'assistant' ? <Bot size={16} /> : <User size={16} />}
+                        </div>
+                        <div className={`max-w-[90%] px-4 py-3 text-sm leading-relaxed shadow-ios-sm ${msg.role === 'assistant' ? 'bg-ios-gray-50 text-ios-gray-700 rounded-2xl rounded-tr-md' : 'bg-blue-600 text-white rounded-2xl rounded-tl-md'}`}>
+                          <div>{msg.content}</div>
+                          {msg.sql && (
+                            <pre className="mt-2 overflow-x-auto rounded-xl bg-slate-950 px-3 py-3 text-xs text-slate-100">{msg.sql}</pre>
+                          )}
+                          {msg.role === 'assistant' && msg.rows && msg.rows.length > 0 && (
+                            <div className="mt-3">
+                              <div className="overflow-x-auto rounded-lg border border-ios-gray-200">
+                                <table className="w-full text-xs">
+                                  <thead>
+                                    <tr className="bg-ios-gray-100">
+                                      {msg.columns?.map((col, i) => (
+                                        <th key={i} className="px-3 py-2 text-left font-medium text-ios-gray-700 whitespace-nowrap">{col}</th>
+                                      ))}
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {msg.rows.slice(0, 10).map((row, rowIdx) => (
+                                      <tr key={rowIdx} className="border-t border-ios-gray-100 hover:bg-ios-gray-50">
+                                        {msg.columns?.map((col, colIdx) => (
+                                          <td key={colIdx} className="px-3 py-2 text-ios-gray-600 whitespace-nowrap">{String(row?.[col] ?? '')}</td>
+                                        ))}
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                              {msg.rows.length > 10 && (
+                                <p className="mt-1 text-xs text-ios-gray-400">显示前 10 行</p>
+                              )}
+                            </div>
+                          )}
+                          {msg.role === 'assistant' && msg.exportUrl && (
+                            <div className="mt-3 flex items-center gap-3">
+                              <button
+                                type="button"
+                                onClick={() => handleDataExtractExport(msg.exportUrl)}
+                                className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-700 hover:text-indigo-800"
+                              >
+                                <Download size={14} />
+                                导出 CSV
+                              </button>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            {tableProcessingSubView === 'current' && (
+              <div className="px-6 pb-6 shrink-0">
+                <div className="max-w-[900px] mx-auto relative">
+                  <div className="glass rounded-ios-xl border border-white/30 shadow-ios-sm">
+                    <input
+                      type="text"
+                      value={tableProcessingInput}
+                      onChange={e => setTableProcessingInput(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleTableProcessing()}
+                      placeholder={selectedCsvFiles.length > 0 ? '输入表格处理指令，例如：按城市分组并求销售总额前 20' : '请先选择 CSV 数据源'}
+                      disabled={selectedCsvFiles.length === 0}
+                      className="w-full bg-transparent rounded-ios-xl py-4 pl-6 pr-24 text-lg focus:outline-none disabled:opacity-50"
+                    />
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                      <motion.button
+                        whileTap={{ scale: 0.88 }}
+                        onClick={handleTableProcessing}
+                        disabled={!tableProcessingInput.trim() || tableProcessingLoading || selectedCsvFiles.length === 0}
+                        className="p-2 bg-indigo-600 text-white rounded-full hover:bg-indigo-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-ios-sm"
+                      >
+                        {tableProcessingLoading ? '执行中...' : '发送'}
+                      </motion.button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </main>
         ) : activeTool === 'data_extract' ? (
           <main className="flex-1 flex flex-col relative bg-white min-w-[300px] overflow-hidden">
             <div className="flex items-center justify-between px-6 py-3 border-b border-ios-gray-100 shrink-0">
@@ -3438,29 +3774,37 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
 
             {dataExtractSubView === 'current' && (
             <div className="px-6 pb-6 shrink-0">
-              <div className="max-w-[900px] mx-auto relative">
-                <div className="glass rounded-ios-xl border border-white/30 shadow-ios-sm">
-                  <input
-                    type="text"
-                    value={dataExtractInput}
-                    onChange={e => setDataExtractInput(e.target.value)}
-                    onKeyDown={e => e.key === 'Enter' && handleSendDataExtractMessage()}
-                    placeholder={activeDataExtractDatasourceIds.length > 0 ? '输入一个数据问题，例如：统计各城市销售额前 10 名' : '请先同步并选择一个数据源'}
-                    disabled={activeDataExtractDatasourceIds.length === 0 && !dataExtractSessionId}
-                    className="w-full bg-transparent rounded-ios-xl py-4 pl-6 pr-24 focus:outline-none text-lg disabled:opacity-50"
-                  />
-                  <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                    <span className="text-xs text-ios-gray-400 font-medium">
-                      {activeDataExtractDatasourceIds.length > 1 ? `联合 ${activeDataExtractDatasourceIds.length} 个数据源` : `${activeDataExtractDatasources.length} 个数据源`}
-                    </span>
-                    <motion.button
-                      whileTap={{ scale: 0.88 }}
-                      onClick={handleSendDataExtractMessage}
-                      disabled={!dataExtractInput.trim() || dataExtractLoading || (activeDataExtractDatasourceIds.length === 0 && !dataExtractSessionId)}
-                      className="p-2 bg-emerald-600 text-white rounded-full hover:bg-emerald-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-ios-sm"
-                    >
-                      <Send size={20} />
-                    </motion.button>
+              <div className="max-w-[900px] mx-auto space-y-2">
+                {selectedCsvFiles.length > 0 && (
+                  <div className="rounded-2xl border border-blue-100 bg-blue-50/80 p-3 text-sm text-blue-800">
+                    已选 CSV 文件 {selectedCsvFiles.length} 个：{selectedCsvFiles.map(f => f.name).slice(0, 3).join('，')}{selectedCsvFiles.length > 3 ? ` 等 ${selectedCsvFiles.length} 个` : ''}。
+                    {activeDataExtractDatasources.length === 0 && ' 请先点击“同步选中 CSV”完成注册后即可发送问题。'}
+                  </div>
+                )}
+                <div className="relative">
+                  <div className="glass rounded-ios-xl border border-white/30 shadow-ios-sm">
+                    <input
+                      type="text"
+                      value={dataExtractInput}
+                      onChange={e => setDataExtractInput(e.target.value)}
+                      onKeyDown={e => e.key === 'Enter' && handleSendDataExtractMessage()}
+                      placeholder={selectedCsvFiles.length > 0 ? '选中 CSV 后可输入问题：例如统计各城市销售额前 10 名' : '请先同步并选择一个数据源'}
+                      disabled={selectedCsvFiles.length === 0 && !dataExtractSessionId}
+                      className="w-full bg-transparent rounded-ios-xl py-4 pl-6 pr-24 focus:outline-none text-lg disabled:opacity-50"
+                    />
+                    <div className="absolute right-4 top-1/2 -translate-y-1/2 flex items-center gap-2">
+                      <span className="text-xs text-ios-gray-400 font-medium">
+                        {activeDataExtractDatasourceIds.length > 1 ? `联合 ${activeDataExtractDatasourceIds.length} 个数据源` : `${dataExtractDatasources.length} 个数据源`}
+                      </span>
+                      <motion.button
+                        whileTap={{ scale: 0.88 }}
+                        onClick={handleSendDataExtractMessage}
+                        disabled={!dataExtractInput.trim() || dataExtractLoading || (selectedCsvFiles.length === 0 && !dataExtractSessionId)}
+                        className="p-2 bg-emerald-600 text-white rounded-full hover:bg-emerald-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed shadow-ios-sm"
+                      >
+                        <Send size={20} />
+                      </motion.button>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -3644,6 +3988,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
               </button>
               <h3 className="text-sm font-semibold text-gray-800 mb-3">
                 {studioSettingsTool === 'data_extract' && '智能取数'}
+                {studioSettingsTool === 'table_processing' && '智能处理'}
                 {studioSettingsTool === 'ppt' && 'PPT 生成'}
                 {studioSettingsTool === 'mindmap' && '思维导图'}
                 {studioSettingsTool === 'drawio' && 'DrawIO 图表'}
@@ -3672,6 +4017,17 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                           <option value="legacy">legacy</option>
                           <option value="ega">ega</option>
                         </select>
+                      </div>
+                    </>
+                  );
+                })()}
+                {studioSettingsTool === 'table_processing' && (() => {
+                  const c = getStudioConfig('table_processing');
+                  return (
+                    <>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">LLM 模型</label>
+                        <input type="text" value={c.llmModel || 'gpt-4o'} onChange={(e) => setStudioConfigForTool('table_processing', { llmModel: e.target.value })} placeholder="gpt-4o" className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500" />
                       </div>
                     </>
                   );
@@ -4046,7 +4402,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                 </motion.div>
               ))}
             </div>
-            {activeTool !== 'chat' && activeTool !== 'search' && activeTool !== 'data_extract' && (
+            {activeTool !== 'chat' && activeTool !== 'search' && activeTool !== 'data_extract' && activeTool !== 'table_processing' && (
               <motion.button
                 whileTap={{ scale: 0.97 }}
                 type="button"
@@ -4751,6 +5107,21 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                       </a>
                     </div>
                   )}
+                </div>
+              )}
+              {previewOutput.type === 'note' && previewOutput.url && (
+                <div className="flex items-center justify-center h-full text-gray-500">
+                  <div className="text-center px-6 py-4">
+                    <p className="text-sm font-medium text-gray-700 mb-3">笔记预览将在编辑器打开</p>
+                    <a
+                      href={previewOutput.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center justify-center px-4 py-2 text-sm font-medium text-primary bg-primary/10 hover:bg-primary/20 rounded-ios transition-colors"
+                    >
+                      打开笔记文件
+                    </a>
+                  </div>
                 </div>
               )}
               {previewOutput.type === 'mindmap' && !previewOutput.mermaidCode && (

@@ -33,6 +33,8 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0, supabaseConfigured }: {
   const [createError, setCreateError] = useState('');
   const [configOpen, setConfigOpen] = useState(false);
   const [apiUrl, setApiUrl] = useState(DEFAULT_LLM_API_URL);
+  const [customApiUrl, setCustomApiUrl] = useState('');
+  const [isCustomUrl, setIsCustomUrl] = useState(false);
   const [apiKey, setApiKey] = useState('');
   const [searchProvider, setSearchProvider] = useState<SearchProvider>('serper');
   const [searchApiKey, setSearchApiKey] = useState('');
@@ -48,7 +50,11 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0, supabaseConfigured }: {
   useEffect(() => {
     const s = getApiSettings(effectiveUserId);
     if (s) {
-      setApiUrl(s.apiUrl || DEFAULT_LLM_API_URL);
+      const savedUrl = s.apiUrl || DEFAULT_LLM_API_URL;
+      const isSavedUrlCustom = !API_URL_OPTIONS.includes(savedUrl);
+      setApiUrl(isSavedUrlCustom ? API_URL_OPTIONS[0] : savedUrl);
+      setCustomApiUrl(isSavedUrlCustom ? savedUrl : '');
+      setIsCustomUrl(isSavedUrlCustom);
       setApiKey(s.apiKey || '');
       setSearchProvider((s.searchProvider as SearchProvider) || 'serper');
       setSearchApiKey(s.searchApiKey || '');
@@ -59,8 +65,10 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0, supabaseConfigured }: {
   const handleSaveConfig = () => {
     setConfigSaving(true);
     setConfigSaved(false);
+    // 如果是自定义 URL，使用自定义输入的值
+    const finalApiUrl = isCustomUrl ? customApiUrl.trim() : apiUrl;
     const settings: ApiSettings = {
-      apiUrl: apiUrl.trim(),
+      apiUrl: finalApiUrl,
       apiKey: apiKey.trim(),
       searchProvider,
       searchApiKey: searchApiKey.trim(),
@@ -72,6 +80,15 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0, supabaseConfigured }: {
       setConfigSaving(false);
       setConfigSaved(false);
     }, 1500);
+  };
+
+  const handleApiUrlChange = (value: string) => {
+    if (value === '__CUSTOM__') {
+      setIsCustomUrl(true);
+    } else {
+      setIsCustomUrl(false);
+      setApiUrl(value);
+    }
   };
 
   const fetchNotebooks = async (options?: { force?: boolean }) => {
@@ -235,15 +252,27 @@ const Dashboard = ({ onOpenNotebook, refreshTrigger = 0, supabaseConfigured }: {
               <h4 className="text-sm font-medium text-ios-gray-600 flex items-center gap-1.5">LLM 调用</h4>
               <div>
                 <label className="block text-xs font-medium text-ios-gray-500 mb-1">API URL</label>
-                <select
-                  value={apiUrl}
-                  onChange={(e) => setApiUrl(e.target.value)}
-                  className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
-                >
-                  {[apiUrl, ...API_URL_OPTIONS].filter((v, i, a) => a.indexOf(v) === i).map((url: string) => (
-                    <option key={url} value={url}>{url}</option>
-                  ))}
-                </select>
+                <div className="space-y-2">
+                  <select
+                    value={isCustomUrl ? '__CUSTOM__' : apiUrl}
+                    onChange={(e) => handleApiUrlChange(e.target.value)}
+                    className="w-full px-3 py-2.5 border border-ios-gray-200 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+                  >
+                    {API_URL_OPTIONS.map((url: string) => (
+                      <option key={url} value={url}>{url}</option>
+                    ))}
+                    <option value="__CUSTOM__">自定义 URL...</option>
+                  </select>
+                  {isCustomUrl && (
+                    <input
+                      type="text"
+                      value={customApiUrl}
+                      onChange={(e) => setCustomApiUrl(e.target.value)}
+                      placeholder="https://your-api-endpoint.com/v1"
+                      className="w-full px-3 py-2.5 border border-blue-300 rounded-ios text-sm focus:ring-2 focus:ring-primary/30 focus:border-primary transition-colors"
+                    />
+                  )}
+                </div>
               </div>
               <div>
                 <label className="block text-xs font-medium text-ios-gray-500 mb-1">API Key</label>

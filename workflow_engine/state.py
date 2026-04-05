@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 current_file = Path(__file__).resolve()
 PROJDIR = current_file.parent.parent
 from typing_extensions import TypedDict, Annotated
@@ -29,9 +29,12 @@ class MainRequest:
 
     def get(self, key, default=None):
         return getattr(self, key, default)
-    
+
     def __setitem__(self, key, value):
         setattr(self, key, value)
+
+    def __getitem__(self, key):
+        return getattr(self, key)
 
 
 # ==================== 最基础的 State（所有State的祖先）====================
@@ -49,6 +52,9 @@ class MainState:
 
     def __setitem__(self, key, value):
         setattr(self, key, value)
+        
+    def __getitem__(self, key):
+        return getattr(self, key)
 
 
 # ==================== 主流程 Request ====================
@@ -550,3 +556,131 @@ class Paper2DrawioState(MainState):
     output_xml_path: str = ""      # XML 文件路径
     output_png_path: str = ""      # PNG 导出路径
     output_svg_path: str = ""      # SVG 导出路径
+
+
+# ==================== Table Processing 相关 State（统一版本）====================
+@dataclass
+class TableProcessingRequest(MainRequest):
+    """
+    Table Processing 请求参数（统一版本，同时服务于 API 层和 Table Agent 工作流）。
+
+    API 层使用：datasources, instruction, output_format, title, task_type, operator_json_path, use_rag
+    Agent 层使用：target（即 instruction），task_objective
+    """
+
+    # ===== API 层参数 =====
+    datasources: List[str] = field(default_factory=list)
+    instruction: str = ""  # 用户指令
+    output_format: str = "csv"
+    title: str = ""
+    notebook_id: str = ""  # 用于生成唯一 result_path
+
+    # 允许显式指定 tableAgent 的行为（参考 Processing_workflow/main/ProfiliTable.py）
+    task_type: str = "DataImputation"
+    operator_json_path: str = ""
+    use_rag: bool = True
+
+    # ===== 与 TableAgentRequest 合并的字段 =====
+    # 测试样例文件（仅 CLI 批量跑用）
+    json_file: str = ""
+
+    # Python 代码文件位置
+    python_file_path: str = ""
+
+    # Debug 相关
+    need_debug: bool = False
+    max_debug_rounds: int = 3
+
+    # 本地模型相关
+    use_local_model: bool = False
+    local_model_path: str = ""
+
+    # 缓存和会话
+    session_id: str = "default_session"
+
+    # embeddings url
+    chat_api_url_for_embeddings: str = ""
+    embedding_model_name: str = "text-embedding-3-small"
+    update_rag_content: bool = True
+
+    def __post_init__(self):
+        # 确保 target 字段与 instruction 保持一致
+        self.target = self.instruction or self.target
+
+
+@dataclass
+class TableProcessingState(MainState):
+    """
+    Table Processing 状态类（统一版本，同时服务于 API 层和 Table Agent 工作流）。
+
+    包含表格处理工作流所需的完整状态字段，同时保持与前端 API 的兼容性。
+    """
+
+    request: TableProcessingRequest = field(default_factory=TableProcessingRequest)
+
+    # ===== API 层输出字段 =====
+    content: str = ""
+    sql: str = ""
+    columns: List[str] = field(default_factory=list)
+    rows: List[Dict[str, Any]] = field(default_factory=list)
+    row_count: int = 0
+
+    # 运行日志/错误
+    error: str = ""
+
+    # 内部运行目录（可用于落地 processed 文件等）
+    result_path: str = ""
+
+    # ===== 与 TableAgentState 合并的字段 =====
+
+    # 任务配置
+    task_objective: str = ""  # 与 request.instruction 对齐
+    score_threshold: float = 0.0
+    data_profiling: Dict[str, Any] = field(default_factory=dict)
+    gt_table_path: str = ""
+    raw_table_paths: List[str] = field(default_factory=list)
+    score_func_path: str = ""
+    user_query: Dict[str, Any] = field(default_factory=dict)
+    is_dag: bool = False
+    score_rule: str = ""
+    profiling_trace_summary: str = ""
+    summarizing_trace_summary: str = ""
+    score: float = 0.0
+    valid: bool = False
+    attempts: int = 0
+    execution_time: float = 0.0
+    debug_attempts: int = 0
+    task_name: str = ""
+    summary: str = ""
+    processed_file_paths: List[str] = field(default_factory=list)
+
+    # 节点记忆
+    generated_codes: List[str] = field(default_factory=list)
+    error_logs: List[str] = field(default_factory=list)
+    evaluation_feedbacks: List[Dict[str, Any]] = field(default_factory=list)
+
+    script_generated_total: int = 0
+    script_runnable_total: int = 0
+    debug_total_attempts: int = 0
+    debug_reasons: List[str] = field(default_factory=list)
+    current_best_score_and_code: Tuple[float, str] = (0.0, "")
+
+    # 任务分解相关
+    decomposition_result: str = ""
+    decomposition_codes: str = ""
+    retrieved_operators: List[Any] = field(default_factory=list)
+
+    # LLM tracker（用于计费和日志）
+    llm_tracker: Any = None
+
+    def __post_init__(self):
+        # 确保 task_objective 与 request.instruction 保持一致
+        if not self.task_objective and self.request.instruction:
+            self.task_objective = self.request.instruction
+
+
+
+# ==================== 向后兼容别名 ====================
+# 为了保持与旧代码的兼容性，保留 TableAgentRequest 和 TableAgentState 作为别名
+TableAgentRequest = TableProcessingRequest
+TableAgentState = TableProcessingState

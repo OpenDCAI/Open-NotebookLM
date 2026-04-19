@@ -115,6 +115,11 @@ class AppSettings(BaseSettings):
 
     USE_LOCAL_MINERU: int = 0
     LOCAL_MINERU_CUDA_VISIBLE_DEVICES: Optional[str] = None
+    MINERU_API_BASE_URL: Optional[str] = None
+    MINERU_API_KEY: Optional[str] = None
+    MINERU_API_MODEL_VERSION: Optional[str] = None
+    MINERU_API_POLL_INTERVAL_SECONDS: float = 5.0
+    MINERU_API_TIMEOUT_SECONDS: float = 900.0
 
     class Config:
         env_file = str(_ENV_FILE)

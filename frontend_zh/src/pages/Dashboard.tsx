@@ -11,7 +11,7 @@ import {
   User,
 } from 'lucide-react';
 
-import { apiFetch } from '../config/api';
+import { apiFetch, parseJson } from '../config/api';
 import type { Notebook } from '../components/thinkflow-types';
 import { useAuthStore } from '../stores/authStore';
 
@@ -48,7 +48,7 @@ export default function Dashboard({
       const response = await apiFetch(
         `/api/v1/kb/notebooks?user_id=${encodeURIComponent(effectiveUserId)}&email=${encodeURIComponent(effectiveEmail)}`,
       );
-      const data = await response.json();
+      const data = await parseJson<{ notebooks?: any[] } | null>(response);
       const next = Array.isArray(data?.notebooks)
         ? data.notebooks.map((row: any) => ({
             id: row.id,
@@ -100,7 +100,7 @@ export default function Dashboard({
           email: effectiveEmail,
         }),
       });
-      const data = await response.json();
+      const data = await parseJson<{ success?: boolean; message?: string; notebook?: { id?: string; name?: string } } | null>(response);
       if (!data?.success || !data?.notebook?.id) {
         throw new Error(data?.message || '创建笔记本失败');
       }

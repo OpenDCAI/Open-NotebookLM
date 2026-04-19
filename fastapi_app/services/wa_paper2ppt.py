@@ -27,6 +27,84 @@ from fastapi_app.schemas import Paper2PPTRequest, Paper2PPTResponse
 log = get_logger(__name__)
 
 
+def _merge_pagecontent_assets(
+    pagecontent: list[dict] | None,
+    raw_pagecontent: list[dict] | None,
+) -> list[dict]:
+    current_items = list(pagecontent or [])
+    raw_items = list(raw_pagecontent or [])
+    if not current_items or not raw_items:
+        return current_items
+
+    raw_by_id = {
+        str(item.get("id") or "").strip(): item
+        for item in raw_items
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    }
+    asset_keys = [
+        "asset_ref",
+        "ppt_img_path",
+        "img_path",
+        "image_path",
+        "path",
+        "source_img_path",
+        "reference_image_path",
+        "table_img_path",
+        "table_png_path",
+    ]
+
+    merged: list[dict] = []
+    for index, item in enumerate(current_items):
+        if not isinstance(item, dict):
+            merged.append(item)
+            continue
+
+        raw_item = None
+        item_id = str(item.get("id") or "").strip()
+        if item_id:
+            raw_item = raw_by_id.get(item_id)
+        if raw_item is None and index < len(raw_items) and isinstance(raw_items[index], dict):
+            raw_item = raw_items[index]
+        if raw_item is None:
+            merged.append(item)
+            continue
+
+        next_item = dict(item)
+        for key in asset_keys:
+            if not next_item.get(key) and raw_item.get(key):
+                next_item[key] = raw_item.get(key)
+        merged.append(next_item)
+
+    return merged
+
+
+def _load_persisted_ppt_context(
+    result_root: Path,
+    pagecontent: list[dict] | None,
+) -> tuple[str, list[dict]]:
+    context_path = result_root / "context.json"
+    current_pagecontent = list(pagecontent or [])
+    if not context_path.exists():
+        return "", current_pagecontent
+
+    try:
+        payload = json.loads(context_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        log.warning("[paper2ppt_wf_api] Failed to read persisted context: %s", exc)
+        return "", current_pagecontent
+
+    if not isinstance(payload, dict):
+        return "", current_pagecontent
+
+    mineru_root = str(payload.get("mineru_root") or "").strip()
+    raw_pagecontent = payload.get("raw_pagecontent") or []
+    if not current_pagecontent and isinstance(raw_pagecontent, list):
+        current_pagecontent = list(raw_pagecontent)
+    else:
+        current_pagecontent = _merge_pagecontent_assets(current_pagecontent, raw_pagecontent)
+    return mineru_root, current_pagecontent
+
+
 def _to_serializable(obj: Any):
     """递归将对象转成可 JSON 序列化结构"""
     if isinstance(obj, dict):
@@ -136,9 +214,23 @@ def _try_load_existing_mineru_markdown(result_root: Path) -> tuple[str, str]:
             candidates = list(result_root.glob("*/*/*.md"))
         except Exception:
             candidates = []
+    if not candidates:
+        try:
+            candidates = list(result_root.glob("*/*.md"))
+        except Exception:
+            candidates = []
 
     if not candidates:
         return "", ""
+
+    md_path = candidates[0]
+    try:
+        md = md_path.read_text(encoding="utf-8")
+    except Exception:
+        return "", ""
+
+    mineru_output = _shrink_markdown(md, max_h1=8, max_chars=30_000)
+    return mineru_output, str(md_path.parent.resolve())
 
 
 def _backfill_ppt_export_paths(result_root: str | Path, pdf_path: str, pptx_path: str) -> tuple[str, str]:
@@ -170,15 +262,6 @@ def _backfill_ppt_export_paths(result_root: str | Path, pdf_path: str, pptx_path
                 break
 
     return resolved_pdf, resolved_pptx
-
-    md_path = candidates[0]
-    try:
-        md = md_path.read_text(encoding="utf-8")
-    except Exception:
-        return "", ""
-
-    mineru_output = _shrink_markdown(md, max_h1=8, max_chars=30_000)
-    return mineru_output, str(md_path.parent.resolve())
 
 
 async def run_paper2page_content_wf_api(
@@ -300,6 +383,14 @@ async def run_paper2ppt_wf_api(
         override_pagecontent=pagecontent,
     )
 
+    persisted_mineru_root = ""
+    if base_dir is not None:
+        persisted_mineru_root, restored_pagecontent = _load_persisted_ppt_context(
+            base_dir,
+            getattr(state, "pagecontent", []) or [],
+        )
+        state.pagecontent = restored_pagecontent
+
     # 映射 get_down -> workflow state.gen_down
     if get_down is not None:
         state.gen_down = bool(get_down)
@@ -336,7 +427,7 @@ async def run_paper2ppt_wf_api(
                     if child.is_dir() and list(child.glob("*.md")):
                         mineru_root_found = str(child)
                         break
-    state.mineru_root = mineru_root_found or f"{base_dir}/input/auto"
+    state.mineru_root = persisted_mineru_root or mineru_root_found or f"{base_dir}/input/auto"
 
     # 尝试回填 mineru_output (markdown)，供 table_extractor 等使用
     try:

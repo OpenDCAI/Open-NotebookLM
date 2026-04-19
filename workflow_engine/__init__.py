@@ -20,3 +20,7 @@
 #         )
 #     except ModuleNotFoundError:
 #         pass
+
+from workflow_engine.compat.langgraph import ensure_langgraph_compat
+
+ensure_langgraph_compat()

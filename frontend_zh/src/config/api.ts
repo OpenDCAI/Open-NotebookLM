@@ -68,6 +68,34 @@ export async function apiFetch(
   });
 }
 
+function formatApiErrorDetail(detail: unknown): string {
+  if (typeof detail === 'string') {
+    return detail.trim();
+  }
+
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => formatApiErrorDetail(item))
+      .filter(Boolean);
+    return parts.join('; ');
+  }
+
+  if (detail && typeof detail === 'object') {
+    const detailRecord = detail as Record<string, unknown>;
+    const message = typeof detailRecord.msg === 'string' ? detailRecord.msg.trim() : '';
+    const location = Array.isArray(detailRecord.loc)
+      ? detailRecord.loc.map((part) => String(part)).join('.')
+      : '';
+    const nestedDetail = formatApiErrorDetail(detailRecord.detail);
+
+    if (message && location) return `${location}: ${message}`;
+    if (message) return message;
+    if (nestedDetail) return nestedDetail;
+  }
+
+  return '';
+}
+
 /**
  * Parse a JSON response, throwing a descriptive error on failure or non-OK status.
  */
@@ -88,7 +116,7 @@ export async function parseJson<T>(response: Response): Promise<T> {
   }
 
   if (!response.ok || data?.success === false) {
-    const detail = typeof data?.detail === 'string' ? data.detail.trim() : '';
+    const detail = formatApiErrorDetail(data?.detail);
     const message = typeof data?.message === 'string' ? data.message.trim() : '';
     const nestedErrorMessage =
       typeof data?.error?.message === 'string' ? data.error.message.trim() : '';

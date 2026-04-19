@@ -14,7 +14,7 @@ import fitz  # PyMuPDF，MinerU 失败时回退用
 from PIL import Image
 
 # Import existing tools
-from workflow_engine.toolkits.multimodaltool.mineru_tool import run_mineru_pdf_extract
+from workflow_engine.toolkits.multimodaltool.mineru_tool import run_mineru_pdf_extract_http
 from workflow_engine.toolkits.multimodaltool.req_videos import call_video_understanding_async
 from workflow_engine.toolkits.multimodaltool.req_understanding import call_image_understanding_async
 import workflow_engine.utils as utils
@@ -436,13 +436,9 @@ class VectorStoreManager:
 
         if not cached:
             try:
-                await asyncio.to_thread(
-                    run_mineru_pdf_extract,
+                await run_mineru_pdf_extract_http(
                     str(file_path),
                     str(output_subdir),
-                    "modelscope",
-                    None,
-                    "pipeline",
                 )
                 log.info("[MinerU] 解析完成，输出根目录: %s", output_subdir)
                 md_file = next(mineru_output_folder.rglob("*.md"), None)

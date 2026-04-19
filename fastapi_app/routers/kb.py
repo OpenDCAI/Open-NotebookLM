@@ -175,6 +175,10 @@ def _find_mineru_stem_dir(
                     if (nested / sub).is_dir() and list((nested / sub).glob("*.md")):
                         log.info("[find_mineru] 在新布局(嵌套)找到缓存: %s/%s", nested, sub)
                         return nested
+                # 兼容: mineru/{pdf_stem}/*.md （无 auto 子目录）
+                if list(nested.glob("*.md")):
+                    log.info("[find_mineru] 在新布局(平铺嵌套)找到缓存: %s", nested)
+                    return nested
 
     # 2) Legacy: kb_mineru/{email}/{notebook_id}/
     safe_nb = (notebook_id or "_shared").replace("/", "_").replace("\\", "_")[:128]
@@ -232,7 +236,56 @@ def _read_mineru_md_if_cached(
                     return text[:max_chars] if len(text) > max_chars else text
             except Exception as e:
                 log.warning("[read_mineru_md] 读取失败 %s: %s", md_files[0], e)
+    md_files = list(stem_dir.glob("*.md"))
+    if md_files:
+        try:
+            text = md_files[0].read_text(encoding="utf-8")
+            if text.strip():
+                log.info("[read_mineru_md] 从平铺缓存读取 %s, len=%s", md_files[0], len(text))
+                return text[:max_chars] if len(text) > max_chars else text
+        except Exception as e:
+            log.warning("[read_mineru_md] 读取失败 %s: %s", md_files[0], e)
     return None
+
+
+def _copy_mineru_tree(src: Path, dst: Path) -> None:
+    dst.mkdir(parents=True, exist_ok=True)
+    for child in src.iterdir():
+        target = dst / child.name
+        if child.is_dir():
+            shutil.copytree(str(child), str(target), dirs_exist_ok=True)
+        else:
+            shutil.copy2(str(child), str(target))
+
+
+def _normalize_cached_mineru_dir(cached_stem_dir: Path, target: Path, stem: str) -> None:
+    auto_like_dirs = []
+    for sub in ("auto", "hybrid_auto"):
+        candidate = cached_stem_dir / sub
+        if candidate.is_dir() and list(candidate.glob("*.md")):
+            auto_like_dirs.append(candidate)
+
+    if auto_like_dirs:
+        try:
+            target.symlink_to(cached_stem_dir.resolve())
+            return
+        except OSError:
+            shutil.copytree(str(cached_stem_dir), str(target))
+            return
+
+    flat_md_files = list(cached_stem_dir.glob("*.md"))
+    if flat_md_files:
+        normalized_auto = target / "auto"
+        _copy_mineru_tree(cached_stem_dir, normalized_auto)
+        expected_md = normalized_auto / f"{stem}.md"
+        if not expected_md.exists() and flat_md_files:
+            shutil.copy2(str(flat_md_files[0]), str(expected_md))
+        return
+
+    try:
+        target.symlink_to(cached_stem_dir.resolve())
+    except OSError:
+        shutil.copytree(str(cached_stem_dir), str(target))
 
 
 def _reuse_mineru_cache(
@@ -263,17 +316,11 @@ def _reuse_mineru_cache(
             continue
 
         try:
-            target.symlink_to(cached_stem_dir.resolve())
-            log.info("[reuse_mineru] 软链成功: %s -> %s", target, cached_stem_dir)
+            _normalize_cached_mineru_dir(cached_stem_dir, target, stem)
+            log.info("[reuse_mineru] 复用成功: %s -> %s", target, cached_stem_dir)
             reused += 1
-        except OSError:
-            # 软链失败（跨文件系统等），回退到复制
-            try:
-                shutil.copytree(str(cached_stem_dir), str(target))
-                log.info("[reuse_mineru] 复制成功: %s -> %s", target, cached_stem_dir)
-                reused += 1
-            except Exception as e:
-                log.warning("[reuse_mineru] 复制失败 %s: %s", stem, e)
+        except Exception as e:
+            log.warning("[reuse_mineru] 复用失败 %s: %s", stem, e)
 
     return reused
 

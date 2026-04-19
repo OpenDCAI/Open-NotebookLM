@@ -26,6 +26,49 @@ class OutputV2Service:
     PPT_STAGE_PAGES = "pages_ready"
     PPT_STAGE_GENERATED = "generated"
 
+    def _build_ppt_context_payload(
+        self,
+        *,
+        outline: List[Dict[str, Any]],
+        raw_pagecontent: List[Dict[str, Any]],
+        mineru_root: str,
+        query: str,
+        source_paths: List[str],
+        source_names: List[str],
+        page_count: int,
+        enable_images: bool,
+    ) -> Dict[str, Any]:
+        return {
+            "outline": self._normalize_ppt_outline(outline),
+            "raw_pagecontent": raw_pagecontent or [],
+            "mineru_root": str(mineru_root or "").strip(),
+            "source_paths": source_paths,
+            "source_names": source_names,
+            "query": query,
+            "page_count": page_count,
+            "enable_images": enable_images,
+        }
+
+    def _resolve_mineru_content_dir(self, root: Optional[Path]) -> str:
+        if root is None or not root.exists():
+            return ""
+        for sub in ("auto", "hybrid_auto"):
+            candidate = root / sub
+            if candidate.is_dir() and list(candidate.glob("*.md")):
+                return str(candidate.resolve())
+        if root.is_dir() and list(root.glob("*.md")):
+            return str(root.resolve())
+        for child in sorted(root.iterdir()):
+            if not child.is_dir():
+                continue
+            for sub in ("auto", "hybrid_auto"):
+                candidate = child / sub
+                if candidate.is_dir() and list(candidate.glob("*.md")):
+                    return str(candidate.resolve())
+            if list(child.glob("*.md")):
+                return str(child.resolve())
+        return ""
+
     def _base_dir(self, notebook_id: str, notebook_title: str, user_id: str) -> Path:
         """Return the canonical outputs directory.
 
@@ -1550,15 +1593,21 @@ class OutputV2Service:
         if not outline:
             raise HTTPException(status_code=500, detail="PPT 大纲生成结果为空，请检查来源或重试。")
 
+        mineru_root = self._resolve_mineru_content_dir(Path(str(getattr(state_pc, "mineru_root", "") or "").strip())) \
+            if str(getattr(state_pc, "mineru_root", "") or "").strip() else ""
+
         self._write_json(
             pipeline_dir / "context.json",
-            {
-                "source_paths": source_paths,
-                "source_names": source_names,
-                "query": state_pc.kb_query,
-                "page_count": page_count,
-                "enable_images": enable_images,
-            },
+            self._build_ppt_context_payload(
+                outline=outline,
+                raw_pagecontent=getattr(state_pc, "pagecontent", []) or [],
+                mineru_root=mineru_root,
+                query=state_pc.kb_query,
+                source_paths=source_paths,
+                source_names=source_names,
+                page_count=page_count,
+                enable_images=enable_images,
+            ),
         )
         return {
             "outline": outline,

@@ -28,6 +28,7 @@ from workflow_engine.toolkits.multimodaltool.ppt_tool import (
     convert_images_dir_to_pdf_and_ppt_api,
     convert_images_dir_to_pptx_full_bleed,
 )
+from fastapi_app.utils import _from_outputs_url
 
 log = get_logger(__name__)
 
@@ -374,7 +375,7 @@ def _resolve_asset_path(asset_ref: str, state: Paper2FigureState) -> str:
     """
     if not asset_ref:
         return ""
-    s = str(asset_ref).strip()
+    s = _from_outputs_url(str(asset_ref).strip())
     if not s:
         return ""
 
@@ -382,13 +383,56 @@ def _resolve_asset_path(asset_ref: str, state: Paper2FigureState) -> str:
     if p.is_absolute() or s.startswith("~"):
         return _abs_path(s)
 
-    base_dir = getattr(state, "mineru_root", None) or getattr(state, "result_path", None)
-    
-    if base_dir:
+    search_paths: List[Path] = []
+    mineru_root = str(getattr(state, "mineru_root", None) or "").strip()
+    result_path = str(getattr(state, "result_path", None) or "").strip()
+
+    if mineru_root:
+        mineru_dir = Path(mineru_root)
+        search_paths.extend(
+            [
+                mineru_dir / p,
+                mineru_dir / "images" / p.name,
+            ]
+        )
+
+    if result_path:
+        result_dir = Path(result_path)
+        search_paths.extend(
+            [
+                result_dir / p,
+                result_dir / "input" / p,
+                result_dir / "input" / "auto" / p,
+                result_dir / "input" / "auto" / "images" / p.name,
+            ]
+        )
+
+    seen: set[str] = set()
+    for candidate in search_paths:
+        candidate_str = str(candidate)
+        if candidate_str in seen:
+            continue
+        seen.add(candidate_str)
         try:
-            return str((Path(base_dir) / p).resolve())
+            resolved = candidate.resolve()
         except Exception:
-            return _abs_path(s)
+            continue
+        if resolved.exists():
+            return str(resolved)
+
+    if p.name:
+        search_roots: List[Path] = []
+        if mineru_root:
+            search_roots.extend([Path(mineru_root), Path(mineru_root) / "images"])
+        if result_path:
+            result_dir = Path(result_path)
+            search_roots.extend([result_dir, result_dir / "input", result_dir / "input" / "auto"])
+        for root in search_roots:
+            if not root.exists():
+                continue
+            matches = list(root.rglob(p.name))
+            if matches:
+                return str(matches[0].resolve())
 
     return _abs_path(s)
 
@@ -454,7 +498,9 @@ def create_paper2ppt_parallel_consistent_graph() -> GenericGraphBuilder:  # noqa
                     return True
                 except Exception as e:  # noqa: BLE001
                     last_err = e
-                    log.error(f"[paper2ppt] image gen failed attempt {attempt}/{retries}: {e}")
+                    err_name = type(e).__name__
+                    err_msg = str(e).strip() or repr(e)
+                    log.error(f"[paper2ppt] image gen failed attempt {attempt}/{retries}: {err_name}: {err_msg}")
                     if attempt < retries:
                         try:
                             await asyncio.sleep(delay)

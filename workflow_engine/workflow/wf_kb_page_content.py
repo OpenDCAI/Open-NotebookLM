@@ -15,10 +15,15 @@ from workflow_engine.agentroles import create_react_agent, create_simple_agent
 from workflow_engine.logger import get_logger
 from workflow_engine.utils import get_project_root
 
-from workflow_engine.toolkits.multimodaltool.mineru_tool import run_mineru_pdf_extract, _shrink_markdown
+from workflow_engine.toolkits.multimodaltool.mineru_tool import run_mineru_pdf_extract_http, _shrink_markdown
 from workflow_engine.toolkits.multimodaltool.req_understanding import call_image_understanding_async
 
 log = get_logger(__name__)
+
+try:
+    from workflow_engine.agentroles.cores.registry import AgentRegistry
+except Exception:  # pragma: no cover - test stubs may not expose package layout
+    AgentRegistry = None
 
 
 def _ensure_result_path(state: Paper2FigureState) -> str:
@@ -41,6 +46,108 @@ def _abs_path(p: str) -> str:
         return str(Path(p).expanduser().resolve())
     except Exception:
         return p
+
+
+_POSITIONAL_ASSET_KEYS = (
+    "asset_ref",
+    "asset",
+    "assetRef",
+    "asset_type",
+    "asset_refs",
+    "table_img_path",
+    "table_png_path",
+    "source_img_path",
+    "reference_image_path",
+    "img_path",
+    "image_path",
+    "path",
+    "ppt_img_path",
+)
+
+
+def _preserve_positional_asset_fields(
+    original_pagecontent: List[Dict[str, Any]],
+    refined_pagecontent: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
+    if not original_pagecontent or not refined_pagecontent:
+        return refined_pagecontent
+
+    for idx, refined_item in enumerate(refined_pagecontent):
+        if idx >= len(original_pagecontent):
+            break
+        original_item = original_pagecontent[idx]
+        if not isinstance(original_item, dict) or not isinstance(refined_item, dict):
+            continue
+        for key in _POSITIONAL_ASSET_KEYS:
+            original_value = original_item.get(key)
+            refined_value = refined_item.get(key)
+            if original_value and not refined_value:
+                refined_item[key] = original_value
+    return refined_pagecontent
+
+
+def _extract_markdown_image_paths(markdown_text: str, mineru_root: str) -> List[str]:
+    if not markdown_text or not mineru_root:
+        return []
+
+    refs: List[str] = []
+    refs.extend(re.findall(r"!\[[^\]]*\]\(([^)]+)\)", markdown_text))
+    refs.extend(re.findall(r"""<img[^>]+src=["']([^"']+)["']""", markdown_text))
+
+    image_paths: List[str] = []
+    seen: set[str] = set()
+    for rel in refs:
+        rel = str(rel or "").strip()
+        if not rel:
+            continue
+        img_path = Path(mineru_root) / rel
+        if not img_path.exists():
+            continue
+        resolved = str(img_path.resolve())
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        image_paths.append(resolved)
+    return image_paths
+
+
+def _backfill_pagecontent_asset_refs(
+    pagecontent: List[Dict[str, Any]],
+    image_paths: List[str],
+) -> List[Dict[str, Any]]:
+    if not pagecontent or not image_paths:
+        return pagecontent
+
+    result: List[Dict[str, Any]] = []
+    next_image_idx = 0
+    for item in pagecontent:
+        next_item = dict(item) if isinstance(item, dict) else item
+        if isinstance(next_item, dict) and not next_item.get("asset_ref"):
+            if next_image_idx < len(image_paths):
+                next_item["asset_ref"] = image_paths[next_image_idx]
+                next_image_idx += 1
+        result.append(next_item)
+    return result
+
+
+def _normalize_pagecontent_items(pagecontent: Any) -> List[Dict[str, Any]]:
+    if not pagecontent:
+        return []
+    if isinstance(pagecontent, list):
+        return [item for item in pagecontent if isinstance(item, dict)]
+    if isinstance(pagecontent, dict):
+        return [pagecontent]
+    return []
+
+
+def _has_registered_agent(name: str) -> bool:
+    if AgentRegistry is None:
+        return False
+    try:
+        AgentRegistry.get(name)
+        return True
+    except KeyError:
+        return False
 
 
 @register("kb_page_content")
@@ -126,9 +233,14 @@ def create_kb_page_content_graph() -> GenericGraphBuilder:  # noqa: N802
 
         if not auto_dir.exists():
             try:
-                run_mineru_pdf_extract(str(paper_pdf_path), str(result_root), "modelscope")
+                mineru_port = int(getattr(state, "mineru_port", 8010) or 8010)
+                await run_mineru_pdf_extract_http(
+                    str(paper_pdf_path),
+                    str(result_root),
+                    port=mineru_port,
+                )
             except Exception as e:
-                log.error(f"[kb_page_content] run_mineru_pdf_extract 失败: {e}")
+                log.error(f"[kb_page_content] run_mineru_pdf_extract_http 失败: {e}")
                 state.minueru_output = ""
                 return state
 
@@ -224,18 +336,28 @@ def create_kb_page_content_graph() -> GenericGraphBuilder:  # noqa: N802
             parser_type="json",
         )
         state = await agent.execute(state=state)
+        state.pagecontent = _normalize_pagecontent_items(state.pagecontent)
         n = len(state.pagecontent or [])
         first_title = state.pagecontent[0].get("title", "") if state.pagecontent else ""
         log.info("[kb_page_content] 大纲已由 LLM 生成，共 %s 页，首页标题=%s，进入后续生图流程", n, first_title)
         return state
 
     async def outline_refine_agent(state: Paper2FigureState) -> Paper2FigureState:
+        original_pagecontent = [
+            dict(item) if isinstance(item, dict) else item
+            for item in (state.pagecontent or [])
+        ]
         agent = create_react_agent(
             name="outline_refine_agent",
             parser_type="json",
             max_retries=5
         )
         state = await agent.execute(state=state)
+        state.pagecontent = _normalize_pagecontent_items(state.pagecontent)
+        state.pagecontent = _preserve_positional_asset_fields(
+            original_pagecontent,
+            state.pagecontent or [],
+        )
         return state
 
     async def deep_research_agent(state: Paper2FigureState) -> Paper2FigureState:
@@ -263,18 +385,13 @@ def create_kb_page_content_graph() -> GenericGraphBuilder:  # noqa: N802
                 md_text = ""
 
             if md_text:
-                md_imgs = re.findall(r"!\\[[^\\]]*\\]\\(([^\\)]+)\\)", md_text)
-                html_imgs = re.findall(r"<img[^>]+src=[\"']([^\"']+)[\"']", md_text)
-                all_imgs = md_imgs + html_imgs
-                for rel in all_imgs:
-                    rel = rel.strip()
-                    if not rel:
-                        continue
-                    img_path = Path(mineru_root) / rel
-                    if img_path.exists():
-                        image_paths.append(str(img_path.resolve()))
+                image_paths = _extract_markdown_image_paths(md_text, mineru_root)
 
         state.kb_md_images = list(dict.fromkeys(image_paths))
+        state.pagecontent = _backfill_pagecontent_asset_refs(
+            state.pagecontent or [],
+            state.kb_md_images,
+        )
         return state
 
     async def caption_images(state: Paper2FigureState) -> Paper2FigureState:
@@ -330,6 +447,10 @@ def create_kb_page_content_graph() -> GenericGraphBuilder:  # noqa: N802
         if not query:
             state.filtered_image_items = list(state.image_items)
             return state
+        if not _has_registered_agent("image_filter_agent"):
+            log.warning("[kb_page_content] image_filter_agent 未注册，跳过图片筛选。")
+            state.filtered_image_items = list(state.image_items)
+            return state
 
         agent = create_react_agent(
             name="image_filter_agent",
@@ -344,6 +465,9 @@ def create_kb_page_content_graph() -> GenericGraphBuilder:  # noqa: N802
 
     async def insert_images_agent(state: Paper2FigureState) -> Paper2FigureState:
         if not getattr(state, "filtered_image_items", None):
+            return state
+        if not _has_registered_agent("kb_image_insert_agent"):
+            log.warning("[kb_page_content] kb_image_insert_agent 未注册，跳过图片插入。")
             return state
         agent = create_react_agent(
             name="kb_image_insert_agent",

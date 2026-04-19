@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import List, Optional, Tuple
 
 from workflow_engine.logger import get_logger
+from workflow_engine.toolkits.multimodaltool.mineru_tool import run_mineru_pdf_extract_http
 from workflow_engine.utils import get_project_root
 
 from fastapi_app.notebook_paths import NotebookPaths
@@ -298,14 +299,9 @@ class SourceManager:
 
     async def _run_mineru(self, pdf_path: Path, output_dir: Path) -> None:
         """Run MinerU on a PDF file."""
-        from workflow_engine.toolkits.multimodaltool.mineru_tool import run_mineru_pdf_extract
-        await asyncio.to_thread(
-            run_mineru_pdf_extract,
+        await run_mineru_pdf_extract_http(
             str(pdf_path),
             str(output_dir),
-            "modelscope",
-            None,
-            "pipeline",
         )
 
     def _generate_markdown(

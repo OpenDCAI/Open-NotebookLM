@@ -8,11 +8,26 @@ from workflow_engine.utils import get_project_root
 from workflow_engine.logger import get_logger
 from workflow_engine.toolkits.multimodaltool.utils import (
     Provider, detect_provider, extract_base64, encode_image_to_base64 as _encode_image_to_base64,
-    is_gemini_model as _is_gemini_model, is_gemini_25, is_gemini_3_pro
+    is_gemini_model as _is_gemini_model, is_gemini_25, is_gemini_3_pro, is_gemini_31_flash_image
 )
 from workflow_engine.toolkits.multimodaltool.providers import get_provider
 
 log = get_logger(__name__)
+
+
+def _resolve_generation_timeout(model: str, resolution: str, timeout: int) -> int:
+    """
+    Gemini image models need longer timeouts than text models.
+    """
+    if not _is_gemini_model(model):
+        return timeout
+
+    timeout_map = {"1K": 40, "2K": 180, "4K": 350}
+
+    if is_gemini_3_pro(model) or is_gemini_31_flash_image(model):
+        return timeout_map.get(resolution, 180)
+
+    return timeout
 
 
 def _resolve_image_generation_config(
@@ -321,10 +336,7 @@ async def generate_or_edit_and_save_image_async(
     
     api_url, api_key, model = _resolve_image_generation_config(api_url, api_key, model)
 
-    # 动态调整超时（保留原有针对 Gemini-3 Pro 的逻辑）
-    if _is_gemini_model(model) and is_gemini_3_pro(model):
-        timeout_map = {"1K": 40, "2K": 180, "4K": 350}
-        timeout = timeout_map.get(resolution, 180)
+    timeout = _resolve_generation_timeout(model, resolution, timeout)
     
     log.info(f"generate_or_edit: model={model}, provider_check={detect_provider(api_url)}")
 

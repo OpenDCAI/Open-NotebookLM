@@ -9,8 +9,8 @@ cd "$PROJECT_ROOT"
 
 mkdir -p logs
 
-BACKEND_PORT=8213
-FRONTEND_PORT=3001
+BACKEND_PORT=18213
+FRONTEND_PORT=13001
 BACKEND_HEALTH_URL="http://127.0.0.1:${BACKEND_PORT}/health"
 FRONTEND_HEALTH_URL="http://127.0.0.1:${FRONTEND_PORT}/"
 LOCK_FILE="$PROJECT_ROOT/logs/monitor.lock"
@@ -25,6 +25,8 @@ NPM_BIN="${NPM_BIN:-$(command -v npm 2>/dev/null || true)}"
 # 解析 Python（优先 conda 环境）
 if [[ -z "$PYTHON_BIN" ]]; then
     for candidate in \
+        "/mnt/paper2any/conda-envs/envs/thinkflow2/bin/python" \
+        "/mnt/paper2any/conda-envs/envs/thinkflow/bin/python" \
         "${CONDA_PREFIX:-}/bin/python" \
         "/root/miniconda3/envs/szl-dev/bin/python" \
         "$(command -v python3 2>/dev/null || true)" \

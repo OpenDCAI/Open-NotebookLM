@@ -66,11 +66,11 @@ def _from_outputs_url(url_or_path: str) -> str:
     if os.path.isabs(url_or_path) and os.path.exists(url_or_path):
         return url_or_path
 
-    # 简单判断是否是 http URL
-    if not url_or_path.startswith("http") and not url_or_path.startswith("/outputs/"):
+    # 对历史脏数据做兼容修复：即便路径前面被重复拼了 project_root，
+    # 只要里面仍然包含 /outputs/，都按该锚点回推真实磁盘路径。
+    if "/outputs/" not in url_or_path and not url_or_path.startswith("http"):
         return url_or_path
 
-    # 查找 /outputs/ 的位置
     if "/outputs/" not in url_or_path:
         return url_or_path
 

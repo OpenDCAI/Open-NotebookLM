@@ -9,7 +9,7 @@ import {
   X,
 } from 'lucide-react';
 
-import { apiFetch } from '../config/api';
+import { apiFetch, parseJson } from '../config/api';
 
 type Props = {
   notebookId: string;
@@ -51,6 +51,8 @@ export function ThinkFlowAddSourceModal({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+  const effectiveUserId = userId || 'local';
+  const effectiveEmail = email || effectiveUserId || 'local';
 
   // URL tab
   const [urlValue, setUrlValue] = useState('');
@@ -91,15 +93,12 @@ export function ThinkFlowAddSourceModal({
         for (const file of Array.from(fileList)) {
           const formData = new FormData();
           formData.append('file', file);
-          formData.append('email', email);
-          formData.append('user_id', userId);
+          formData.append('email', effectiveEmail);
+          formData.append('user_id', effectiveUserId);
           formData.append('notebook_id', notebookId);
           formData.append('notebook_title', notebookTitle);
           const res = await apiFetch('/api/v1/kb/upload', { method: 'POST', body: formData });
-          if (!res.ok) {
-            const body = await res.json().catch(() => ({ detail: res.statusText }));
-            throw new Error(body.detail || '上传失败');
-          }
+          await parseJson(res);
         }
         setSuccess(`已上传 ${fileList.length} 个文件`);
         onSourceAdded();
@@ -109,7 +108,7 @@ export function ThinkFlowAddSourceModal({
         setLoading(false);
       }
     },
-    [email, userId, notebookId, notebookTitle, onSourceAdded, resetMessages],
+    [effectiveEmail, effectiveUserId, notebookId, notebookTitle, onSourceAdded, resetMessages],
   );
 
   const handleFileChange = useCallback(
@@ -139,7 +138,13 @@ export function ThinkFlowAddSourceModal({
       const res = await apiFetch('/api/v1/kb/import-url-as-source', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notebook_id: notebookId, email, user_id: userId, notebook_title: notebookTitle, url: trimmed }),
+        body: JSON.stringify({
+          notebook_id: notebookId,
+          email: effectiveEmail,
+          user_id: effectiveUserId,
+          notebook_title: notebookTitle,
+          url: trimmed,
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({ detail: res.statusText }));
@@ -153,7 +158,7 @@ export function ThinkFlowAddSourceModal({
     } finally {
       setLoading(false);
     }
-  }, [urlValue, notebookId, email, userId, notebookTitle, onSourceAdded, resetMessages]);
+  }, [urlValue, notebookId, effectiveEmail, effectiveUserId, notebookTitle, onSourceAdded, resetMessages]);
 
   // ── Text Paste ──
   const handleTextAdd = useCallback(async () => {
@@ -164,7 +169,14 @@ export function ThinkFlowAddSourceModal({
       const res = await apiFetch('/api/v1/kb/add-text-source', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ notebook_id: notebookId, email, user_id: userId, notebook_title: notebookTitle, title: textTitle.trim() || '直接输入', content: textContent }),
+        body: JSON.stringify({
+          notebook_id: notebookId,
+          email: effectiveEmail,
+          user_id: effectiveUserId,
+          notebook_title: notebookTitle,
+          title: textTitle.trim() || '直接输入',
+          content: textContent,
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({ detail: res.statusText }));
@@ -179,7 +191,7 @@ export function ThinkFlowAddSourceModal({
     } finally {
       setLoading(false);
     }
-  }, [textContent, textTitle, notebookId, email, userId, notebookTitle, onSourceAdded, resetMessages]);
+  }, [textContent, textTitle, notebookId, effectiveEmail, effectiveUserId, notebookTitle, onSourceAdded, resetMessages]);
 
   // ── Fast Research ──
   const handleFastSearch = useCallback(async () => {
@@ -228,8 +240,8 @@ export function ThinkFlowAddSourceModal({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           notebook_id: notebookId,
-          email,
-          user_id: userId,
+          email: effectiveEmail,
+          user_id: effectiveUserId,
           notebook_title: notebookTitle,
           items: selected.map((r) => ({ title: r.title, link: r.link, snippet: r.snippet })),
         }),
@@ -247,7 +259,7 @@ export function ThinkFlowAddSourceModal({
     } finally {
       setImportingLinks(false);
     }
-  }, [fastResults, notebookId, email, userId, notebookTitle, onSourceAdded, resetMessages]);
+  }, [fastResults, notebookId, effectiveEmail, effectiveUserId, notebookTitle, onSourceAdded, resetMessages]);
 
   // ── Deep Research ──
   const handleDeepResearch = useCallback(async () => {
@@ -258,7 +270,13 @@ export function ThinkFlowAddSourceModal({
       const res = await apiFetch('/api/v1/kb/deep-research', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ query: deepTopic.trim(), notebook_id: notebookId, notebook_title: notebookTitle, user_id: userId, email }),
+        body: JSON.stringify({
+          query: deepTopic.trim(),
+          notebook_id: notebookId,
+          notebook_title: notebookTitle,
+          user_id: effectiveUserId,
+          email: effectiveEmail,
+        }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({ detail: res.statusText }));
@@ -272,7 +290,7 @@ export function ThinkFlowAddSourceModal({
     } finally {
       setLoading(false);
     }
-  }, [deepTopic, notebookId, notebookTitle, userId, email, onSourceAdded, resetMessages]);
+  }, [deepTopic, notebookId, notebookTitle, effectiveUserId, effectiveEmail, onSourceAdded, resetMessages]);
 
   if (!open) return null;
 

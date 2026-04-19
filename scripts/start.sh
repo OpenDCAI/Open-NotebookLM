@@ -11,6 +11,8 @@ cd "$PROJECT_ROOT"
 # ── Python 解析 ───────────────────────────────────────────────────────────────
 resolve_python() {
     local candidates=(
+        "/mnt/paper2any/conda-envs/envs/thinkflow2/bin/python"
+        "/mnt/paper2any/conda-envs/envs/thinkflow/bin/python"
         "${CONDA_PREFIX:-}/bin/python"
         "/root/miniconda3/envs/szl-dev/bin/python"
         "$(command -v python3 2>/dev/null || true)"
@@ -26,26 +28,40 @@ PYTHON_BIN="$(resolve_python)"
 NPM_BIN="$(command -v npm 2>/dev/null)" || { echo "错误: 找不到 npm"; exit 1; }
 
 # ── 清理旧进程 ────────────────────────────────────────────────────────────────
+BACKEND_PORT=18213
+FRONTEND_PORT=13001
+
+kill_port() {
+    local port="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -ti:"${port}" | xargs kill -9 2>/dev/null || true
+        return 0
+    fi
+    if command -v fuser >/dev/null 2>&1; then
+        fuser -k "${port}"/tcp 2>/dev/null || true
+    fi
+}
+
 echo "清理旧进程..."
-lsof -ti:8213 | xargs kill -9 2>/dev/null || true
-lsof -ti:3001  | xargs kill -9 2>/dev/null || true
+kill_port "${BACKEND_PORT}"
+kill_port "${FRONTEND_PORT}"
 pkill -9 -f "uvicorn fastapi_app.main:app" 2>/dev/null || true
-pkill -9 -f "vite.*--port 3001"            2>/dev/null || true
+pkill -9 -f "vite.*--port ${FRONTEND_PORT}" 2>/dev/null || true
 pkill -9 -f "bash scripts/monitor.sh"      2>/dev/null || true
 sleep 1
 
 # ── 启动服务 ──────────────────────────────────────────────────────────────────
 mkdir -p logs
 
-echo "启动后端 (port 8213)..."
+echo "启动后端 (port ${BACKEND_PORT})..."
 nohup "$PYTHON_BIN" -m uvicorn fastapi_app.main:app \
-    --host 0.0.0.0 --port 8213 \
+    --host 0.0.0.0 --port "${BACKEND_PORT}" \
     > logs/backend.log 2>&1 &
 BACKEND_PID=$!
 
-echo "启动前端 (port 3001)..."
+echo "启动前端 (port ${FRONTEND_PORT})..."
 cd frontend_zh
-nohup "$NPM_BIN" run dev -- --port 3001 --host 0.0.0.0 \
+nohup "$NPM_BIN" run dev -- --port "${FRONTEND_PORT}" --host 0.0.0.0 \
     > ../logs/frontend.log 2>&1 &
 FRONTEND_PID=$!
 cd ..
@@ -61,8 +77,8 @@ echo ""
 echo "======================================="
 echo "  ThinkFlow 已启动"
 echo "======================================="
-echo "  后端: http://localhost:8213"
-echo "  前端: http://localhost:3001"
+echo "  后端: http://localhost:${BACKEND_PORT}"
+echo "  前端: http://localhost:${FRONTEND_PORT}"
 echo "  PID:  backend=$BACKEND_PID  frontend=$FRONTEND_PID  monitor=$MONITOR_PID"
 echo "  日志: logs/backend.log  logs/frontend.log"
 echo "  停止: ./scripts/stop.sh"

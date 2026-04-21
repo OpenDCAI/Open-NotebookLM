@@ -13,6 +13,8 @@ from typing import Optional
 _CONFIG_DIR = Path(__file__).resolve().parent
 _APP_DIR = _CONFIG_DIR.parent
 _ENV_FILE = _APP_DIR / ".env"
+_PROJECT_ROOT = _APP_DIR.parent
+_ROOT_ENV_FILE = _PROJECT_ROOT / "env"
 
 
 class AppSettings(BaseSettings):
@@ -126,7 +128,11 @@ class AppSettings(BaseSettings):
     MINERU_API_TOKEN: Optional[str] = None
 
     class Config:
-        env_file = str(_ENV_FILE)
+        env_file = tuple(
+            str(path)
+            for path in (_ENV_FILE, _ROOT_ENV_FILE)
+            if path.exists()
+        )
         env_file_encoding = "utf-8"
         case_sensitive = True
 

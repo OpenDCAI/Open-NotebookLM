@@ -304,6 +304,25 @@ class Paper2PPTResponse(BaseModel):
 
 # ===================== Flashcard 闪卡相关 =====================
 
+class FlashcardCitation(BaseModel):
+    """闪卡引用来源"""
+    source_number: int
+    file_name: Optional[str] = None
+    file_path: Optional[str] = None
+    preview: Optional[str] = None
+    chunk_index: Optional[int] = None
+
+
+class FlashcardGenerationConfig(BaseModel):
+    """闪卡整组生成配置"""
+    difficulty_level: Optional[Literal["basic", "intermediate", "advanced"]] = None
+    card_count: Optional[int] = None
+    topic: Optional[str] = None
+    test_focus: Optional[str] = None
+    language: Optional[str] = None
+    generated_at: Optional[str] = None
+
+
 class Flashcard(BaseModel):
     """单个闪卡"""
     id: str
@@ -314,6 +333,7 @@ class Flashcard(BaseModel):
     source_file: Optional[str] = None
     source_excerpt: Optional[str] = None
     tags: List[str] = []
+    citations: List[FlashcardCitation] = []
     created_at: Optional[str] = None
 
 
@@ -327,7 +347,10 @@ class GenerateFlashcardsRequest(BaseModel):
     api_key: str
     model: str = "deepseek-v3.2"
     language: str = "zh"
-    card_count: int = 20
+    card_count: Optional[int] = 20
+    difficulty_level: Optional[Literal["basic", "intermediate", "advanced"]] = None
+    topic: Optional[str] = None
+    test_focus: Optional[str] = None
 
 
 class GenerateFlashcardsResponse(BaseModel):
@@ -337,6 +360,7 @@ class GenerateFlashcardsResponse(BaseModel):
     flashcard_set_id: str = ""
     total_count: int = 0
     result_path: str = ""
+    generation_config: Optional[FlashcardGenerationConfig] = None
 
 
 # ===================== Quiz 相关模型 =====================

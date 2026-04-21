@@ -205,6 +205,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   const [flashcards, setFlashcards] = useState<any[]>([]);
   const [showFlashcardViewer, setShowFlashcardViewer] = useState(false);
   const [flashcardSetId, setFlashcardSetId] = useState<string>('');
+  const [flashcardGenerationConfig, setFlashcardGenerationConfig] = useState<any>(null);
 
   // Quiz state
   const [quizQuestions, setQuizQuestions] = useState<any[]>([]);
@@ -274,7 +275,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     ppt: { llmModel: 'deepseek-v3.2', genFigModel: 'gemini-2.5-flash-image', stylePreset: 'modern', stylePrompt: '', language: 'zh', page_count: '10' },
     mindmap: { llmModel: 'deepseek-v3.2', mindmapStyle: 'default' },
     drawio: { llmModel: 'deepseek-v3.2', diagramType: 'auto', diagramStyle: 'default', language: 'zh' },
-    flashcard: { llmModel: 'deepseek-v3.2', language: 'zh', cardCount: '20' },
+    flashcard: { llmModel: 'deepseek-v3.2', language: 'zh', cardCount: '', difficultyLevel: '', topic: '', testFocus: '' },
     quiz: { llmModel: 'deepseek-v3.2', language: 'zh', questionCount: '10' },
     podcast: { llmModel: 'deepseek-v3.2', ttsType: 'gemini-tts-online', ttsModel: 'gemini-2.5-pro-preview-tts', voiceName: 'Puck', voiceNameB: 'Charon', podcastMode: 'monologue', podcastLanguage: 'zh' },
     video: { llmModel: 'deepseek-v3.2' },
@@ -299,7 +300,15 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     setStudioConfigByTool((prev) => {
       const next = { ...prev, [tool]: { ...(prev[tool] || defaultByTool[tool]), ...patch } };
       try {
-        localStorage.setItem(STORAGE_STUDIO_CONFIG, JSON.stringify(next));
+        const persistable = { ...next };
+        persistable.flashcard = {
+          ...persistable.flashcard,
+          difficultyLevel: '',
+          topic: '',
+          testFocus: '',
+          cardCount: '',
+        };
+        localStorage.setItem(STORAGE_STUDIO_CONFIG, JSON.stringify(persistable));
       } catch (_) {}
       return next;
     });
@@ -404,6 +413,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       if (item.type === 'flashcard') {
         setFlashcards(data.flashcards || []);
         setFlashcardSetId(data.id || '');
+        setFlashcardGenerationConfig(data.generation_config || null);
         setShowFlashcardViewer(true);
       } else {
         setQuizQuestions(data.questions || []);
@@ -1834,12 +1844,16 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
         };
       } else if (tool === 'flashcard') {
         const cfg = getStudioConfig('flashcard');
+        const parsedCardCount = parseInt(String(cfg.cardCount || ''), 10);
         bodyData = {
           ...baseBody,
           file_paths: selectedFileUrls,
           model: cfg.llmModel || 'deepseek-v3.2',
           language: cfg.language || 'zh',
-          card_count: Math.max(5, Math.min(50, parseInt(String(cfg.cardCount || '20'), 10) || 20)),
+          card_count: Number.isNaN(parsedCardCount) ? null : Math.max(1, Math.min(50, parsedCardCount)),
+          difficulty_level: cfg.difficultyLevel || null,
+          topic: (cfg.topic || '').trim() || null,
+          test_focus: (cfg.testFocus || '').trim() || null,
         };
       } else if (tool === 'quiz') {
         const cfg = getStudioConfig('quiz');
@@ -1941,6 +1955,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
       } else if (tool === 'flashcard') {
         setFlashcards(data.flashcards || []);
         setFlashcardSetId(data.flashcard_set_id || '');
+        setFlashcardGenerationConfig(data.generation_config || null);
         if (data.flashcards?.length) setShowFlashcardViewer(true);
         const fcSetId = (data.flashcard_set_id || '').replace('flashcard_', '');
         setOutputFeed(prev => [
@@ -3111,23 +3126,52 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                         <label className="block text-xs font-medium text-gray-500 mb-1">卡片数量</label>
                         <input
                           type="number"
-                          min={5}
+                          min={1}
                           max={50}
-                          value={c.cardCount ?? '20'}
+                          value={c.cardCount ?? ''}
                           onChange={(e) => {
                             const v = e.target.value.replace(/\D/g, '');
                             if (v === '') { setStudioConfigForTool('flashcard', { cardCount: '' }); return; }
                             const n = parseInt(v, 10);
-                            if (!Number.isNaN(n)) setStudioConfigForTool('flashcard', { cardCount: String(Math.max(5, Math.min(50, n))) });
+                            if (!Number.isNaN(n)) setStudioConfigForTool('flashcard', { cardCount: String(Math.max(1, Math.min(50, n))) });
                           }}
-                          onBlur={(e) => {
-                            const n = parseInt(e.target.value || '20', 10);
-                            if (Number.isNaN(n) || n < 5 || n > 50) setStudioConfigForTool('flashcard', { cardCount: '20' });
-                          }}
-                          placeholder="5–50"
+                          placeholder="Leave empty for default"
                           className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
                         />
-                        <p className="text-xs text-gray-400 mt-0.5">5–50 张卡片</p>
+                        <p className="text-xs text-gray-400 mt-0.5">Leave empty to keep the current default behavior.</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Difficulty</label>
+                        <select
+                          value={c.difficultyLevel || ''}
+                          onChange={(e) => setStudioConfigForTool('flashcard', { difficultyLevel: e.target.value })}
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+                        >
+                          <option value="">Default</option>
+                          <option value="basic">Basic</option>
+                          <option value="intermediate">Intermediate</option>
+                          <option value="advanced">Advanced</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Topic</label>
+                        <input
+                          type="text"
+                          value={c.topic || ''}
+                          onChange={(e) => setStudioConfigForTool('flashcard', { topic: e.target.value })}
+                          placeholder="e.g. Transformer architecture, experiment results, core terms"
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-gray-500 mb-1">Test Focus</label>
+                        <input
+                          type="text"
+                          value={c.testFocus || ''}
+                          onChange={(e) => setStudioConfigForTool('flashcard', { testFocus: e.target.value })}
+                          placeholder="e.g. concept recall, experimental conclusions, formula memory"
+                          className="w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+                        />
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-gray-500 mb-1">LLM 模型</label>
@@ -3949,6 +3993,13 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
           >
             <FlashcardViewer
               flashcards={flashcards}
+              generationConfig={flashcardGenerationConfig}
+              onOpenCitation={(reference) => {
+                const targetFile = findFileForCitation(reference as CitationReference);
+                if (targetFile) {
+                  void openSourceDetail(targetFile, reference as CitationReference);
+                }
+              }}
               onClose={() => setShowFlashcardViewer(false)}
             />
           </motion.div>

@@ -29,6 +29,7 @@ class OutlineRequest(BaseModel):
     api_key: Optional[str] = None
     model: Optional[str] = None
     enable_images: Optional[bool] = None
+    flashcard_config: Optional[Dict[str, Any]] = None
 
 
 class SaveOutlineRequest(BaseModel):
@@ -127,6 +128,7 @@ async def create_outline(request: OutlineRequest) -> Dict[str, Any]:
         api_key=request.api_key,
         model=request.model,
         enable_images=request.enable_images,
+        flashcard_config=request.flashcard_config,
     )
     return {"success": True, "output": item}
 

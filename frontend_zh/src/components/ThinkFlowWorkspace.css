@@ -4381,12 +4381,14 @@
 .thinkflow-flashcard-stage {
   position: relative;
   width: 100%;
-  min-height: 280px;
-  perspective: 1000px;
+  min-height: 420px;
+  perspective: 1400px;
   border: 0;
   background: transparent;
   cursor: pointer;
   text-align: left;
+  transform-style: preserve-3d;
+  transition: transform 240ms ease, filter 240ms ease;
 }
 
 .thinkflow-flashcard-face {
@@ -4394,43 +4396,104 @@
   inset: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  padding: 20px;
-  border-radius: 18px;
-  border: 1px solid rgba(223, 230, 240, 0.98);
-  background: var(--tf-bg-secondary);
-  box-shadow: 0 12px 30px rgba(25, 34, 52, 0.06);
+  gap: 16px;
+  padding: 24px;
+  border-radius: 24px;
+  border: 1px solid rgba(255, 255, 255, 0.38);
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.68), rgba(255, 255, 255, 0) 34%),
+    linear-gradient(145deg, rgba(248, 250, 252, 0.96), rgba(233, 239, 246, 0.94));
+  box-shadow:
+    0 24px 60px rgba(15, 23, 42, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.65);
   backface-visibility: hidden;
-  transition: transform 500ms ease;
+  -webkit-backface-visibility: hidden;
+  overflow: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform-style: preserve-3d;
+  transition:
+    transform 560ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 120ms linear;
+  isolation: isolate;
+}
+
+.thinkflow-flashcard-stage:hover {
+  transform: translateY(-4px) rotateX(1.5deg) rotateY(-1.5deg);
+  filter: saturate(1.06);
+}
+
+.thinkflow-flashcard-face::before {
+  content: '';
+  position: absolute;
+  inset: -24%;
+  background:
+    conic-gradient(from 180deg, rgba(255, 255, 255, 0), rgba(255, 255, 255, 0.34), rgba(255, 255, 255, 0));
+  opacity: 0.7;
+  transform: translate3d(-18%, -12%, 0) rotate(8deg);
+  animation: thinkflow-flashcard-sheen 7.2s linear infinite;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.thinkflow-flashcard-face::after {
+  content: '';
+  position: absolute;
+  inset: auto -14% 14% 48%;
+  height: 140px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(96, 165, 250, 0.22), rgba(255, 255, 255, 0));
+  filter: blur(12px);
+  opacity: 0.78;
+  animation: thinkflow-flashcard-scan 4.8s ease-in-out infinite;
+  pointer-events: none;
+  z-index: 0;
 }
 
 .thinkflow-flashcard-face.is-front {
   transform: rotateY(0deg);
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 2;
 }
 
 .thinkflow-flashcard-face.is-back {
   transform: rotateY(180deg);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1;
 }
 
 .thinkflow-flashcard-stage.is-flipped .thinkflow-flashcard-face.is-front {
   transform: rotateY(-180deg);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 1;
 }
 
 .thinkflow-flashcard-stage.is-flipped .thinkflow-flashcard-face.is-back {
   transform: rotateY(0deg);
+  opacity: 1;
+  pointer-events: auto;
+  z-index: 2;
 }
 
 .thinkflow-flashcard-face h3 {
   margin: 0;
-  font-size: 18px;
-  line-height: 1.5;
+  font-size: 22px;
+  line-height: 1.55;
   color: var(--tf-text);
+  position: relative;
+  z-index: 1;
 }
 
 .thinkflow-flashcard-face-top {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 8px;
+  position: relative;
+  z-index: 1;
 }
 
 .thinkflow-flashcard-hint {
@@ -4439,7 +4502,334 @@
   gap: 6px;
   margin-top: auto;
   font-size: 12px;
+  color: rgba(15, 23, 42, 0.62);
+  position: relative;
+  z-index: 1;
+}
+
+.thinkflow-study-shell-flashcard {
+  gap: 18px;
+}
+
+.thinkflow-flashcard-face-glow {
+  position: absolute;
+  inset: auto -10% 58% 40%;
+  height: 180px;
+  background: radial-gradient(circle, rgba(79, 70, 229, 0.24), rgba(79, 70, 229, 0));
+  filter: blur(14px);
+  pointer-events: none;
+  animation: thinkflow-flashcard-glow 5.2s ease-in-out infinite;
+}
+
+.thinkflow-flashcard-stage.is-basic .thinkflow-flashcard-face {
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.74), rgba(255, 255, 255, 0) 34%),
+    linear-gradient(145deg, rgba(244, 250, 255, 0.98), rgba(225, 243, 255, 0.96));
+}
+
+.thinkflow-flashcard-stage.is-intermediate .thinkflow-flashcard-face {
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.7), rgba(255, 255, 255, 0) 34%),
+    linear-gradient(145deg, rgba(246, 243, 255, 0.98), rgba(229, 220, 255, 0.94));
+}
+
+.thinkflow-flashcard-stage.is-intermediate .thinkflow-flashcard-face h3,
+.thinkflow-flashcard-stage.is-intermediate .thinkflow-study-card-answer p,
+.thinkflow-flashcard-stage.is-intermediate .thinkflow-study-card-quote p {
+  color: #1e1b4b;
+}
+
+.thinkflow-flashcard-stage.is-intermediate .thinkflow-study-card-answer,
+.thinkflow-flashcard-stage.is-intermediate .thinkflow-study-card-quote,
+.thinkflow-flashcard-stage.is-intermediate .thinkflow-flashcard-citation-card {
+  background: rgba(255, 255, 255, 0.82);
+  border-color: rgba(109, 40, 217, 0.16);
+}
+
+.thinkflow-flashcard-stage.is-intermediate .thinkflow-study-card-answer span,
+.thinkflow-flashcard-stage.is-intermediate .thinkflow-study-card-quote strong,
+.thinkflow-flashcard-stage.is-intermediate .thinkflow-flashcard-citation-card strong {
+  color: #4338ca;
+}
+
+.thinkflow-flashcard-stage.is-advanced .thinkflow-flashcard-face {
+  background:
+    radial-gradient(circle at top right, rgba(255, 255, 255, 0.3), rgba(255, 255, 255, 0) 30%),
+    linear-gradient(145deg, rgba(26, 32, 44, 0.98), rgba(51, 65, 85, 0.96));
+  color: #f8fafc;
+}
+
+.thinkflow-flashcard-stage.is-advanced .thinkflow-flashcard-face h3,
+.thinkflow-flashcard-stage.is-advanced .thinkflow-study-card-answer p,
+.thinkflow-flashcard-stage.is-advanced .thinkflow-flashcard-config-grid,
+.thinkflow-flashcard-stage.is-advanced .thinkflow-study-card-quote p {
+  color: #f8fafc;
+}
+
+.thinkflow-flashcard-stage.is-advanced .thinkflow-study-card-answer,
+.thinkflow-flashcard-stage.is-advanced .thinkflow-study-card-quote,
+.thinkflow-flashcard-stage.is-advanced .thinkflow-flashcard-citation-card {
+  background: rgba(15, 23, 42, 0.62);
+  border-color: rgba(148, 163, 184, 0.24);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, 0.08),
+    0 14px 30px rgba(2, 6, 23, 0.22);
+}
+
+.thinkflow-flashcard-stage.is-advanced .thinkflow-study-card-answer span,
+.thinkflow-flashcard-stage.is-advanced .thinkflow-study-card-quote strong,
+.thinkflow-flashcard-stage.is-advanced .thinkflow-flashcard-citation-card strong {
+  color: #bae6fd;
+}
+
+.thinkflow-flashcard-stage.is-advanced .thinkflow-flashcard-citation-card p,
+.thinkflow-flashcard-stage.is-advanced .thinkflow-flashcard-citation-card span {
+  color: rgba(248, 250, 252, 0.86);
+}
+
+.thinkflow-flashcard-stage.is-advanced .thinkflow-study-card-chip {
+  background: rgba(226, 232, 240, 0.14);
+  color: #e0f2fe;
+}
+
+.thinkflow-flashcard-stage.is-advanced .thinkflow-flashcard-face::after {
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0), rgba(34, 211, 238, 0.28), rgba(255, 255, 255, 0));
+}
+
+.thinkflow-flashcard-front-index {
+  font-size: 54px;
+  font-weight: 700;
+  letter-spacing: -0.04em;
+  color: rgba(15, 23, 42, 0.08);
+  position: absolute;
+  top: 52px;
+  right: 24px;
+  z-index: 0;
+}
+
+.thinkflow-study-inline-citation {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 2px;
+  padding: 1px 8px;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.14);
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.thinkflow-study-inline-citation.is-active {
+  background: rgba(59, 130, 246, 0.24);
+  box-shadow: inset 0 0 0 1px rgba(29, 78, 216, 0.22);
+}
+
+.thinkflow-flashcard-citation-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 4px;
+  position: relative;
+  z-index: 1;
+}
+
+.thinkflow-flashcard-citation-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.thinkflow-flashcard-citation-tab {
+  border: 0;
+  border-radius: 999px;
+  padding: 6px 12px;
+  background: rgba(148, 163, 184, 0.16);
+  color: var(--tf-text);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.thinkflow-flashcard-citation-tab.is-active {
+  background: rgba(59, 130, 246, 0.16);
+  color: #1d4ed8;
+}
+
+.thinkflow-flashcard-citation-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.62);
+  box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.14);
+  backdrop-filter: blur(8px);
+}
+
+.thinkflow-flashcard-citation-card strong {
+  font-size: 13px;
+  color: var(--tf-text);
+}
+
+.thinkflow-flashcard-citation-card p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--tf-text-soft);
+}
+
+.thinkflow-flashcard-citation-card span {
+  font-size: 12px;
   color: var(--tf-muted);
+}
+
+.thinkflow-flashcard-open-source-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  border: 0;
+  border-radius: 999px;
+  padding: 8px 12px;
+  background: rgba(15, 23, 42, 0.86);
+  color: #fff;
+  cursor: pointer;
+}
+
+.thinkflow-flashcard-config-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 16px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(14, 165, 233, 0.1), rgba(99, 102, 241, 0.12));
+  border: 1px solid rgba(129, 140, 248, 0.12);
+}
+
+.thinkflow-flashcard-config-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.thinkflow-flashcard-config-head strong {
+  font-size: 13px;
+  color: var(--tf-text);
+}
+
+.thinkflow-flashcard-config-head span {
+  font-size: 12px;
+  color: var(--tf-muted);
+}
+
+.thinkflow-flashcard-config-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  font-size: 12px;
+  color: var(--tf-text-soft);
+}
+
+.thinkflow-flashcard-config-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.thinkflow-flashcard-config-row,
+.thinkflow-flashcard-config-field {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.thinkflow-flashcard-config-row > span,
+.thinkflow-flashcard-config-field label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tf-muted);
+}
+
+.thinkflow-flashcard-difficulty-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.thinkflow-flashcard-difficulty-btn {
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 999px;
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--tf-text);
+  cursor: pointer;
+}
+
+.thinkflow-flashcard-difficulty-btn.is-active {
+  border-color: rgba(59, 130, 246, 0.38);
+  background: rgba(59, 130, 246, 0.12);
+  color: #1d4ed8;
+}
+
+.thinkflow-flashcard-config-field input {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.92);
+  color: var(--tf-text);
+}
+
+@keyframes thinkflow-flashcard-glow {
+  0%,
+  100% {
+    transform: translate3d(0, 0, 0) scale(0.96);
+    opacity: 0.55;
+  }
+  50% {
+    transform: translate3d(-10px, 10px, 0) scale(1.14);
+    opacity: 0.92;
+  }
+}
+
+@keyframes thinkflow-flashcard-sheen {
+  0% {
+    transform: translate3d(-24%, -18%, 0) rotate(8deg);
+  }
+  100% {
+    transform: translate3d(18%, 14%, 0) rotate(8deg);
+  }
+}
+
+@keyframes thinkflow-flashcard-scan {
+  0%,
+  100% {
+    transform: translate3d(-18px, 0, 0);
+    opacity: 0.2;
+  }
+  50% {
+    transform: translate3d(16px, -8px, 0);
+    opacity: 0.82;
+  }
+}
+
+@media (max-width: 768px) {
+  .thinkflow-flashcard-stage {
+    min-height: 500px;
+    transform: none;
+  }
+
+  .thinkflow-flashcard-face {
+    padding: 18px;
+  }
+
+  .thinkflow-flashcard-front-index {
+    font-size: 42px;
+  }
 }
 
 /* ═══════════════════════════════════════════
@@ -4447,4 +4837,3 @@
    ═══════════════════════════════════════════ */
 
 /* (source-reembed-btn removed — now uses thinkflow-file-action-icon + Upload icon) */
-

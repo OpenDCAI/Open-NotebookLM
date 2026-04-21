@@ -69,6 +69,7 @@ type CitationReference = {
   filePath?: string;
   preview?: string;
   chunkIndex?: number | null;
+  sourceNumber?: string;
 };
 
 type ThinkFlowDocument = {
@@ -175,6 +176,14 @@ type ThinkFlowOutput = {
   enable_images?: boolean;
   page_reviews?: PptPageReview[];
   page_versions?: PptPageVersion[];
+  flashcard_config?: {
+    difficulty_level?: 'basic' | 'intermediate' | 'advanced' | null;
+    card_count?: number | null;
+    topic?: string | null;
+    test_focus?: string | null;
+    language?: string | null;
+    generated_at?: string | null;
+  };
   created_at: string;
   updated_at: string;
 };
@@ -188,6 +197,13 @@ type FlashcardItem = {
   source_file?: string | null;
   source_excerpt?: string | null;
   tags?: string[];
+  citations?: Array<{
+    source_number?: number;
+    file_name?: string | null;
+    file_path?: string | null;
+    preview?: string | null;
+    chunk_index?: number | null;
+  }>;
   created_at?: string | null;
 };
 
@@ -274,6 +290,12 @@ type DirectOutputIntent = {
   sourceIds: string[];
   sourcePaths: string[];
   sourceNames: string[];
+  flashcardConfig?: {
+    difficulty_level?: 'basic' | 'intermediate' | 'advanced' | null;
+    card_count?: number | null;
+    topic?: string | null;
+    test_focus?: string | null;
+  };
   loading?: boolean;
   errorMessage?: string;
 };
@@ -738,6 +760,16 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const [outputContexts, setOutputContexts] = useState<Record<string, OutputContextState>>({});
   const [pptSourceLockIntent, setPptSourceLockIntent] = useState<PptSourceLockIntent | null>(null);
   const [directOutputIntent, setDirectOutputIntent] = useState<DirectOutputIntent | null>(null);
+  const [flashcardDifficultyLevel, setFlashcardDifficultyLevel] = useState<'basic' | 'intermediate' | 'advanced' | ''>('');
+  const [flashcardCardCount, setFlashcardCardCount] = useState('');
+  const [flashcardTopic, setFlashcardTopic] = useState('');
+  const [flashcardTestFocus, setFlashcardTestFocus] = useState('');
+  const resetFlashcardDraftConfig = () => {
+    setFlashcardDifficultyLevel('');
+    setFlashcardCardCount('');
+    setFlashcardTopic('');
+    setFlashcardTestFocus('');
+  };
 
   const [chatMessages, setChatMessages] = useState<ThinkFlowMessage[]>([
     {
@@ -1412,6 +1444,22 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }
   };
 
+  const openCitationPreview = (reference: CitationReference, fallbackName?: string) => {
+    const preview = String(reference?.preview || '').trim();
+    const sourceName =
+      String(reference?.fileName || fallbackName || reference?.filePath?.split('/').pop() || '').trim() || '来源预览';
+    setSourcePreviewFile({
+      id: `citation-preview-${reference?.sourceNumber || sourceName}`,
+      name: sourceName,
+      type: 'doc',
+      uploadTime: '',
+      url: reference?.filePath || '',
+    });
+    setSourcePreviewContent(preview || '暂无来源预览');
+    setSourcePreviewLoading(false);
+    setSourcePreviewOpen(true);
+  };
+
   const handleDeleteSource = async (file: KnowledgeFile) => {
     // 乐观删除：先从前端列表移除，再异步调后端
     setFiles((prev) => prev.filter((f) => f.id !== file.id));
@@ -1736,6 +1784,15 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   };
 
   const openDirectOutputIntent = async (targetType: Exclude<OutputType, 'ppt'>) => {
+    const nextFlashcardConfig =
+      targetType === 'flashcard'
+        ? {
+            difficulty_level: flashcardDifficultyLevel || null,
+            card_count: flashcardCardCount ? Math.max(1, Math.min(50, Number(flashcardCardCount) || 0)) || null : null,
+            topic: flashcardTopic.trim() || null,
+            test_focus: flashcardTestFocus.trim() || null,
+          }
+        : undefined;
     setGlobalError('');
     setDirectOutputIntent({
       targetType,
@@ -1749,6 +1806,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       sourceIds: [],
       sourcePaths: [],
       sourceNames: [],
+      flashcardConfig: nextFlashcardConfig,
       loading: true,
       errorMessage: '',
     });
@@ -1801,7 +1859,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       sourceIdsOverride: intent.sourceIds,
       sourcePathsOverride: intent.sourcePaths,
       sourceNamesOverride: intent.sourceNames,
+      flashcardConfigOverride: intent.flashcardConfig,
     });
+    if (intent.targetType === 'flashcard') {
+      resetFlashcardDraftConfig();
+    }
   };
 
   const openExistingOutput = async (output: ThinkFlowOutput) => {
@@ -1861,7 +1923,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       candidateNames.some((name) => file.name === name || resolveFileUrl(file).includes(name)),
     );
 
-    if (!target) return;
+    if (!target) return false;
 
     setLeftTab('materials');
     setSelectedIds((previous) => {
@@ -1870,6 +1932,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       next.add(target.id);
       return next;
     });
+    return true;
   };
 
   const renderSourceTooltip = (title: string, preview: string, reference?: CitationReference) => {
@@ -1896,7 +1959,12 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           key={`cite_${part.value}_${index}`}
           type="button"
           className={`thinkflow-citation ${hasMeta ? 'has-tooltip' : ''}`}
-          onClick={() => focusSourceByReference(reference, title)}
+          onClick={() => {
+            const focused = focusSourceByReference(reference, title);
+            if (!focused && (preview || reference?.filePath)) {
+              openCitationPreview(reference || {}, title);
+            }
+          }}
         >
           [{part.value}]
           {renderSourceTooltip(title, preview, reference)}
@@ -2900,6 +2968,12 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       sourceIdsOverride?: string[];
       sourcePathsOverride?: string[];
       sourceNamesOverride?: string[];
+      flashcardConfigOverride?: {
+        difficulty_level?: 'basic' | 'intermediate' | 'advanced' | null;
+        card_count?: number | null;
+        topic?: string | null;
+        test_focus?: string | null;
+      };
     },
   ) => {
     setGlobalError('');
@@ -2935,6 +3009,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         source_names: resolvedSourceNames,
         bound_document_ids: resolvedBoundDocIds,
         enable_images: targetType === 'ppt' ? true : undefined,
+        flashcard_config: targetType === 'flashcard' ? (options?.flashcardConfigOverride || null) : undefined,
       };
       console.info('[ThinkFlow] createOutline payload', outlinePayload);
       const response = await apiFetch('/api/v1/kb/outputs/outline', {
@@ -4359,17 +4434,48 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       tryParseStructuredArray(result.content) ||
       tryParseStructuredArray(result.preview_markdown);
     if (!parsed) return [];
-    return parsed.map((item, index) => ({
-      id: String(item.id || `card_${index}`),
-      question: String(item.question || item.front || '').trim(),
-      answer: String(item.answer || item.back || '').trim(),
-      type: String(item.type || 'qa').trim(),
-      difficulty: item.difficulty ? String(item.difficulty) : null,
-      source_file: item.source_file ? String(item.source_file) : null,
-      source_excerpt: item.source_excerpt ? String(item.source_excerpt) : null,
-      tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag)) : [],
-      created_at: item.created_at ? String(item.created_at) : null,
-    }));
+    const outputSourceNames = activeOutput?.source_names || [];
+    const outputSourcePaths = activeOutput?.source_paths || [];
+    const shouldReplaceGeneratedInput = (value?: string | null) =>
+      Boolean(value && String(value).includes('generation_input.md') && outputSourceNames.length > 0);
+    return parsed.map((item, index) => {
+      const citations = Array.isArray(item.citations)
+        ? item.citations.map((citation: any) => {
+            const sourceNumber =
+              citation?.source_number !== undefined && citation?.source_number !== null
+                ? Number(citation.source_number)
+                : undefined;
+            const sourceIndex = sourceNumber && sourceNumber > 0 ? sourceNumber - 1 : 0;
+            const rawFileName = citation?.file_name ? String(citation.file_name) : null;
+            const rawFilePath = citation?.file_path ? String(citation.file_path) : null;
+            const replacementName = outputSourceNames[sourceIndex] || outputSourceNames[0] || null;
+            const replacementPath = outputSourcePaths[sourceIndex] || outputSourcePaths[0] || null;
+            return {
+              source_number: sourceNumber,
+              file_name: shouldReplaceGeneratedInput(rawFileName) ? replacementName : rawFileName,
+              file_path: shouldReplaceGeneratedInput(rawFilePath) ? replacementPath : rawFilePath,
+              preview: citation?.preview ? String(citation.preview) : null,
+              chunk_index:
+                citation?.chunk_index !== undefined && citation?.chunk_index !== null
+                  ? Number(citation.chunk_index)
+                  : null,
+            };
+          })
+        : [];
+      const sourceFile = item.source_file ? String(item.source_file) : null;
+      return {
+        id: String(item.id || `card_${index}`),
+        question: String(item.question || item.front || '').trim(),
+        answer: String(item.answer || item.back || '').trim(),
+        type: String(item.type || 'qa').trim(),
+        difficulty: item.difficulty ? String(item.difficulty) : null,
+        source_file: shouldReplaceGeneratedInput(sourceFile) ? outputSourceNames[0] || sourceFile : sourceFile,
+        source_excerpt: item.source_excerpt ? String(item.source_excerpt) : null,
+        tags: Array.isArray(item.tags) ? item.tags.map((tag) => String(tag)) : [],
+        citations,
+        created_at: item.created_at ? String(item.created_at) : null,
+      };
+    });
   };
 
   const getQuizQuestionsFromResult = (result: Record<string, any>): QuizQuestionItem[] => {
@@ -4396,11 +4502,38 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }));
   };
 
+  const openFlashcardCitation = (reference: CitationReference) => {
+    const focused = focusSourceByReference(reference, reference.fileName);
+    const target = files.find((file) => {
+      const url = resolveFileUrl(file);
+      if (
+        reference.filePath &&
+        url &&
+        (url === reference.filePath ||
+          url.endsWith(reference.filePath) ||
+          reference.filePath.endsWith(url) ||
+          decodeURIComponent(url) === decodeURIComponent(reference.filePath))
+      ) {
+        return true;
+      }
+      return Boolean(reference.fileName) && file.name === reference.fileName;
+    });
+    if (target) {
+      void handlePreviewSource(target);
+      return;
+    }
+    if (!focused) {
+      setGlobalError('没有找到可打开的完整来源文件，当前仅能查看卡片内来源片段。');
+    }
+  };
+
   const renderFlashcardPreview = (cards: FlashcardItem[]) => {
     if (cards.length === 0) return null;
+    const generationConfig =
+      activeOutput?.result?.generation_config || activeOutput?.flashcard_config || null;
     return (
       <div className="thinkflow-output-preview thinkflow-flashcard-preview">
-        <ThinkFlowFlashcardStudy cards={cards} />
+        <ThinkFlowFlashcardStudy cards={cards} generationConfig={generationConfig} onOpenCitation={openFlashcardCitation} />
       </div>
     );
   };
@@ -4868,6 +5001,115 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                       )}
                     </div>
                   </section>
+
+                  {directOutputIntent.targetType === 'flashcard' ? (
+                    <section className="thinkflow-output-context-group">
+                      <div className="thinkflow-output-context-group-title">闪卡生成条件</div>
+                      <div className="thinkflow-flashcard-config-form">
+                        <div className="thinkflow-flashcard-config-row">
+                          <span>难度等级</span>
+                          <div className="thinkflow-flashcard-difficulty-group">
+                            {[
+                              { value: 'basic', label: '基础' },
+                              { value: 'intermediate', label: '进阶' },
+                              { value: 'advanced', label: '挑战' },
+                            ].map((item) => (
+                              <button
+                                key={item.value}
+                                type="button"
+                                className={`thinkflow-flashcard-difficulty-btn ${
+                                  directOutputIntent.flashcardConfig?.difficulty_level === item.value ? 'is-active' : ''
+                                }`}
+                                onClick={() =>
+                                  setDirectOutputIntent((current) =>
+                                    current && current.targetType === 'flashcard'
+                                      ? {
+                                          ...current,
+                                          flashcardConfig: {
+                                            ...current.flashcardConfig,
+                                            difficulty_level: item.value as 'basic' | 'intermediate' | 'advanced',
+                                          },
+                                        }
+                                      : current,
+                                  )
+                                }
+                              >
+                                {item.label}
+                              </button>
+                            ))}
+                          </div>
+                        </div>
+                        <div className="thinkflow-flashcard-config-field">
+                          <label>卡片数量</label>
+                          <input
+                            type="number"
+                            min={1}
+                            max={50}
+                            value={directOutputIntent.flashcardConfig?.card_count ?? ''}
+                            onChange={(event) => {
+                              const nextValue = event.target.value.replace(/[^\d]/g, '');
+                              setDirectOutputIntent((current) =>
+                                current && current.targetType === 'flashcard'
+                                  ? {
+                                      ...current,
+                                      flashcardConfig: {
+                                        ...current.flashcardConfig,
+                                        card_count: nextValue
+                                          ? Math.max(1, Math.min(50, Number(nextValue) || 0)) || null
+                                          : null,
+                                      },
+                                    }
+                                  : current,
+                              );
+                            }}
+                            placeholder="留空则按当前默认方式生成"
+                          />
+                        </div>
+                        <div className="thinkflow-flashcard-config-field">
+                          <label>主题</label>
+                          <input
+                            type="text"
+                            value={directOutputIntent.flashcardConfig?.topic || ''}
+                            onChange={(event) =>
+                              setDirectOutputIntent((current) =>
+                                current && current.targetType === 'flashcard'
+                                  ? {
+                                      ...current,
+                                      flashcardConfig: {
+                                        ...current.flashcardConfig,
+                                        topic: event.target.value,
+                                      },
+                                    }
+                                  : current,
+                              )
+                            }
+                            placeholder="例如：Transformer 结构、实验结果对比、核心术语"
+                          />
+                        </div>
+                        <div className="thinkflow-flashcard-config-field">
+                          <label>测试内容</label>
+                          <input
+                            type="text"
+                            value={directOutputIntent.flashcardConfig?.test_focus || ''}
+                            onChange={(event) =>
+                              setDirectOutputIntent((current) =>
+                                current && current.targetType === 'flashcard'
+                                  ? {
+                                      ...current,
+                                      flashcardConfig: {
+                                        ...current.flashcardConfig,
+                                        test_focus: event.target.value,
+                                      },
+                                    }
+                                  : current,
+                              )
+                            }
+                            placeholder="例如：只考概念理解、偏实验结论、重点记忆公式"
+                          />
+                        </div>
+                      </div>
+                    </section>
+                  ) : null}
                 </>
               )}
             </div>

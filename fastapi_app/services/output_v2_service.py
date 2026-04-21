@@ -475,6 +475,7 @@ class OutputV2Service:
                     result[key] = data[key]
             result["total_count"] = data.get("total_count", 0)
             result["source_files"] = data.get("source_files", [])
+            result["generation_config"] = data.get("generation_config")
             result["download_url"] = _to_outputs_url(str(data_file))
             # Preserve created_at from data if available
             created_at = data.get("created_at") or created_at
@@ -556,6 +557,7 @@ class OutputV2Service:
             "source_names": [],
             "bound_document_ids": [],
             "enable_images": False,
+            "flashcard_config": data.get("generation_config") if feature == "flashcard" else {},
             "created_at": created_at,
             "updated_at": created_at,
             "result": result,
@@ -1634,6 +1636,7 @@ class OutputV2Service:
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         enable_images: Optional[bool] = None,
+        flashcard_config: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         if target_type not in self.SUPPORTED_TYPES:
             raise HTTPException(status_code=400, detail="Unsupported output type")
@@ -1737,6 +1740,7 @@ class OutputV2Service:
             "bound_document_ids": bound_document_ids or [],
             "bound_document_titles": [doc.get("title") or "参考文档" for doc in bound_documents],
             "enable_images": normalized_enable_images,
+            "flashcard_config": flashcard_config or {},
             "created_at": now,
             "updated_at": now,
             "result": result_payload,
@@ -1948,9 +1952,12 @@ class OutputV2Service:
         notebook_title: str,
         prompt: str,
         page_count: int,
-        api_url: Optional[str],
-        api_key: Optional[str],
-        model: Optional[str],
+        citation_source_paths: Optional[List[str]] = None,
+        citation_source_names: Optional[List[str]] = None,
+        flashcard_config: Optional[Dict[str, Any]] = None,
+        api_url: Optional[str] = None,
+        api_key: Optional[str] = None,
+        model: Optional[str] = None,
     ) -> Dict[str, Any]:
         from fastapi_app.routers.kb import (
             generate_flashcards,
@@ -1988,6 +1995,7 @@ class OutputV2Service:
                 language="zh",
             )
         if target_type == "flashcard":
+            flashcard_config = flashcard_config or {}
             return await generate_flashcards(
                 file_paths=[str(md_path)],
                 email=email,
@@ -1997,7 +2005,12 @@ class OutputV2Service:
                 api_url=api_url,
                 api_key=api_key,
                 model=payload_model,
-                card_count=page_count,
+                card_count=flashcard_config.get("card_count") if flashcard_config.get("card_count") is not None else page_count,
+                difficulty_level=flashcard_config.get("difficulty_level"),
+                topic=flashcard_config.get("topic"),
+                test_focus=flashcard_config.get("test_focus"),
+                citation_source_paths=citation_source_paths or [],
+                citation_source_names=citation_source_names or [],
             )
         if target_type == "quiz":
             return await generate_quiz(
@@ -2151,6 +2164,9 @@ class OutputV2Service:
                     notebook_title=notebook_title,
                     prompt=str(item.get("prompt") or ""),
                     page_count=int(item.get("page_count") or 8),
+                    citation_source_paths=item.get("source_paths") or [],
+                    citation_source_names=item.get("source_names") or [],
+                    flashcard_config=item.get("flashcard_config") or {},
                     api_url=resolved_api_url,
                     api_key=resolved_api_key,
                     model=model,
@@ -2428,6 +2444,80 @@ class OutputV2Service:
             if maybe_path.exists() and maybe_path.is_file():
                 local_file = maybe_path
                 break
+        if local_file is None:
+            target_type = str(item.get("target_type") or "").strip()
+            output_dir = self._item_dir(notebook_id, notebook_title, user_id, output_id)
+            if target_type in {"flashcard", "quiz"}:
+                structured_file = output_dir / f"{target_type}.md"
+                lines: List[str] = [f"# {item.get('title') or target_type}", ""]
+                generation_config = result.get("generation_config") or item.get("flashcard_config") or {}
+
+                if target_type == "flashcard":
+                    if generation_config:
+                        lines.append("## 生成条件")
+                        lines.append("")
+                        difficulty = str(generation_config.get("difficulty_level") or "").strip()
+                        card_count = generation_config.get("card_count")
+                        topic = str(generation_config.get("topic") or "").strip()
+                        test_focus = str(generation_config.get("test_focus") or "").strip()
+                        generated_at = str(generation_config.get("generated_at") or "").strip()
+                        if difficulty:
+                            lines.append(f"- 难度：{difficulty}")
+                        if card_count:
+                            lines.append(f"- 卡片数量：{card_count}")
+                        if topic:
+                            lines.append(f"- 主题：{topic}")
+                        if test_focus:
+                            lines.append(f"- 测试内容：{test_focus}")
+                        if generated_at:
+                            lines.append(f"- 生成时间：{generated_at}")
+                        lines.extend(["", "## 卡片内容", ""])
+                    flashcards = result.get("flashcards") or []
+                    for index, card in enumerate(flashcards, start=1):
+                        question = str(card.get("question") or "").strip()
+                        answer = str(card.get("answer") or "").strip()
+                        difficulty = str(card.get("difficulty") or "").strip()
+                        source_excerpt = str(card.get("source_excerpt") or "").strip()
+                        source_file = str(card.get("source_file") or "").strip()
+                        lines.append(f"### 卡片 {index}")
+                        if question:
+                            lines.append(f"- 问题：{question}")
+                        if answer:
+                            lines.append(f"- 答案：{answer}")
+                        if difficulty:
+                            lines.append(f"- 难度：{difficulty}")
+                        if source_file:
+                            lines.append(f"- 来源文件：{source_file}")
+                        if source_excerpt:
+                            lines.append(f"- 来源摘录：{source_excerpt}")
+                        lines.append("")
+                else:
+                    questions = result.get("questions") or result.get("quiz") or []
+                    lines.append("## 题目内容")
+                    lines.append("")
+                    for index, question in enumerate(questions, start=1):
+                        stem = str(question.get("question") or "").strip()
+                        answer = str(question.get("correct_answer") or "").strip()
+                        explanation = str(question.get("explanation") or "").strip()
+                        lines.append(f"### 题目 {index}")
+                        if stem:
+                            lines.append(stem)
+                        options = question.get("options") or []
+                        if isinstance(options, list):
+                            for option in options:
+                                label = str(option.get("label") or "").strip()
+                                text = str(option.get("text") or "").strip()
+                                if label or text:
+                                    lines.append(f"- {label}: {text}".rstrip(": "))
+                        if answer:
+                            lines.append(f"- 正确答案：{answer}")
+                        if explanation:
+                            lines.append(f"- 解析：{explanation}")
+                        lines.append("")
+
+                structured_file.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+                local_file = structured_file
+
         if local_file is None:
             raise HTTPException(status_code=400, detail="No generated file can be imported as source")
         paths = get_notebook_paths(notebook_id, notebook_title, user_id)

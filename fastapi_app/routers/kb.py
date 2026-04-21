@@ -22,7 +22,7 @@ from workflow_engine.workflow import run_workflow, list_workflows
 
 log = get_logger(__name__)
 from fastapi_app.config import settings
-from fastapi_app.schemas import Paper2PPTRequest
+from fastapi_app.schemas import FlashcardGenerationConfig, Paper2PPTRequest
 from fastapi_app.utils import _from_outputs_url, _to_outputs_url
 from fastapi_app.services.wa_paper2ppt import _init_state_from_request
 from fastapi_app.dependencies.auth import get_supabase_admin_client
@@ -2753,10 +2753,21 @@ async def generate_flashcards(
     api_key: Optional[str] = Body(None, embed=True),
     model: str = Body("deepseek-v3.2", embed=True),
     language: str = Body("zh", embed=True),
-    card_count: int = Body(20, embed=True),
+    card_count: Optional[int] = Body(20, embed=True),
+    difficulty_level: Optional[str] = Body(None, embed=True),
+    topic: Optional[str] = Body(None, embed=True),
+    test_focus: Optional[str] = Body(None, embed=True),
+    citation_source_paths: Optional[List[str]] = Body(None, embed=True),
+    citation_source_names: Optional[List[str]] = Body(None, embed=True),
 ):
     """从知识库文件生成闪卡"""
     try:
+        language = str(_unwrap_fastapi_body_default(language, "zh") or "zh")
+        model = str(_unwrap_fastapi_body_default(model, "deepseek-v3.2") or "deepseek-v3.2")
+        card_count = _unwrap_fastapi_body_default(card_count, 20)
+        difficulty_level = _unwrap_fastapi_body_default(difficulty_level, None)
+        topic = _unwrap_fastapi_body_default(topic, None)
+        test_focus = _unwrap_fastapi_body_default(test_focus, None)
         api_url, api_key = _require_llm_config(api_url, api_key)
         from fastapi_app.services.flashcard_service import generate_flashcards_with_llm
 
@@ -2775,11 +2786,92 @@ async def generate_flashcards(
         if not local_paths:
             raise HTTPException(status_code=400, detail="No valid files provided")
 
+        normalized_card_count = card_count if isinstance(card_count, int) and card_count > 0 else 20
         text_content = _extract_text_from_files(local_paths, max_chars=50000)
         if not text_content.strip():
             raise HTTPException(status_code=400, detail="No text content extracted")
 
         log.info("[generate-flashcards] text_len=%d, files=%d", len(text_content), len(local_paths))
+
+        citation_entries: List[Dict[str, Any]] = []
+        citation_source_paths = _unwrap_fastapi_body_default(citation_source_paths, None) or []
+        citation_source_names = _unwrap_fastapi_body_default(citation_source_names, None) or []
+        if isinstance(citation_source_paths, list):
+            for index, f in enumerate(citation_source_paths):
+                ps = str(f or "").strip()
+                if not ps:
+                    continue
+                display_name = ""
+                if isinstance(citation_source_names, list) and index < len(citation_source_names):
+                    display_name = str(citation_source_names[index] or "").strip()
+                display_name = display_name or Path(ps).name or f"来源 {index + 1}"
+                resolved_path: Optional[Path] = None
+                if ps.startswith("http://") or ps.startswith("https://"):
+                    local_md = _resolve_link_to_local_md(email, notebook_id, ps)
+                    if local_md and local_md.exists():
+                        resolved_path = local_md
+                else:
+                    local_path = _resolve_local_path(ps)
+                    if local_path.exists():
+                        resolved_path = local_path
+                citation_entries.append(
+                    {
+                        "source_path": str(resolved_path) if resolved_path else "",
+                        "original_path": ps,
+                        "file_name": display_name,
+                    }
+                )
+        if not citation_entries:
+            citation_entries = [
+                {
+                    "source_path": source_path,
+                    "original_path": source_path,
+                    "file_name": Path(source_path).name,
+                }
+                for source_path in local_paths
+            ]
+
+        citation_sources: List[Dict[str, Any]] = []
+        for index, entry in enumerate(citation_entries):
+            source_path = str(entry.get("source_path") or "").strip()
+            original_path = str(entry.get("original_path") or source_path).strip()
+            file_name = str(entry.get("file_name") or Path(source_path or original_path).name or f"来源 {index + 1}").strip()
+            excerpt = ""
+            if source_path:
+                try:
+                    excerpt = _extract_text_from_files([source_path], max_chars=320)
+                except Exception:
+                    excerpt = ""
+            citation_sources.append(
+                {
+                    "source_number": index + 1,
+                    "file_name": file_name,
+                    "file_path": _to_outputs_url(source_path) if source_path else original_path,
+                    "preview": excerpt[:240] if excerpt else "",
+                    "chunk_index": None,
+                }
+            )
+        log.info(
+            "[generate-flashcards] citation_sources=%s",
+            [
+                {
+                    "file_name": item.get("file_name"),
+                    "file_path": item.get("file_path"),
+                    "has_preview": bool(item.get("preview")),
+                }
+                for item in citation_sources
+            ],
+        )
+
+        generated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        generation_config = FlashcardGenerationConfig(
+            difficulty_level=difficulty_level if difficulty_level in {"basic", "intermediate", "advanced"} else None,
+            card_count=card_count if isinstance(card_count, int) and card_count > 0 else None,
+            topic=(topic or "").strip() or None,
+            test_focus=(test_focus or "").strip() or None,
+            language=language,
+            generated_at=generated_at,
+        )
 
         flashcards = await generate_flashcards_with_llm(
             text_content=text_content,
@@ -2787,7 +2879,11 @@ async def generate_flashcards(
             api_key=api_key,
             model=model,
             language=language,
-            card_count=card_count,
+            card_count=normalized_card_count,
+            difficulty_level=generation_config.difficulty_level,
+            topic=generation_config.topic,
+            test_focus=generation_config.test_focus,
+            citation_sources=citation_sources,
         )
         if not flashcards:
             raise HTTPException(status_code=500, detail="Failed to generate flashcards")
@@ -2805,9 +2901,10 @@ async def generate_flashcards(
             "id": flashcard_set_id,
             "notebook_id": notebook_id,
             "flashcards": [fc.dict() for fc in flashcards],
-            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "created_at": generated_at,
             "source_files": file_paths,
             "total_count": len(flashcards),
+            "generation_config": generation_config.dict(),
         }
         (output_dir / "flashcards.json").write_text(
             json.dumps(flashcard_data, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -2832,6 +2929,7 @@ async def generate_flashcards(
             "flashcard_set_id": flashcard_set_id,
             "total_count": len(flashcards),
             "result_path": _to_outputs_url(str(output_dir)),
+            "generation_config": generation_config.dict(),
         }
     except HTTPException:
         raise

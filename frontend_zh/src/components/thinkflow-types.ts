@@ -11,6 +11,7 @@ export type CitationReference = {
   filePath?: string;
   preview?: string;
   chunkIndex?: number | null;
+  sourceNumber?: string;
 };
 
 export type PushDestinationType = 'summary' | 'document' | 'guidance';
@@ -168,7 +169,23 @@ export type FlashcardItem = {
   source_file?: string | null;
   source_excerpt?: string | null;
   tags?: string[];
+  citations?: Array<{
+    source_number?: number;
+    file_name?: string | null;
+    file_path?: string | null;
+    preview?: string | null;
+    chunk_index?: number | null;
+  }>;
   created_at?: string | null;
+};
+
+export type FlashcardGenerationConfig = {
+  difficulty_level?: 'basic' | 'intermediate' | 'advanced' | null;
+  card_count?: number | null;
+  topic?: string | null;
+  test_focus?: string | null;
+  language?: string | null;
+  generated_at?: string | null;
 };
 
 export type QuizOptionItem = {

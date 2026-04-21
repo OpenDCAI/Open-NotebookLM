@@ -85,12 +85,12 @@ export function ThinkFlowAddSourceModal({
 
   // ── File Upload ──
   const uploadFiles = useCallback(
-    async (fileList: FileList) => {
-      if (fileList.length === 0) return;
+    async (filesToUpload: File[]) => {
+      if (filesToUpload.length === 0) return;
       setLoading(true);
       resetMessages();
       try {
-        for (const file of Array.from(fileList)) {
+        for (const file of filesToUpload) {
           const formData = new FormData();
           formData.append('file', file);
           formData.append('email', effectiveEmail);
@@ -100,7 +100,7 @@ export function ThinkFlowAddSourceModal({
           const res = await apiFetch('/api/v1/kb/upload', { method: 'POST', body: formData });
           await parseJson(res);
         }
-        setSuccess(`已上传 ${fileList.length} 个文件`);
+        setSuccess(`已上传 ${filesToUpload.length} 个文件`);
         onSourceAdded();
       } catch (err: any) {
         setError(err?.message || '上传失败');
@@ -113,7 +113,7 @@ export function ThinkFlowAddSourceModal({
 
   const handleFileChange = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
-      if (e.target.files) void uploadFiles(e.target.files);
+      if (e.target.files) void uploadFiles(Array.from(e.target.files));
       e.target.value = '';
     },
     [uploadFiles],
@@ -123,7 +123,7 @@ export function ThinkFlowAddSourceModal({
     (e: React.DragEvent) => {
       e.preventDefault();
       setDragOver(false);
-      if (e.dataTransfer.files.length > 0) void uploadFiles(e.dataTransfer.files);
+      if (e.dataTransfer.files.length > 0) void uploadFiles(Array.from(e.dataTransfer.files));
     },
     [uploadFiles],
   );

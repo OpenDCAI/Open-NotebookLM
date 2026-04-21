@@ -23,7 +23,6 @@ import { QuizContainer } from '../components/quiz/QuizContainer';
 import { NotionEditor } from '../components/notes/NotionEditor';
 import { useToast } from '../hooks/useToast';
 import { GraphRAGKbPanel } from '../components/graphrag-kb/GraphRAGKbPanel';
-import { fetchGraphragChunkSnippet } from '../services/graphragKbService';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 
@@ -3150,38 +3149,6 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
             userId={effectiveUser?.id || null}
             email={effectiveUser?.email || effectiveUser?.id || ''}
             showToast={showToast}
-            onOpenGraphragSource={async (p) => {
-              const stem = p.sourceStem.trim();
-              const match = files.find((f) => {
-                const n = f.name || '';
-                const base = n.replace(/\.[^.]+$/, '');
-                return base === stem || n === stem || n.startsWith(`${stem}.`);
-              });
-              if (!match) {
-                showToast(`未找到与「${stem}」匹配的来源文件`, 'warning');
-                return;
-              }
-              let graphragHighlightText: string | undefined;
-              if (p.workspaceDir && p.chunkId) {
-                try {
-                  const sn = await fetchGraphragChunkSnippet(p.workspaceDir, p.chunkId, p.triples);
-                  if (sn.found) {
-                    // Prefer LLM-extracted sentence (short + verbatim → indexOf succeeds reliably)
-                    // Fall back to full chunk text
-                    graphragHighlightText = sn.highlighted_sentence?.trim() || sn.text?.trim();
-                  }
-                } catch {
-                  /* 仍打开全文预览 */
-                }
-              }
-              await openSourceDetail(match, {
-                fileName: match.name,
-                filePath: match.url,
-                preview: `GraphRAG · ${p.pageIndex >= 0 ? `第 ${p.pageIndex + 1} 页` : '页码未知'}`,
-                sourceNumber: 'GR',
-                graphragHighlightText,
-              });
-            }}
           />
         ) : activeTool === 'data_extract' ? (
           <main className="flex-1 flex flex-col relative bg-white min-w-[300px] overflow-hidden">

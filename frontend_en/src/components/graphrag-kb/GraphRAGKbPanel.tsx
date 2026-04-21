@@ -649,6 +649,9 @@ export function GraphRAGKbPanel({
                                   pageIndex: pi ?? -1,
                                   chunkId: cid || undefined,
                                   workspaceDir: persist?.workspace_dir,
+                                  triples: (queryResult.reasoning_subgraph || []) as Array<
+                                    Record<string, unknown>
+                                  >,
                                 })
                               }
                               className="inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline pt-1"

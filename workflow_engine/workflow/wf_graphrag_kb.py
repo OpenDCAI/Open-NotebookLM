@@ -6,7 +6,7 @@
 
 ``_dispatch_`` 读取 ``state.request.action``，分别路由到：
     ``index``  → ``_action_index``   （MinerU 可选 → 分块 → 可选 KGGen → GraphRAG 建索引）
-    ``query``  → ``_action_query``   （本地/全局检索 → 可选子图剪枝 → Judge）
+    ``query``  → ``_action_query``   （本地/全局检索 → 可选子图剪枝+Judge 合并 LLM）
     ``merge``  → ``_action_merge``   （两工作区 chunk 合并 → 强制重索引）
 
 【数据流边界】
@@ -66,6 +66,10 @@ class GraphRAGKBRequest(MainRequest):
     # ── Merge ─────────────────────────────────────────────────────────────────
     workspace_dir_b: str = ""
     dedupe: bool = False
+
+    # ── Query (optional) ──────────────────────────────────────────────────────
+    # None = follow settings.GRAPHRAG_WIKIDATA_ENRICH_ENABLED
+    wikidata_enrich: Optional[bool] = None
 
 
 @dataclass
@@ -213,14 +217,15 @@ async def _action_index(state: GraphRAGKBState) -> None:
 
 
 async def _action_query(state: GraphRAGKBState) -> None:
-    """GraphRAG query → optional subgraph prune → judge; writes full result to ``agent_results["query"]``."""
+    """GraphRAG query → optional prune+Judge（单次 LLM）或单独 Judge；写入 ``agent_results["query"]``。"""
     import asyncio
+    import time as _time
     from fastapi_app.config.settings import settings as cfg
     from workflow_engine.toolkits.graphrag_ms_tool.indexer import GraphRAGWorkspace
     from workflow_engine.toolkits.graphrag_ms_tool.querier import query_local, query_global
     from workflow_engine.toolkits.graphrag_ms_tool.judge import judge_confidence
-    from workflow_engine.toolkits.graphrag_ms_tool.subgraph_pruner import (
-        prune_reasoning_subgraph_llm,
+    from workflow_engine.toolkits.graphrag_ms_tool.prune_judge_combined import (
+        prune_and_judge_combined_llm,
     )
 
     req = state.request
@@ -229,6 +234,13 @@ async def _action_query(state: GraphRAGKBState) -> None:
 
     search_fn = query_local if req.search_method == "local" else query_global
 
+    t_a0 = _time.perf_counter()
+    log.info(
+        "[TIMING][A] _action_query START | method=%s | question=%r",
+        req.search_method, req.question[:80],
+    )
+
+    t_b0 = _time.perf_counter()
     result = await asyncio.to_thread(
         search_fn,
         ws,
@@ -236,33 +248,109 @@ async def _action_query(state: GraphRAGKBState) -> None:
         api_base=req.chat_api_url.rstrip("/"),
         api_key=req.api_key,
     )
+    t_b1 = _time.perf_counter()
+    log.info(
+        "[TIMING][A→B] search(%s) done | elapsed=%.3fs | answer_len=%d | subgraph_edges=%d",
+        req.search_method, t_b1 - t_b0, len(result.answer or ""), len(result.reasoning_subgraph),
+    )
 
     reasoning_subgraph_cot = ""
+    judge = None
+    did_prune_judge_combined = False
+    t_c0 = t_b1
     if cfg.GRAPHRAG_SUBGRAPH_PRUNE_ENABLED and result.reasoning_subgraph:
-        prune_out = await asyncio.to_thread(
-            prune_reasoning_subgraph_llm,
+        did_prune_judge_combined = True
+        t_c0 = _time.perf_counter()
+        log.info(
+            "[TIMING][A→CJ] prune_judge_combined START | edges_in=%d",
+            len(result.reasoning_subgraph),
+        )
+        pj = await asyncio.to_thread(
+            prune_and_judge_combined_llm,
             req.question,
             result.answer,
             result.reasoning_subgraph,
-            model=req.model,
             api_base=req.chat_api_url.rstrip("/"),
             api_key=req.api_key,
             max_edges_input=int(cfg.GRAPHRAG_SUBGRAPH_PRUNE_MAX_EDGES_INPUT),
+            max_tokens=int(getattr(cfg, "GRAPHRAG_PRUNE_JUDGE_MAX_TOKENS", 768) or 768),
         )
-        result.reasoning_subgraph = prune_out.edges
-        reasoning_subgraph_cot = prune_out.cot
+        result.reasoning_subgraph = pj.edges
+        reasoning_subgraph_cot = pj.cot
+        judge = pj.judge
+        t_c1 = _time.perf_counter()
+        log.info(
+            "[TIMING][A→CJ] prune_judge_combined done | elapsed=%.3fs | edges_out=%d | score=%.3f",
+            t_c1 - t_c0,
+            len(pj.edges),
+            judge.score,
+        )
+    else:
+        t_c1 = t_b1
+        log.info("[TIMING][A→CJ] prune_judge SKIPPED (disabled or no edges)")
 
-    judge = await asyncio.to_thread(
-        judge_confidence,
-        req.question,
-        result.answer,
-        result.reasoning_subgraph,
-        api_base=req.chat_api_url.rstrip("/"),
-        api_key=req.api_key,
+    t_d0 = _time.perf_counter()
+    if judge is None:
+        judge = await asyncio.to_thread(
+            judge_confidence,
+            req.question,
+            result.answer,
+            result.reasoning_subgraph,
+            api_base=req.chat_api_url.rstrip("/"),
+            api_key=req.api_key,
+        )
+    t_d1 = _time.perf_counter()
+    log.info("[TIMING][A→D] judge path done | elapsed=%.3fs | score=%.3f", t_d1 - t_d0, judge.score)
+
+    post_search_llm = (t_c1 - t_c0) if did_prune_judge_combined else (t_d1 - t_d0)
+    t_a1 = _time.perf_counter()
+    log.info(
+        "[TIMING][A] _action_query SUMMARY | search=%.3fs | post_search_llm=%.3fs | TOTAL=%.3fs",
+        t_b1 - t_b0,
+        post_search_llm,
+        t_a1 - t_a0,
     )
 
+    query_answer = result.answer or ""
+    wd_flag = state.request.wikidata_enrich
+    wd_on = (
+        bool(getattr(cfg, "GRAPHRAG_WIKIDATA_ENRICH_ENABLED", True))
+        if wd_flag is None
+        else bool(wd_flag)
+    )
+    if wd_on and result.reasoning_subgraph:
+        try:
+            from workflow_engine.toolkits.wikidata_subgraph_enrich import (
+                format_wikidata_supplement_for_subgraph,
+            )
+
+            extra = await asyncio.to_thread(
+                format_wikidata_supplement_for_subgraph,
+                result.reasoning_subgraph,
+                lang=str(getattr(cfg, "GRAPHRAG_WIKIDATA_LANG", "zh") or "zh"),
+                max_entities=int(getattr(cfg, "GRAPHRAG_WIKIDATA_MAX_ENTITIES", 8) or 8),
+                connect_timeout=float(
+                    getattr(cfg, "GRAPHRAG_WIKIDATA_CONNECT_TIMEOUT_SEC", 10.0) or 10.0
+                ),
+                read_timeout=float(getattr(cfg, "GRAPHRAG_WIKIDATA_TIMEOUT_SEC", 45.0) or 45.0),
+                http_retries=int(getattr(cfg, "GRAPHRAG_WIKIDATA_HTTP_RETRIES", 2) or 2),
+                api_url=str(
+                    getattr(
+                        cfg,
+                        "GRAPHRAG_WIKIDATA_API_URL",
+                        "https://www.wikidata.org/w/api.php",
+                    )
+                    or "https://www.wikidata.org/w/api.php"
+                ),
+                emit_failure_hint=True,
+            )
+            if extra:
+                query_answer = query_answer.rstrip() + "\n\n" + extra
+        except Exception as exc:
+            log.warning("[GraphRAGKB] Wikidata enrich failed: %s", exc)
+
     state.agent_results["query"] = {
-        "answer": result.answer,
+        "answer": query_answer,
         "context_data": result.context_data,
         "reasoning_subgraph": result.reasoning_subgraph,
         "reasoning_subgraph_cot": reasoning_subgraph_cot,

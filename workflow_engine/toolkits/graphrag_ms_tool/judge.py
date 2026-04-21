@@ -73,11 +73,12 @@ def judge_confidence(
     model = model or cfg.JUDGE_MODEL
     api_base = api_base or cfg.DEFAULT_LLM_API_URL.rstrip("/")
     api_key = api_key or os.getenv("DF_API_KEY", "")
+    max_out = int(getattr(cfg, "JUDGE_MAX_TOKENS", 256) or 256)
 
     # Compress the subgraph to a readable triple list (truncated to 50 edges)
     edge_lines = [
         f"  ({e.get('source', '?')}) --[{e.get('relation', '?')}]--> ({e.get('target', '?')})"
-        for e in reasoning_subgraph[:50]
+        for e in reasoning_subgraph[:24]
     ]
     subgraph_text = "\n".join(edge_lines) if edge_lines else "  (no subgraph available)"
 
@@ -88,7 +89,7 @@ def judge_confidence(
     )
 
     try:
-        raw = _call_llm(model, api_base, api_key, _JUDGE_SYSTEM_PROMPT, user_msg)
+        raw = _call_llm(model, api_base, api_key, _JUDGE_SYSTEM_PROMPT, user_msg, max_tokens=max_out)
         return _parse_judge_response(raw)
     except Exception as exc:
         log.warning("[Judge] LLM call failed: %s", exc)
@@ -99,31 +100,93 @@ def judge_confidence(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-def _call_llm(model: str, api_base: str, api_key: str, system: str, user: str) -> str:
+def _call_llm(
+    model: str,
+    api_base: str,
+    api_key: str,
+    system: str,
+    user: str,
+    *,
+    max_tokens: int = 256,
+) -> str:
     """OpenAI-compatible chat call for the judge model."""
+    import time as _time
     try:
         from openai import OpenAI
     except ImportError as exc:
         raise ImportError("openai package required for Judge module") from exc
 
     client = OpenAI(api_key=api_key or "none", base_url=api_base)
-    response = client.chat.completions.create(
+    t0 = _time.perf_counter()
+    log.info("[TIMING][D] judge._call_llm START | model=%s | prompt_len=%d", model, len(user))
+    _kwargs = dict(
         model=model,
-        max_tokens=512,
+        max_tokens=max_tokens,
         temperature=0,
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
     )
-    return response.choices[0].message.content or ""
+    try:
+        response = client.chat.completions.create(**_kwargs, response_format={"type": "json_object"})
+    except Exception as exc:
+        log.debug("[Judge] response_format json_object unsupported or rejected: %s", exc)
+        response = client.chat.completions.create(**_kwargs)
+    content = response.choices[0].message.content or ""
+    t1 = _time.perf_counter()
+    log.info("[TIMING][D] judge._call_llm DONE | model=%s | elapsed=%.3fs | response_len=%d", model, t1 - t0, len(content))
+    return content
+
+
+def _strip_after_thinking_block(text: str) -> str:
+    """Drop content before common ``</...thinking...>`` closers so JSON can be found."""
+    lower = text.lower()
+    for tag in (
+        "</redacted_thinking>",
+        "`</redacted_thinking>`",
+        "</think>",
+        "`</redacted_thinking>`",
+    ):
+        tl = tag.lower()
+        i = lower.rfind(tl)
+        if i != -1:
+            return text[i + len(tag) :].strip()
+    return text
+
+
+def _extract_first_json_object(text: str) -> Optional[Dict[str, Any]]:
+    """Parse the first balanced ``{...}`` substring as JSON (handles thinking / prose prefixes)."""
+    start = text.find("{")
+    while start != -1:
+        depth = 0
+        for i in range(start, len(text)):
+            if text[i] == "{":
+                depth += 1
+            elif text[i] == "}":
+                depth -= 1
+                if depth == 0:
+                    try:
+                        return json.loads(text[start : i + 1])
+                    except json.JSONDecodeError:
+                        start = text.find("{", start + 1)
+                        break
+        else:
+            break
+    return None
 
 
 def _parse_judge_response(raw: str) -> JudgeResult:
     """Strip markdown fences, parse JSON, and normalise score to [0, 1]."""
+    raw = _strip_after_thinking_block(raw.strip())
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip())
     raw = re.sub(r"\s*```$", "", raw)
-    parsed = json.loads(raw)
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        parsed = _extract_first_json_object(raw)
+        if parsed is None:
+            raise
 
     rel = int(parsed.get("relevance", 0))
     gs = int(parsed.get("graph_support", 0))

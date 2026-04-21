@@ -31,16 +31,20 @@ from workflow_engine.logger import get_logger
 from workflow_engine.toolkits.graphrag_ms_tool.indexer import (
     GraphRAGWorkspace,
     _patch_settings_yaml,
+    resolve_graphrag_embedding_for_patch,
 )
 
 log = get_logger(__name__)
 
 
 def _strip_graphrag_data_citation_suffix(answer: str) -> str:
-    """去掉 GraphRAG 默认拼在回答末尾的 ``[Data: Entities (…); Relationships (…); …]`` 内部引用标记。"""
+    """Remove all ``[Data: Entities (…); Relationships (…); …]`` inline citation markers.
+
+    GraphRAG injects these after every sentence, not just at the end, so we strip globally.
+    """
     if not (answer and answer.strip()):
         return answer
-    return re.sub(r"(?:\s*\[Data:[^\]]+\])+\s*$", "", answer.strip())
+    return re.sub(r"\s*\[Data:[^\]]+\]", "", answer.strip())
 
 
 def _coalesce_ctx(ctx: Dict[str, Any], *keys: str) -> Any:
@@ -168,6 +172,7 @@ def _query_via_python_api(
     最后 ``_parse_search_result`` 打包证据。
     """
     import asyncio
+    import time as _time
     from types import SimpleNamespace
 
     try:
@@ -182,28 +187,38 @@ def _query_via_python_api(
 
     from fastapi_app.config.settings import settings as cfg
 
+    t0 = _time.perf_counter()
+    log.info("[TIMING][B] _query_via_python_api START | method=%s | question=%r", method, question[:60])
+
     if not workspace.settings_path.is_file():
         raise FileNotFoundError(f"Missing GraphRAG settings: {workspace.settings_path}")
 
-    # Refresh credentials in workspace yaml so query uses the current request keys.
+    emb_yaml_model, emb_api = resolve_graphrag_embedding_for_patch(
+        cfg, str(cfg.GRAPHRAG_EMBEDDING_MODEL).strip()
+    )
     _patch_settings_yaml(
         workspace.settings_path,
         api_key=api_key,
         api_base=api_base,
         llm_model=llm_model,
-        embedding_model=cfg.GRAPHRAG_EMBEDDING_MODEL,
+        embedding_model=emb_yaml_model,
         chunk_size=int(cfg.GRAPHRAG_CHUNK_SIZE),
         chunk_overlap=int(cfg.GRAPHRAG_CHUNK_OVERLAP),
+        local_search_context_max_tokens=int(cfg.GRAPHRAG_LOCAL_SEARCH_CONTEXT_MAX_TOKENS),
+        embedding_api_base=emb_api,
     )
+    t1 = _time.perf_counter()
+    log.info("[TIMING][B1] _patch_settings_yaml | %.3fs", t1 - t0)
 
-    # graphrag 3.x: load_config(root_dir, cli_overrides=...); 2.7.x accepts config_filepath=
     _lc_sig = inspect.signature(load_config)
     _lc_kw: Dict[str, Any] = {"cli_overrides": {}}
     if "config_filepath" in _lc_sig.parameters:
         _lc_kw["config_filepath"] = None
     config = load_config(workspace.root.resolve(), **_lc_kw)
+    t2 = _time.perf_counter()
+    log.info("[TIMING][B2] load_config | %.3fs", t2 - t1)
 
-    community_level = 2
+    community_level = max(0, int(getattr(cfg, "GRAPHRAG_COMMUNITY_LEVEL", 2) or 0))
     response_type = str(cfg.GRAPHRAG_RESPONSE_TYPE or "Single Paragraph").strip() or "Single Paragraph"
 
     if method == "local":
@@ -218,8 +233,11 @@ def _query_via_python_api(
             ],
             optional_list=["covariates"],
         )
+        t3 = _time.perf_counter()
+        log.info("[TIMING][B3] _resolve_output_files(%s) | %.3fs", method, t3 - t2)
         if df.get("multi-index"):
             raise RuntimeError("Multi-index GraphRAG workspaces are not supported by this adapter.")
+        log.info("[TIMING][B4] graphrag_api.local_search START (embed + LLM gen)")
         response, context_data = asyncio.run(
             graphrag_api.local_search(
                 config=config,
@@ -241,8 +259,11 @@ def _query_via_python_api(
             output_list=["entities", "communities", "community_reports"],
             optional_list=[],
         )
+        t3 = _time.perf_counter()
+        log.info("[TIMING][B3] _resolve_output_files(%s) | %.3fs", method, t3 - t2)
         if df.get("multi-index"):
             raise RuntimeError("Multi-index GraphRAG workspaces are not supported by this adapter.")
+        log.info("[TIMING][B4] graphrag_api.global_search START (embed + LLM gen)")
         response, context_data = asyncio.run(
             graphrag_api.global_search(
                 config=config,
@@ -259,11 +280,23 @@ def _query_via_python_api(
     else:
         raise ValueError(f"Unknown search method: {method}")
 
+    t4 = _time.perf_counter()
+    log.info("[TIMING][B4] graphrag_api.%s_search DONE | %.3fs | answer_len=%d", method, t4 - t3, len(response or ""))
+
     if not isinstance(context_data, dict):
         context_data = {}
 
     wrapped = SimpleNamespace(response=response or "", context_data=context_data)
-    return _parse_search_result(wrapped, workspace)
+    result = _parse_search_result(wrapped, workspace)
+    t5 = _time.perf_counter()
+    log.info("[TIMING][B5] _parse_search_result | %.3fs | subgraph_edges=%d | source_chunks=%d",
+             t5 - t4, len(result.reasoning_subgraph), len(result.source_chunks))
+
+    log.info(
+        "[TIMING][B] _query_via_python_api SUMMARY | patch=%.3fs | config=%.3fs | parquet=%.3fs | llm=%.3fs | parse=%.3fs | TOTAL=%.3fs",
+        t1 - t0, t2 - t1, t3 - t2, t4 - t3, t5 - t4, t5 - t0,
+    )
+    return result
 
 
 def _query_via_cli(
@@ -290,8 +323,20 @@ def _query_via_cli(
         text=True,
         check=False,
     )
-    answer = proc.stdout.strip() or proc.stderr.strip()
-    answer = _strip_graphrag_data_citation_suffix(answer)
+    out = (proc.stdout or "").strip()
+    err = (proc.stderr or "").strip()
+    combined = out or err
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"graphrag CLI query failed (exit {proc.returncode}): {(err or out)[:800]}"
+        )
+    low = combined.lstrip().lower()
+    if low.startswith("usage:") or "try 'graphrag query --help'" in low or "╭─ error" in low:
+        raise RuntimeError(
+            f"graphrag CLI did not return an answer (usage or CLI error): {combined[:800]}"
+        )
+
+    answer = _strip_graphrag_data_citation_suffix(combined)
     log.info("[GraphRAGQuerier] CLI answer (%s): %s …", method, answer[:120])
     return QueryResult(answer=answer)
 

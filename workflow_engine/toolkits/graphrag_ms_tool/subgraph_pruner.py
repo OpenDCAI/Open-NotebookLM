@@ -73,12 +73,15 @@ def _call_llm(
     max_tokens: int = 2048,
 ) -> str:
     """OpenAI-compatible chat call used by the pruner."""
+    import time as _time
     try:
         from openai import OpenAI
     except ImportError as exc:
         raise ImportError("openai package required for subgraph pruner") from exc
 
     client = OpenAI(api_key=api_key or "none", base_url=api_base)
+    t0 = _time.perf_counter()
+    log.info("[TIMING][C] pruner._call_llm START | model=%s | prompt_len=%d", model, len(user))
     response = client.chat.completions.create(
         model=model,
         max_tokens=max_tokens,
@@ -88,7 +91,10 @@ def _call_llm(
             {"role": "user", "content": user},
         ],
     )
-    return response.choices[0].message.content or ""
+    content = response.choices[0].message.content or ""
+    t1 = _time.perf_counter()
+    log.info("[TIMING][C] pruner._call_llm DONE | model=%s | elapsed=%.3fs | response_len=%d", model, t1 - t0, len(content))
+    return content
 
 
 def _parse_json_object(raw: str) -> Dict[str, Any]:
@@ -112,7 +118,7 @@ def prune_reasoning_subgraph_llm(
     """Return pruned edges and CoT; falls back to a truncated copy of the input edges on failure."""
     from fastapi_app.config.settings import settings as cfg
 
-    model = model or cfg.GRAPHRAG_LLM_MODEL
+    model = model or getattr(cfg, "GRAPHRAG_SUBGRAPH_PRUNE_MODEL", None) or cfg.GRAPHRAG_LLM_MODEL
     api_base = (api_base or cfg.DEFAULT_LLM_API_URL).rstrip("/")
     api_key = api_key or os.getenv("DF_API_KEY", "")
 
@@ -133,13 +139,14 @@ def prune_reasoning_subgraph_llm(
     )
 
     try:
+        mt = int(getattr(cfg, "GRAPHRAG_SUBGRAPH_PRUNE_MAX_TOKENS", 512) or 512)
         raw = _call_llm(
             model,
             api_base,
             api_key,
             _SUBGRAPH_PRUNE_SYSTEM,
             user_msg,
-            max_tokens=2048,
+            max_tokens=mt,
         )
         parsed = _parse_json_object(raw)
     except Exception as exc:

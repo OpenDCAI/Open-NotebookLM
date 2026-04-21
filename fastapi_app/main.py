@@ -429,6 +429,17 @@ async def _lifespan(app: FastAPI):
         os.environ["LOCAL_MINERU_API_URL"] = mineru_base_url
         os.environ["LOCAL_MINERU_MODEL"] = resolved_mineru_model
 
+    def _warmup_graphrag_imports() -> None:
+        try:
+            import graphrag.config.load_config  # noqa: F401
+            from graphrag import api as _graphrag_api  # noqa: F401
+            from graphrag.cli.query import _resolve_output_files  # noqa: F401
+            log.info("GraphRAG 相关 Python 包已预导入，可降低首次查询的 import 冷启动")
+        except ImportError as exc:
+            log.debug("GraphRAG 预导入跳过: %s", exc)
+
+    _warmup_graphrag_imports()
+
     yield
     for proc in managed_procs:
         if proc.poll() is None:

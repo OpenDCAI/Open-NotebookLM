@@ -32,7 +32,7 @@ import shutil
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import yaml
 
@@ -71,13 +71,28 @@ _EMBEDDING_VECTOR_SIZES: Dict[str, int] = {
     "text-embedding-3-large": 3072,
     "text-embedding-3-small": 1536,
     "text-embedding-ada-002": 1536,
+    "octen/octen-embedding-0.6b": 768,
+    "octen-embedding-0.6b": 768,
 }
 _DEFAULT_VECTOR_SIZE = 1536
 
 
 def _embedding_vector_size(model: str) -> int:
-    """Return the output dimension for a known OpenAI embedding model; default 1536."""
+    """Return the output dimension for a known embedding model; default 1536."""
     return _EMBEDDING_VECTOR_SIZES.get(model.lower().strip(), _DEFAULT_VECTOR_SIZE)
+
+
+def resolve_graphrag_embedding_for_patch(cfg: Any, embedding_model: str) -> Tuple[str, Optional[str]]:
+    """GraphRAG ``default_embedding_model`` 的模型名与可选独立 ``api_base``（本地 vLLM）。"""
+    if bool(getattr(cfg, "GRAPHRAG_USE_LOCAL_EMBEDDING_RUNTIME", False)) and int(
+        getattr(cfg, "USE_LOCAL_EMBEDDING", 0) or 0
+    ) == 1:
+        port = int(getattr(cfg, "LOCAL_EMBEDDING_PORT", 26210))
+        return (
+            str(getattr(cfg, "LOCAL_EMBEDDING_MODEL", "Octen/Octen-Embedding-0.6B")).strip(),
+            f"http://127.0.0.1:{port}/v1",
+        )
+    return (str(embedding_model).strip(), None)
 
 
 def _patch_settings_yaml(
@@ -89,6 +104,8 @@ def _patch_settings_yaml(
     embedding_model: str,
     chunk_size: int,
     chunk_overlap: int,
+    local_search_context_max_tokens: int = 12000,
+    embedding_api_base: Optional[str] = None,
 ) -> None:
     """Inject runtime LLM / embedding / chunk params into settings.yaml and write .env.
 
@@ -103,9 +120,10 @@ def _patch_settings_yaml(
         raise RuntimeError("Invalid GraphRAG settings.yaml — expected 'models' block (graphrag 2.7 layout).")
 
     models = data["models"]
-    for model_id, model_name in (
-        ("default_chat_model", llm_model),
-        ("default_embedding_model", embedding_model),
+    emb_base = (embedding_api_base or api_base).strip() if (embedding_api_base or api_base) else ""
+    for model_id, model_name, entry_base in (
+        ("default_chat_model", llm_model, api_base),
+        ("default_embedding_model", embedding_model, emb_base),
     ):
         if model_id not in models:
             log.warning("[GraphRAGIndexer] settings missing model id %r; skipping patch for it", model_id)
@@ -114,8 +132,8 @@ def _patch_settings_yaml(
         if isinstance(entry, dict):
             entry["api_key"] = api_key
             entry["model"] = model_name
-            if api_base:
-                entry["api_base"] = api_base
+            if entry_base:
+                entry["api_base"] = entry_base.strip().rstrip("/")
 
     if "chunks" not in data:
         data["chunks"] = {}
@@ -132,6 +150,11 @@ def _patch_settings_yaml(
         store = vs.setdefault("default_vector_store", {})
         if isinstance(store, dict):
             store["vector_size"] = vec_size
+
+    # 较低值可加快 local_search 上下文组装与生成；过低可能丢证据，可按需调大。
+    ls = data.setdefault("local_search", {})
+    if isinstance(ls, dict):
+        ls["context_window_max_tokens"] = max(2048, int(local_search_context_max_tokens))
 
     settings_path.write_text(yaml.dump(data, default_flow_style=False, allow_unicode=True), encoding="utf-8")
 
@@ -196,6 +219,7 @@ def build_index(
 
     llm_model = llm_model or cfg.GRAPHRAG_LLM_MODEL
     embedding_model = embedding_model or cfg.GRAPHRAG_EMBEDDING_MODEL
+    emb_for_yaml, emb_api = resolve_graphrag_embedding_for_patch(cfg, embedding_model)
     api_base = api_base or cfg.DEFAULT_LLM_API_URL.rstrip("/")
     api_key = api_key or os.getenv("DF_API_KEY", "")
     chunk_size = chunk_size or cfg.GRAPHRAG_CHUNK_SIZE
@@ -259,9 +283,11 @@ def build_index(
         api_key=api_key,
         api_base=api_base,
         llm_model=llm_model,
-        embedding_model=embedding_model,
+        embedding_model=emb_for_yaml,
         chunk_size=int(chunk_size),
         chunk_overlap=int(chunk_overlap),
+        local_search_context_max_tokens=int(cfg.GRAPHRAG_LOCAL_SEARCH_CONTEXT_MAX_TOKENS),
+        embedding_api_base=emb_api,
     )
 
     # Step D: run graphrag index

@@ -12,6 +12,11 @@ import type {
   QueryResponse,
   MergeRequest,
   MergeResponse,
+  ChatRequest,
+  ChatResponse,
+  ChatPostprocessRequest,
+  ChatPostprocessResponse,
+  ContextRefineResponse,
 } from '../types/graphragKb';
 
 const DEFAULT_LLM_MODEL = 'deepseek-v3.2';
@@ -63,22 +68,86 @@ export async function mergeGraphragKb(body: MergeRequest): Promise<MergeResponse
   return res.json() as Promise<MergeResponse>;
 }
 
+export async function chatGraphragKb(body: ChatRequest): Promise<ChatResponse> {
+  const res = await apiFetch(`${GRAPHRAG_KB_BASE}/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json() as Promise<ChatResponse>;
+}
+
+export async function chatGraphragKbPostprocess(
+  body: ChatPostprocessRequest,
+): Promise<ChatPostprocessResponse> {
+  const res = await apiFetch(`${GRAPHRAG_KB_BASE}/chat-postprocess`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json() as Promise<ChatPostprocessResponse>;
+}
+
 export interface ChunkSnippetResponse {
   text: string;
   source_stem: string;
   found: boolean;
+  /** Verbatim sentence/phrase extracted by LLM that best matches the reasoning triples. */
+  highlighted_sentence?: string;
 }
 
-/** 从 GraphRAG workspace ``input/*.txt`` 中解析 ``[chunk:id]`` 对应正文（用于阅读器高亮，非整篇 MinerU MD） */
+/** 从 GraphRAG workspace ``input/*.txt`` 中解析 ``[chunk:id]`` 对应正文（用于阅读器高亮，非整篇 MinerU MD）。
+ *  可选传入 triples（reasoning_subgraph）让后端调 LLM 精确定位最相关的原句；
+ *  apiKey / apiUrl 需与查询时使用的凭证一致，否则 LLM 调用会返回 401。
+ */
 export async function fetchGraphragChunkSnippet(
   workspaceDir: string,
-  chunkId: string
+  chunkId: string,
+  triples?: Array<Record<string, unknown>>,
+  apiKey?: string,
+  apiUrl?: string,
+  /** Same text as the context-reference box (stripped); LLM uses this instead of raw input block. */
+  passageForLlm?: string,
 ): Promise<ChunkSnippetResponse> {
   const res = await apiFetch(`${GRAPHRAG_KB_BASE}/chunk-snippet`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ workspace_dir: workspaceDir, chunk_id: chunkId }),
+    body: JSON.stringify({
+      workspace_dir: workspaceDir,
+      chunk_id: chunkId,
+      api_key: apiKey || '',
+      api_url: apiUrl || '',
+      ...(triples && triples.length > 0 ? { triples } : {}),
+      ...(passageForLlm != null && passageForLlm.trim() !== ''
+        ? { passage_for_llm: passageForLlm }
+        : {}),
+    }),
   });
   if (!res.ok) throw new Error(await parseErrorDetail(res));
   return res.json() as Promise<ChunkSnippetResponse>;
+}
+
+/** 首条检索 unit 原文 + reasoning_subgraph → 清洗正文 + 支撑句（侧栏上下文参考高亮） */
+export async function refineGraphragContextRefine(
+  unitText: string,
+  subgraph: Array<Record<string, unknown>>,
+  apiKey: string,
+  apiUrl: string,
+  model?: string,
+): Promise<ContextRefineResponse> {
+  const res = await apiFetch(`${GRAPHRAG_KB_BASE}/context-refine`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      unit_text: unitText,
+      subgraph,
+      api_key: apiKey || '',
+      api_url: apiUrl || '',
+      model: (model || '').trim() || DEFAULT_LLM_MODEL,
+    }),
+  });
+  if (!res.ok) throw new Error(await parseErrorDetail(res));
+  return res.json() as Promise<ContextRefineResponse>;
 }

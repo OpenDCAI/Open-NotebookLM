@@ -39,6 +39,7 @@ export interface QueryRequest {
   question: string;
   search_method: 'local' | 'global';
   workspace_dir: string;
+  wikidata_enrich?: boolean | null;
 }
 
 export interface QueryResponse {
@@ -74,4 +75,81 @@ export interface GraphragWorkspacePersist {
   workspace_dir: string;
   updatedAt: number;
   num_chunks?: number;
+}
+
+// ── Chat types ───────────────────────────────────────────────────────────────
+
+export interface ChatRequest {
+  notebook_id: string;
+  notebook_title?: string;
+  email?: string;
+  query: string;
+  history: Array<{ role: 'user' | 'assistant'; content: string; meta?: Record<string, unknown> }>;
+  search_method?: 'auto' | 'local' | 'global';
+  workspace_dir?: string;
+  api_url?: string;
+  api_key?: string;
+  model?: string;
+  /** false = do not append Wikidata tail; omitted = follow server default */
+  wikidata_enrich?: boolean | null;
+  /** true = return main answer first and postprocess later */
+  defer_postprocess?: boolean;
+}
+
+export interface ChatResponse {
+  answer: string;
+  intent: { use_graphrag?: boolean; reason?: string };
+  rewritten_query: string;
+  context_data: Record<string, unknown>;
+  reasoning_subgraph: Array<Record<string, unknown>>;
+  reasoning_subgraph_cot: string;
+  source_chunks: string[];
+  highlight_hints: Array<Record<string, unknown>>;
+  judge_score: number;
+  judge_rationale: string;
+  postprocess_pending?: boolean;
+  graphrag_raw_answer?: string;
+}
+
+export interface ChatPostprocessRequest {
+  query: string;
+  answer: string;
+  reasoning_subgraph: Array<Record<string, unknown>>;
+  api_url?: string;
+  api_key?: string;
+  model?: string;
+  wikidata_enrich?: boolean | null;
+  mode?: 'all' | 'subgraph' | 'wikidata';
+}
+
+export interface ChatPostprocessResponse {
+  reasoning_subgraph: Array<Record<string, unknown>>;
+  reasoning_subgraph_cot: string;
+  judge_score: number;
+  judge_rationale: string;
+  wikidata_appendix: string;
+  subgraph_done: boolean;
+  wikidata_done: boolean;
+  done: boolean;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  meta?: Pick<
+    ChatResponse,
+    'intent' | 'rewritten_query' | 'context_data' | 'reasoning_subgraph' |
+    'reasoning_subgraph_cot' | 'judge_score' | 'judge_rationale' |
+    'graphrag_raw_answer' |
+    'source_chunks' | 'highlight_hints'
+  >;
+  postprocessPending?: boolean;
+  postprocessSubgraphPending?: boolean;
+  postprocessWikidataPending?: boolean;
+}
+
+export interface ContextRefineResponse {
+  cleaned_text: string;
+  supporting_snippets: string[];
 }

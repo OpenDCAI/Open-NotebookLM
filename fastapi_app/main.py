@@ -41,6 +41,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from fastapi_app.routers import auth, data_extract, files, kb, kb_embedding, paper2drawio, paper2ppt
+from fastapi_app.routers import graphrag_kb
 from fastapi_app.middleware.api_key import APIKeyMiddleware
 from fastapi_app.middleware.logging import LoggingMiddleware
 from workflow_engine.utils import get_project_root
@@ -428,6 +429,17 @@ async def _lifespan(app: FastAPI):
         os.environ["LOCAL_MINERU_API_URL"] = mineru_base_url
         os.environ["LOCAL_MINERU_MODEL"] = resolved_mineru_model
 
+    def _warmup_graphrag_imports() -> None:
+        try:
+            import graphrag.config.load_config  # noqa: F401
+            from graphrag import api as _graphrag_api  # noqa: F401
+            from graphrag.cli.query import _resolve_output_files  # noqa: F401
+            log.info("GraphRAG 相关 Python 包已预导入，可降低首次查询的 import 冷启动")
+        except ImportError as exc:
+            log.debug("GraphRAG 预导入跳过: %s", exc)
+
+    _warmup_graphrag_imports()
+
     yield
     for proc in managed_procs:
         if proc.poll() is None:
@@ -476,6 +488,8 @@ def create_app() -> FastAPI:
     app.include_router(paper2drawio.router, prefix="/api/v1", tags=["Paper2Drawio"])
     app.include_router(paper2ppt.router, prefix="/api/v1", tags=["Paper2PPT"])
     app.include_router(auth.router, prefix="/api/v1", tags=["Auth"])
+    # GraphRAG 知识库：/api/v1/graphrag-kb/{index,query,merge,chunk-snippet} → wa_graphrag_kb → wf_graphrag_kb
+    app.include_router(graphrag_kb.router, prefix="/api/v1", tags=["GraphRAG KB"])
 
     # 静态文件：/outputs 下的文件（兼容 URL 中 %40 与 磁盘 @ 两种路径）
     project_root = get_project_root()

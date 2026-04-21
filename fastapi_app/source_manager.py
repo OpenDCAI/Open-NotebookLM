@@ -7,16 +7,19 @@ Handles:
 - Generating unified markdown for every source type
 - Reading back markdown / MinerU data for feature cards
 - Fallback to legacy kb_data / kb_mineru paths
+- Structured chunk extraction with chunk_id / page_index / order / bbox (for GraphRAG)
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 import re
 import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from workflow_engine.logger import get_logger
 from workflow_engine.utils import get_project_root
@@ -237,6 +240,85 @@ class SourceManager:
         sam3_dir.mkdir(parents=True, exist_ok=True)
         return sam3_dir
 
+    def get_chunks_with_meta(
+        self,
+        source_stem: str,
+        chunk_size: int = 512,    # 默认值与 settings.GRAPHRAG_CHUNK_SIZE 一致
+        chunk_overlap: int = 64,  # 默认值与 settings.GRAPHRAG_CHUNK_OVERLAP 一致
+    ) -> List[Dict[str, Any]]:
+        """Return structured chunks for a single source, used by GraphRAG indexing.
+
+        Each dict has keys: chunk_id, text, page_index, order, bbox, source_stem.
+        chunk_id = SHA1("{stem}:{order}")[:16], embedded as [chunk:ID] in input/*.txt.
+        Priority: MinerU content_list.json (exact page+bbox) → MinerU MD (estimated page)
+        → unified MD (page_index=-1).
+        """
+        chunks: List[Dict[str, Any]] = []
+
+        # 1) MinerU content_list.json — exact page + bbox per block
+        mineru_root = self.get_mineru_root(source_stem)
+        if mineru_root:
+            content_list_path = None
+            # rglob to handle varying MinerU output directory layouts
+            for candidate in mineru_root.parent.rglob("*_content_list.json"):
+                content_list_path = candidate
+                break
+            if content_list_path and content_list_path.exists():
+                try:
+                    raw_blocks = json.loads(
+                        content_list_path.read_text(encoding="utf-8")
+                    )
+                    order = 0
+                    for block in raw_blocks:
+                        # MinerU uses "text" or "content" depending on version
+                        text = (block.get("text") or block.get("content") or "").strip()
+                        if not text:
+                            continue  # skip image / formula blocks
+                        # MinerU uses "page_idx" or "page_index" depending on version
+                        page_idx = int(block.get("page_idx", block.get("page_index", -1)))
+                        bbox = block.get("bbox")  # [x1,y1,x2,y2] normalized, may be None
+                        # chunk_id = SHA1("{stem}:{order}")[:16], embedded as [chunk:ID] in input/*.txt
+                        chunk_id = hashlib.sha1(
+                            f"{source_stem}:{order}".encode()
+                        ).hexdigest()[:16]
+                        chunks.append(
+                            {
+                                "chunk_id": chunk_id,
+                                "text": text,
+                                "page_index": page_idx,
+                                "order": order,
+                                "bbox": bbox,
+                                "source_stem": source_stem,
+                            }
+                        )
+                        order += 1
+                    if chunks:
+                        return chunks
+                except Exception as e:
+                    log.debug(
+                        "[SourceManager] content_list.json parse failed for %s: %s",
+                        source_stem,
+                        e,
+                    )
+
+        # 2) MinerU markdown fallback — sliding window, estimated page_index
+        mineru_md = self.get_mineru_md(source_stem)
+        if mineru_md.strip():
+            chunks = self._split_text_to_chunks(
+                mineru_md, source_stem, chunk_size, chunk_overlap, estimate_pages=True
+            )
+            if chunks:
+                return chunks
+
+        # 3) Unified markdown fallback — no page info (Word/PPT/TXT)
+        md = self.get_markdown(source_stem)
+        if md.strip():
+            return self._split_text_to_chunks(
+                md, source_stem, chunk_size, chunk_overlap, estimate_pages=False
+            )
+
+        return []
+
     def get_all_markdowns(self) -> List[Tuple[str, str]]:
         """Return [(stem, markdown_text), ...] for all sources."""
         results: List[Tuple[str, str]] = []
@@ -393,3 +475,49 @@ class SourceManager:
             except Exception:
                 continue
         return ""
+
+    @staticmethod
+    def _split_text_to_chunks(
+        text: str,
+        source_stem: str,
+        chunk_size: int,
+        chunk_overlap: int,
+        estimate_pages: bool,
+    ) -> List[Dict[str, Any]]:
+        """Sliding-window character chunking fallback when content_list is unavailable.
+
+        estimate_pages=True roughly estimates page_index at ~2000 chars/page.
+        """
+        chunks: List[Dict[str, Any]] = []
+        text = text.strip()
+        if not text:
+            return chunks
+
+        total_chars = len(text)
+        step = max(1, chunk_size - chunk_overlap)
+        order = 0
+        pos = 0
+        chars_per_page = 2000  # rough estimate: ~2000 chars per page
+
+        while pos < total_chars:
+            end = min(pos + chunk_size, total_chars)
+            snippet = text[pos:end].strip()
+            if snippet:
+                page_idx = int(pos / chars_per_page) if estimate_pages else -1
+                chunk_id = hashlib.sha1(
+                    f"{source_stem}:{order}".encode()
+                ).hexdigest()[:16]
+                chunks.append(
+                    {
+                        "chunk_id": chunk_id,
+                        "text": snippet,
+                        "page_index": page_idx,
+                        "order": order,
+                        "bbox": None,
+                        "source_stem": source_stem,
+                    }
+                )
+                order += 1
+            pos += step
+
+        return chunks

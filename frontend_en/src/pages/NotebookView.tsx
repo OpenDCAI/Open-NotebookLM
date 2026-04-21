@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   ChevronLeft, Plus, Share2, Settings, MessageSquare,
   BarChart2, Zap, AudioLines, Video, FileText,
   Filter, MoreVertical, Search, Image as ImageIcon, FileStack, Sparkles,
   Mic2, Video as VideoIcon, BrainCircuit, Send, Bot, User, Loader2, Upload, X,
-  Globe, Link2, Cloud, ChevronRight, LayoutGrid, Download, BookOpen, Brain
+  Globe, Link2, Cloud, ChevronRight, LayoutGrid, Download, BookOpen, Brain, Network
 } from 'lucide-react';
 import { useAuthStore } from '../stores/authStore';
 import { apiFetch } from '../config/api';
@@ -13,6 +13,8 @@ import { getApiSettings } from '../services/apiSettingsService';
 import { fetchWithCache, invalidateCacheByPrefix } from '../services/clientCache';
 import type { KnowledgeFile, ChatMessage, ToolType } from '../types';
 import ReactMarkdown from 'react-markdown';
+import rehypeRaw from 'rehype-raw';
+import { injectGraphragHighlightInMarkdown } from '../utils/graphragMarkdownHighlight';
 import { MermaidPreview } from '../components/knowledge-base/tools/MermaidPreview';
 import { SettingsModal } from '../components/SettingsModal';
 import DrawioInlineEditor from '../components/DrawioInlineEditor';
@@ -20,6 +22,8 @@ import { FlashcardViewer } from '../components/flashcards/FlashcardViewer';
 import { QuizContainer } from '../components/quiz/QuizContainer';
 import { NotionEditor } from '../components/notes/NotionEditor';
 import { useToast } from '../hooks/useToast';
+import { GraphRAGKbPanel } from '../components/graphrag-kb/GraphRAGKbPanel';
+import { fetchGraphragChunkSnippet } from '../services/graphragKbService';
 import katex from 'katex';
 import 'katex/dist/katex.min.css';
 
@@ -40,6 +44,7 @@ type CitationReference = {
   preview?: string;
   chunkIndex?: number | null;
   sourceNumber?: string;
+  graphragHighlightText?: string;
 };
 
 type CitationTooltipState = {
@@ -253,6 +258,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
 
   // Studio tools
   const studioTools: Array<{icon: React.ReactNode, label: string, id: ToolType}> = [
+    { icon: <Network className="text-cyan-600" />, label: 'GraphRAG KB', id: 'graphrag_kb' },
     { icon: <ImageIcon className="text-orange-500" />, label: 'PPT生成', id: 'ppt' },
     { icon: <BrainCircuit className="text-purple-500" />, label: '思维导图', id: 'mindmap' },
     // DrawIO 图表功能暂时隐藏，后续修复
@@ -266,11 +272,12 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
   ];
 
   // Studio：每个功能卡片各自配置，点卡片上的「…」翻转进该卡片的设置
-  type StudioToolId = 'ppt' | 'mindmap' | 'drawio' | 'flashcard' | 'quiz' | 'podcast' | 'video' | 'note';
+  type StudioToolId = 'graphrag_kb' | 'ppt' | 'mindmap' | 'drawio' | 'flashcard' | 'quiz' | 'podcast' | 'video' | 'note';
   const [studioPanelView, setStudioPanelView] = useState<'tools' | 'settings'>('tools');
   const [studioSettingsTool, setStudioSettingsTool] = useState<StudioToolId | null>(null);
   const STORAGE_STUDIO_CONFIG = `kb_studio_config_${effectiveUser?.id || 'default'}`;
   const defaultByTool: Record<StudioToolId, Record<string, string>> = {
+    graphrag_kb: {},
     ppt: { llmModel: 'deepseek-v3.2', genFigModel: 'gemini-2.5-flash-image', stylePreset: 'modern', stylePrompt: '', language: 'zh', page_count: '10' },
     mindmap: { llmModel: 'deepseek-v3.2', mindmapStyle: 'default' },
     drawio: { llmModel: 'deepseek-v3.2', diagramType: 'auto', diagramStyle: 'default', language: 'zh' },
@@ -1126,6 +1133,17 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
     }, 80);
     return () => window.clearTimeout(timer);
   }, [sourceDetailCitationFocus, sourceDetailLoading, sourceDetailContent]);
+
+  const sourceDetailMarkdownWithHighlight = useMemo(() => {
+    if (sourceDetailFormat !== 'markdown' || !sourceDetailContent) return sourceDetailContent;
+    const hl = sourceDetailCitationFocus?.graphragHighlightText?.trim();
+    if (!hl) return sourceDetailContent;
+    return injectGraphragHighlightInMarkdown(sourceDetailContent, hl);
+  }, [
+    sourceDetailFormat,
+    sourceDetailContent,
+    sourceDetailCitationFocus?.graphragHighlightText,
+  ]);
 
   const runFastResearch = async () => {
     if (!fastResearchQuery.trim()) return;
@@ -2590,8 +2608,10 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                     <span className="ml-2 text-sm text-gray-500">解析中…</span>
                   </div>
                 ) : sourceDetailFormat === 'markdown' && sourceDetailContent ? (
-                  <div className="prose prose-sm max-w-none text-gray-700 prose-p:text-xs prose-headings:text-sm prose-pre:text-xs">
-                    <ReactMarkdown>{sourceDetailContent}</ReactMarkdown>
+                  <div className="prose prose-sm max-w-none text-gray-700 prose-p:text-xs prose-headings:text-sm prose-pre:text-xs prose-mark:bg-amber-200/90 prose-mark:rounded prose-mark:px-0.5">
+                    <ReactMarkdown rehypePlugins={[rehypeRaw]}>
+                      {sourceDetailMarkdownWithHighlight ?? ''}
+                    </ReactMarkdown>
                   </div>
                 ) : (
                   <pre className="whitespace-pre-wrap text-xs text-gray-700 font-sans leading-relaxed break-words">
@@ -2646,6 +2666,42 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
               }}
             />
           </div>
+        ) : activeTool === 'graphrag_kb' ? (
+          <GraphRAGKbPanel
+            notebook={notebook}
+            userId={effectiveUser?.id || null}
+            email={effectiveUser?.email || effectiveUser?.id || ''}
+            locale="en"
+            showToast={showToast}
+            onOpenGraphragSource={async (p) => {
+              const stem = p.sourceStem.trim();
+              const match = files.find((f) => {
+                const n = f.name || '';
+                const base = n.replace(/\.[^.]+$/, '');
+                return base === stem || n === stem || n.startsWith(`${stem}.`);
+              });
+              if (!match) {
+                showToast(`No source file matching "${stem}"`, 'warning');
+                return;
+              }
+              let graphragHighlightText: string | undefined;
+              if (p.workspaceDir && p.chunkId) {
+                try {
+                  const sn = await fetchGraphragChunkSnippet(p.workspaceDir, p.chunkId);
+                  if (sn.found && sn.text?.trim()) graphragHighlightText = sn.text.trim();
+                } catch {
+                  /* still open full preview */
+                }
+              }
+              await openSourceDetail(match, {
+                fileName: match.name,
+                filePath: match.url,
+                preview: `GraphRAG · ${p.pageIndex >= 0 ? `Page ${p.pageIndex + 1}` : 'unknown page'}`,
+                sourceNumber: 'GR',
+                graphragHighlightText,
+              });
+            }}
+          />
         ) : (
         <main className="flex-1 flex flex-col relative bg-white min-w-[300px] overflow-hidden">
           <div className="flex items-center justify-between px-6 py-3 border-b border-ios-gray-100 shrink-0">
@@ -2822,6 +2878,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                 返回
               </button>
               <h3 className="text-sm font-semibold text-gray-800 mb-3">
+                {studioSettingsTool === 'graphrag_kb' && 'GraphRAG KB'}
                 {studioSettingsTool === 'ppt' && 'PPT 生成'}
                 {studioSettingsTool === 'mindmap' && '思维导图'}
                 {studioSettingsTool === 'drawio' && 'DrawIO 图表'}
@@ -2831,6 +2888,9 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                 {/* {studioSettingsTool === 'video' && '视频讲解'} */}
               </h3>
               <div className="space-y-4">
+                {studioSettingsTool === 'graphrag_kb' && (
+                  <p className="text-sm text-gray-600">Indexing, query, and merge options are in the center GraphRAG Knowledge Base panel.</p>
+                )}
                 {studioSettingsTool === 'ppt' && (() => {
                   const c = getStudioConfig('ppt');
                   return (
@@ -3201,7 +3261,7 @@ const NotebookView = ({ notebook, onBack }: { notebook: any, onBack: () => void 
                 </motion.div>
               ))}
             </div>
-            {activeTool !== 'chat' && activeTool !== 'search' && (
+            {activeTool !== 'chat' && activeTool !== 'search' && activeTool !== 'graphrag_kb' && (
               <motion.button
                 whileTap={{ scale: 0.97 }}
                 type="button"

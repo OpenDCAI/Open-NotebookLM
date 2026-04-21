@@ -1,3 +1,13 @@
+export type {
+  IndexRequest as GraphragIndexRequest,
+  IndexResponse as GraphragIndexResponse,
+  QueryRequest as GraphragQueryRequest,
+  QueryResponse as GraphragQueryResponse,
+  MergeRequest as GraphragMergeRequest,
+  MergeResponse as GraphragMergeResponse,
+  GraphragWorkspacePersist,
+} from './graphragKb';
+
 // Knowledge Base Types
 export type MaterialType = 'image' | 'doc' | 'video' | 'link' | 'audio';
 
@@ -34,4 +44,4 @@ export interface ChatMessage {
 }
 
 export type SectionType = 'library' | 'upload' | 'output' | 'settings';
-export type ToolType = 'chat' | 'ppt' | 'mindmap' | 'podcast' | 'video' | 'search' | 'drawio' | 'flashcard' | 'quiz' | 'note';
+export type ToolType = 'chat' | 'ppt' | 'mindmap' | 'podcast' | 'video' | 'search' | 'drawio' | 'flashcard' | 'quiz' | 'note' | 'graphrag_kb';

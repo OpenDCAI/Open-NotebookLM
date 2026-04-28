@@ -81,7 +81,7 @@ export function ThinkFlowRightPanel({
         {activeOutput ? (
           <button type="button" className={`thinkflow-mode-btn ${rightMode === 'outline' ? 'is-active' : ''}`} onClick={() => setRightMode('outline')}>
             <Pencil size={14} />
-            大纲编排
+            {activeOutput.target_type === 'mindmap' ? '导图预览' : '大纲编排'}
           </button>
         ) : null}
       </div>

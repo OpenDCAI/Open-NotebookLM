@@ -5,14 +5,93 @@ from pathlib import Path
 from typing import List, Dict, Any
 
 import fitz  # PyMuPDF
+from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from workflow_engine.workflow.registry import register
 from workflow_engine.graphbuilder.graph_builder import GenericGraphBuilder
 from workflow_engine.logger import get_logger
-from workflow_engine.state import KBMindMapState, MainState
-from workflow_engine.agentroles import create_agent
+from workflow_engine.state import KBMindMapState
 from workflow_engine.utils import get_project_root
 
 log = get_logger(__name__)
+
+MINDMAP_MARKDOWN_SYSTEM_PROMPT = """\
+你是一个思维导图生成器。根据用户提供的文本内容，输出一份用于 markmap 渲染的 Markdown 思维导图。
+
+输出要求：
+- 只输出 Markdown，不要输出 JSON
+- 使用 ATX 标题语法（# / ## / ###）
+- 整份内容必须是一棵思维导图，不要写解释、前言、总结、代码围栏、项目符号或段落
+- 标题文本要简短，突出关键概念、论点和层级关系
+- 思维导图层次清晰、要点完整、用词简练
+"""
+
+QUALITY_JUDGING_CRITERIA = """\
+生成思维导图请严格遵循以下四个核心原则：
+
+1. 结构性（Structure）
+使用清晰的层次结构
+将复杂问题合理拆分为子节点
+避免简单线性罗列，体现组织结构
+
+2. 关联性（Connectivity）
+节点之间必须有明确、合理的关系（如因果、依赖、解释等）
+避免无关或错误连接
+每个子节点都应与父节点存在明确语义关系
+
+3. 落地性（Groundedness / Actionability）
+所有叶子节点必须是“具体、可用的信息”，例如：事实\数据\明确结论可直接用于回答问题的内容
+避免抽象、空泛或无实际信息的表述（如“进一步分析”、“深入研究”等）
+
+4. 简洁性（Conciseness）
+避免冗余、重复节点
+控制分支数量，保证信息密度高
+除原文表述，每个节点不可使用包含冒号和破折号的表达，一个节点只能是单一主体、概念（如“成功率”、“模型”）或短语（如“准确率90%”，“效果显著提升”）。
+    
+"""
+
+SINGLE_DOC_PROMPT = """\
+请根据以下文档内容生成一个总结型思维导图。
+要求：
+- 提取关键概念、论点和结构化要点，保留重要的数据和示例
+- 最大层级深度为 {max_depth} 层
+- 直接输出 Markdown 标题层级，使用 #、##、### 等markdown标记表示层级
+
+    {QUALITY_JUDGING_CRITERIA}
+
+=== 文档: {title} ===
+{content}
+
+直接输出最终思维导图，不要任何解释或额外文本。
+""".replace("{QUALITY_JUDGING_CRITERIA}", QUALITY_JUDGING_CRITERIA)
+
+
+MERGE_PROMPT = """\
+我们已有多篇文档，并已分别生成了各自的思维导图。现在需要将这些导图整合为一个统一的最终思维导图。
+
+约束
+1. 先分析关系再组织结构。若文档主题或方法体系高度重叠 → 按主题融合，合并相近节点；若主题差异明显 → 保持为并列主分支，不强行统一抽象
+2. 结构要求
+   主分支使用“主题”命名，而不是文档名
+   相似内容需合并去重
+   每篇文档的独有信息必须保留，避免丢失或过度概括
+3. 保留重要的数据和示例
+4. 直接输出 Markdown 标题层级，使用 #、##、### 等markdown标记表示层级
+5. 最大层级深度为：{max_depth}
+
+    {QUALITY_JUDGING_CRITERIA}
+
+不输出任何解释，仅输出最终思维导图
+
+已有的文档思维导图如下：
+{document_mindmaps}
+""".replace("{QUALITY_JUDGING_CRITERIA}", QUALITY_JUDGING_CRITERIA)
+
+
+MINDMAP_SECTION = """\
+=== 文档思维导图: {title} ===
+{mindmap_markdown}
+"""
 
 # Try importing office libraries
 try:
@@ -36,16 +115,65 @@ def create_kb_mindmap_graph() -> GenericGraphBuilder:
     """
     builder = GenericGraphBuilder(state_model=KBMindMapState, entry_point="_start_")
 
-    def _extract_text_result(state: MainState, role_name: str) -> str:
-        try:
-            result = state.agent_results.get(role_name, {}).get("results", {})
-            if isinstance(result, dict):
-                return result.get("text") or result.get("raw") or ""
-            if isinstance(result, str):
-                return result
-        except Exception:
-            return ""
-        return ""
+    def _strip_markdown_code_fence(text: str) -> str:
+        cleaned = str(text or "").strip()
+        if "```" not in cleaned:
+            return cleaned
+        lines = cleaned.splitlines()
+        in_code_block = False
+        code_lines: List[str] = []
+        for line in lines:
+            if line.strip().startswith("```"):
+                in_code_block = not in_code_block
+                continue
+            if in_code_block:
+                code_lines.append(line)
+        return "\n".join(code_lines).strip() or cleaned
+
+    def _normalize_markdown_headings(text: str, max_depth: int) -> str:
+        lines: List[str] = []
+        for raw_line in _strip_markdown_code_fence(text).splitlines():
+            line = raw_line.rstrip()
+            stripped = line.lstrip()
+            if not stripped:
+                continue
+            if stripped.startswith("#"):
+                hashes = len(stripped) - len(stripped.lstrip("#"))
+                title = stripped[hashes:].strip()
+                if title:
+                    level = max(1, min(hashes, max_depth))
+                    lines.append(f"{'#' * level} {title}")
+            elif lines:
+                lines.append(f"{'#' * min(max_depth, 3)} {stripped.strip('-* ')}")
+        return "\n".join(lines).strip()
+
+    async def _run_docmerge_markdown_prompt(
+        state: KBMindMapState,
+        prompt: str,
+        *,
+        temperature: float,
+    ) -> str:
+        llm = ChatOpenAI(
+            openai_api_base=state.request.chat_api_url,
+            openai_api_key=state.request.api_key,
+            model_name=state.request.model,
+            temperature=temperature,
+        )
+        response = await llm.ainvoke([
+            SystemMessage(content=MINDMAP_MARKDOWN_SYSTEM_PROMPT),
+            HumanMessage(content=prompt),
+        ])
+        return str(response.content or "")
+
+    def _single_doc_prompt(filename: str, content: str, max_depth: int, language: str) -> str:
+        return SINGLE_DOC_PROMPT.format(title=filename, content=content, max_depth=max_depth)
+
+    def _merge_prompt(document_trees: List[Dict[str, str]], max_depth: int, language: str) -> str:
+        tree_sections = "\n\n".join(
+            MINDMAP_SECTION.format(title=item["filename"], mindmap_markdown=item["markdown"])
+            for item in document_trees
+        )
+        return MERGE_PROMPT.format(document_mindmaps=tree_sections, max_depth=max_depth)
 
     def _start_(state: KBMindMapState) -> KBMindMapState:
         # Ensure request fields
@@ -156,130 +284,65 @@ def create_kb_mindmap_graph() -> GenericGraphBuilder:
         return state
 
     async def analyze_structure_node(state: KBMindMapState) -> KBMindMapState:
-        """
-        Analyze content structure using LLM
-        """
-        if not state.file_contents:
-            state.content_structure = "No content available for analysis."
-            return state
-
-        # Format file contents
-        contents_str = ""
-        for item in state.file_contents:
-            contents_str += f"=== {item['filename']} ===\n{item['content']}\n\n"
-
-        # Structure analysis prompt
-        language = state.request.language
-        max_depth = state.request.max_depth
-        prompt = f"""你是一位专业的知识结构分析师。请分析以下文档内容，提取出一份“跨来源综合”的层级化知识结构。
-
-要求：
-1. 先综合多个来源的共同主题、关键问题、方法、证据和结论，不要按“论文A/论文B/来源1/来源2”逐篇罗列
-2. 一级节点必须是概念主题、方法模块、问题域、结论方向这类“内容主题”，不能是“训练目标革新”“前沿方向”“跨方向关联”这类空泛包装词
-3. 每个节点要尽量信息密实，优先保留能支撑导图理解的关键词、方法名、现象名、关键结论和关键证据
-4. 建立清晰的层级关系（最多{max_depth}层）
-5. 使用{language}语言
-6. 输出格式为层级化的文本结构，使用缩进表示层级
-7. 如果多个来源之间存在对应关系，应把它们放到同一主题分支下整合，而不是拆成平行的来源分支
-
-文档内容：
-{contents_str}
-
-请输出层级化的知识结构："""
-
-        try:
-            agent = create_agent(
-                name="kb_prompt_agent",
-                model_name=state.request.model,
-                chat_api_url=state.request.chat_api_url,
-                temperature=0.3,
-                parser_type="text"
-            )
-
-            temp_state = MainState(request=state.request)
-            res_state = await agent.execute(temp_state, prompt=prompt)
-
-            state.content_structure = _extract_text_result(res_state, "kb_prompt_agent") or "[Structure analysis failed]"
-        except Exception as e:
-            log.error(f"Structure analysis failed: {e}")
-            state.content_structure = f"[Structure analysis error: {e}]"
-
+        """Skip structure analysis: single-pass generation happens downstream."""
+        state.content_structure = "merged"
         return state
 
     async def generate_mermaid_node(state: KBMindMapState) -> KBMindMapState:
-        """
-        Generate Mermaid mindmap syntax using LLM
-        """
-        if not state.content_structure or state.content_structure.startswith("["):
-            state.mermaid_code = "mindmap\n  root((Error))\n    No content structure available"
+        """Generate a mindmap with the docmerge strategy: per-document trees, then merge."""
+        if not state.file_contents:
+            state.mermaid_code = "# Error\n## No content available"
             return state
 
-        # Mermaid generation prompt
-        style = state.request.mindmap_style
-        prompt = f"""你是一位专业的 Mermaid 导图专家。请根据以下知识结构，生成高质量的 Mermaid mindmap 语法。
-
-知识结构：
-{state.content_structure}
-
-要求：
-1. 使用 Mermaid mindmap 语法
-2. 风格：{style}
-3. 保持层级关系清晰，根节点必须是本批资料的“综合主题”，不能是“大型语言模型前沿方向”“研究方向综述”这类空泛标题
-4. 不要按论文名、来源名、文件名建一级分支；一级分支必须是概念主题、问题域、方法模块、关键发现、应用价值等内容主题
-5. 节点名称要具体，优先使用方法名、现象名、任务名、结论名、关键术语；避免“核心问题/解决方案/关键发现/风险场景/缓解措施/未来探索”这类空壳节点反复出现
-6. 每个分支尽量表达“是什么 -> 为什么重要 -> 关键证据/机制”的信息密度，避免只有目录感没有内容
-7. 如果多个来源讨论的是同一主题，合并到同一分支中，不要拆成并列来源分组
-8. 只输出 Mermaid 代码，不要输出解释，不要加 markdown 代码块
-9. 输出必须以 `mindmap` 开头
-
-Mermaid mindmap语法示例：
-mindmap
-  root((中心主题))
-    主题1
-      子主题1.1
-      子主题1.2
-    主题2
-      子主题2.1
-
-请生成Mermaid mindmap代码："""
+        language = state.request.language
+        max_depth = state.request.max_depth
 
         try:
-            agent = create_agent(
-                name="kb_prompt_agent",
-                model_name=state.request.model,
-                chat_api_url=state.request.chat_api_url,
-                temperature=0.5,
-                parser_type="text"
-            )
+            per_doc_maps: List[Dict[str, str]] = []
+            for item in state.file_contents:
+                filename = str(item.get("filename") or "未命名文档")
+                content = str(item.get("content") or "").strip()
+                if not content:
+                    continue
+                markdown = await _run_docmerge_markdown_prompt(
+                    state,
+                    _single_doc_prompt(filename, content, max_depth, language),
+                    temperature=0.3,
+                )
+                normalized = _normalize_markdown_headings(markdown, max_depth=max_depth)
+                if not normalized:
+                    continue
+                per_doc_maps.append({
+                    "filename": filename,
+                    "markdown": normalized,
+                })
 
-            temp_state = MainState(request=state.request)
-            res_state = await agent.execute(temp_state, prompt=prompt)
-
-            mermaid_raw = _extract_text_result(res_state, "kb_prompt_agent")
-            if mermaid_raw:
-                # Extract mermaid code from markdown code blocks if present
-                if "```" in mermaid_raw:
-                    lines = mermaid_raw.split("\n")
-                    in_code_block = False
-                    code_lines = []
-                    for line in lines:
-                        if line.strip().startswith("```"):
-                            in_code_block = not in_code_block
-                            continue
-                        if in_code_block:
-                            code_lines.append(line)
-                    state.mermaid_code = "\n".join(code_lines)
-                else:
-                    state.mermaid_code = mermaid_raw
+            if not per_doc_maps:
+                state.mermaid_code = "# Error\n## No content available"
+            elif len(per_doc_maps) == 1:
+                state.mermaid_code = per_doc_maps[0]["markdown"]
             else:
-                state.mermaid_code = "mindmap\n  root((Error))\n    Generation failed"
+                merged_markdown = await _run_docmerge_markdown_prompt(
+                    state,
+                    _merge_prompt(per_doc_maps, max_depth, language),
+                    temperature=0.3,
+                )
+                state.mermaid_code = _normalize_markdown_headings(merged_markdown, max_depth=max_depth)
+                if not state.mermaid_code:
+                    state.mermaid_code = "# Error\n## Generation failed"
+            if per_doc_maps:
+                state.content_structure = "\n\n".join(
+                    f"=== 文档思维导图: {item['filename']} ===\n{item['markdown']}"
+                    for item in per_doc_maps
+                )
         except Exception as e:
-            log.error(f"Mermaid generation failed: {e}")
-            state.mermaid_code = f"mindmap\n  root((Error))\n    {str(e)}"
+            log.error(f"DocMerge mindmap generation failed: {e}")
+            state.mermaid_code = f"# Error\n## {str(e)}"
 
         # Save mermaid code to file
         try:
             mermaid_path = Path(state.result_path) / "mindmap.mmd"
+            mermaid_path.parent.mkdir(parents=True, exist_ok=True)
             mermaid_path.write_text(state.mermaid_code, encoding="utf-8")
             log.info(f"Mermaid code saved to: {mermaid_path}")
         except Exception as e:

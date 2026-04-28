@@ -32,7 +32,7 @@ import { ThinkFlowAddSourceModal } from './ThinkFlowAddSourceModal';
 import { ThinkFlowCenterPanel } from './ThinkFlowCenterPanel';
 import { ThinkFlowFlashcardStudy } from './ThinkFlowFlashcardStudy';
 import { ThinkFlowLeftSidebar } from './ThinkFlowLeftSidebar';
-import { MermaidPreview } from './MermaidPreview';
+import { ThinkFlowMindmapPreview } from './ThinkFlowMindmapPreview';
 import { ThinkFlowOutputContextModal } from './ThinkFlowOutputContextModal';
 import { ThinkFlowQuizStudy } from './ThinkFlowQuizStudy';
 import { ThinkFlowTopBar } from './ThinkFlowTopBar';
@@ -3505,8 +3505,10 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           email: effectiveUser?.email || '',
         }),
       });
-      await parseJson(response);
+      const result = await parseJson(response);
       await refreshFiles();
+      const sourceName = result?.source_path ? String(result.source_path).split('/').pop() : '';
+      pushToast(sourceName ? `已导入为来源素材：${sourceName}` : '已导入为来源素材', 'success');
     } catch (error: any) {
       setGlobalError(error?.message || '回流来源失败');
     }
@@ -3657,9 +3659,18 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }
     if (result.mermaid_code) {
       return (
-        <div className="thinkflow-output-preview">
-          <MermaidPreview mermaidCode={String(result.mermaid_code)} title="导图预览" />
-        </div>
+        <ThinkFlowMindmapPreview
+          activeOutput={activeOutput}
+          files={files}
+          conversationSourceRefs={conversationSourceRefs}
+          resolveFileUrl={resolveFileUrl}
+          setConversationSourceRefs={setConversationSourceRefs}
+          setSelectedIds={setSelectedIds}
+          persistConversationWorkspaceState={({ sourceRefs }) => persistConversationWorkspaceState({ sourceRefs })}
+          setCaptureFeedback={setCaptureFeedback}
+          setGlobalError={setGlobalError}
+          setChatInput={setChatInput}
+        />
       );
     }
     if (activeOutput.target_type === 'flashcard' && flashcards.length > 0) return renderFlashcardPreview(flashcards);
@@ -3786,6 +3797,16 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
 
   const buildPptReferenceDocumentTitles = (primaryTitle: string, boundTitles: string[]) => {
     const titles = [primaryTitle, ...boundTitles].map((item) => String(item || '').trim()).filter(Boolean);
+    return Array.from(new Set(titles));
+  };
+
+  const buildDirectOutputDocumentTitles = (documentId: string, primaryTitle: string, boundTitles: string[]) => {
+    const titles = [
+      documentId ? primaryTitle : '',
+      ...boundTitles,
+    ]
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
     return Array.from(new Set(titles));
   };
 
@@ -4578,11 +4599,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   <section className="thinkflow-output-context-group">
                     <div className="thinkflow-output-context-group-title">梳理文档 / 参考文档</div>
                     <div className="thinkflow-output-lock-list">
-                      {buildPptReferenceDocumentTitles(
+                      {buildDirectOutputDocumentTitles(
+                        directOutputIntent.outputDocumentId,
                         directOutputIntent.outputDocumentTitle,
                         directOutputIntent.boundDocumentTitles,
                       ).length > 0 ? (
-                        buildPptReferenceDocumentTitles(
+                        buildDirectOutputDocumentTitles(
+                          directOutputIntent.outputDocumentId,
                           directOutputIntent.outputDocumentTitle,
                           directOutputIntent.boundDocumentTitles,
                         ).map((item) => (

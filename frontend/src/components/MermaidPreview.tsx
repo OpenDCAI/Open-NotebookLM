@@ -1,112 +1,233 @@
 import { useEffect, useRef, useState } from 'react';
-import { createPortal } from 'react-dom';
-import { Code, Download, Eye, Maximize2, X } from 'lucide-react';
-import mermaid from 'mermaid';
+import { Code, Download, Expand, FileText, Maximize2, MessageSquare, Shrink, ZoomIn, ZoomOut } from 'lucide-react';
+import MindMap from 'simple-mind-map';
+import Export from 'simple-mind-map/src/plugins/Export.js';
+import { transformMarkdownTo } from 'simple-mind-map/src/parse/markdownTo.js';
+import { isMermaidMindmap, markdownToMermaid, mermaidToMarkdown } from '../utils/mermaidToMarkdown';
+
+MindMap.usePlugin(Export);
 
 type MermaidPreviewProps = {
   mermaidCode: string;
   title?: string;
+  onNodeClick?: (nodeText: string) => void;
 };
 
-export function MermaidPreview({ mermaidCode, title = '思维导图预览' }: MermaidPreviewProps) {
-  const mermaidRef = useRef<HTMLDivElement>(null);
-  const [showCode, setShowCode] = useState(false);
+type AskMenuState = {
+  nodeText: string;
+  parentText: string;
+  x: number;
+  y: number;
+};
+
+export function MermaidPreview({ mermaidCode, title = '思维导图预览', onNodeClick }: MermaidPreviewProps) {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mindMapRef = useRef<any>(null);
+  const onNodeClickRef = useRef(onNodeClick);
+  const shouldAutoFitRef = useRef(false);
+  const lastRenderedCodeRef = useRef('');
   const [renderError, setRenderError] = useState<string | null>(null);
-  const [renderedSvg, setRenderedSvg] = useState('');
-  const [showModal, setShowModal] = useState(false);
-  const [modalSvg, setModalSvg] = useState('');
-  const [zoom, setZoom] = useState(1);
-  const [offset, setOffset] = useState({ x: 0, y: 0 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
-  const [dragOrigin, setDragOrigin] = useState({ x: 0, y: 0 });
+  const [tooltip, setTooltip] = useState<{ text: string; x: number; y: number } | null>(null);
+  const [askMenu, setAskMenu] = useState<AskMenuState | null>(null);
+  const previewFitPadding = 84;
 
   useEffect(() => {
-    mermaid.initialize({
-      startOnLoad: false,
-      theme: 'dark',
-      themeVariables: {
-        primaryColor: '#0ea5e9',
-        primaryTextColor: '#fff',
-        primaryBorderColor: '#0284c7',
-        lineColor: '#06b6d4',
-        secondaryColor: '#0891b2',
-        tertiaryColor: '#164e63',
-      },
-      fontFamily: 'ui-sans-serif, system-ui, sans-serif',
-    });
+    onNodeClickRef.current = onNodeClick;
+  }, [onNodeClick]);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    try {
+      const mindMap = new MindMap({
+        el: containerRef.current,
+        data: {
+          data: {
+            text: '思维导图',
+          },
+          children: [],
+        },
+        theme: 'default',
+        themeConfig: {
+          lineColor: '#7dd3fc',
+          generalizationLineColor: '#7dd3fc',
+          associativeLineActiveColor: '#38bdf8',
+          hoverRectColor: '#7dd3fc',
+          root: {
+            fillColor: '#38bdf8',
+            color: '#ffffff',
+            borderColor: '#38bdf8',
+            borderWidth: 0,
+            borderRadius: 14,
+            paddingX: 24,
+            paddingY: 12,
+          },
+          second: {
+            fillColor: '#f0f9ff',
+            color: '#0284c7',
+            borderColor: '#7dd3fc',
+            borderWidth: 1,
+            borderRadius: 12,
+            paddingX: 18,
+            paddingY: 10,
+          },
+          node: {
+            fillColor: '#ffffff',
+            color: '#111827',
+            borderColor: '#bae6fd',
+            borderWidth: 1,
+            borderRadius: 10,
+            paddingX: 16,
+            paddingY: 8,
+          },
+          generalization: {
+            fillColor: '#f0f9ff',
+            color: '#0284c7',
+            borderColor: '#7dd3fc',
+            borderWidth: 1,
+            borderRadius: 12,
+          },
+        },
+        layout: 'logicalStructure',
+        scaleRatio: 0.1,
+        minZoomRatio: 20,
+        maxZoomRatio: 500,
+        readonly: true,
+        enableFreeDrag: false,
+        alwaysShowExpandBtn: true,
+        initRootNodePosition: ['center', 'center'],
+        fitPadding: previewFitPadding,
+        exportPaddingX: 50,
+        exportPaddingY: 50,
+      });
+
+      mindMapRef.current = mindMap;
+
+      mindMap.on('node_tree_render_end', () => {
+        if (!shouldAutoFitRef.current) return;
+        shouldAutoFitRef.current = false;
+        setTimeout(() => mindMap.view.fit(undefined, false, previewFitPadding), 80);
+      });
+
+      mindMap.on('node_click', (node: any, event: any) => {
+        if (!onNodeClickRef.current) return;
+        const text = node?.nodeData?.data?.text;
+        if (!text) return;
+        setTooltip(null);
+        const parentText = node?.parent?.nodeData?.data?.text || '';
+        const raw = event?.originEvent || event?.event || event;
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect && raw?.clientX != null) {
+          setAskMenu({
+            nodeText: text,
+            parentText,
+            x: raw.clientX - rect.left,
+            y: raw.clientY - rect.top,
+          });
+        } else if (rect) {
+          setAskMenu({
+            nodeText: text,
+            parentText,
+            x: rect.width / 2,
+            y: rect.height / 2,
+          });
+        }
+      });
+
+      mindMap.on('node_mouseenter', (node: any, event: any) => {
+        if (!onNodeClickRef.current) return;
+        const text = node?.nodeData?.data?.text;
+        if (!text) return;
+        const raw = event?.originEvent || event?.event || event;
+        const rect = containerRef.current?.getBoundingClientRect();
+        if (rect && raw?.clientX != null) {
+          setTooltip({
+            text: '点击提问',
+            x: raw.clientX - rect.left,
+            y: raw.clientY - rect.top - 36,
+          });
+        }
+      });
+
+      mindMap.on('node_mouseleave', () => {
+        setTooltip(null);
+      });
+
+      const resizeObserver = new ResizeObserver(() => {
+        mindMapRef.current?.resize();
+      });
+      resizeObserver.observe(containerRef.current);
+
+      return () => {
+        resizeObserver.disconnect();
+        if (mindMapRef.current) {
+          mindMapRef.current.destroy();
+          mindMapRef.current = null;
+        }
+      };
+    } catch (error: any) {
+      setRenderError(error?.message || '渲染思维导图失败');
+    }
   }, []);
 
   useEffect(() => {
-    const renderMermaid = async () => {
-      if (!mermaidCode || !mermaidRef.current) return;
-
-      try {
-        setRenderError(null);
-        setRenderedSvg('');
-        mermaidRef.current.innerHTML = '';
-
-        const id = `mermaid-${Date.now()}`;
-        const { svg } = await mermaid.render(id, mermaidCode);
-        setRenderedSvg(svg);
-
-        if (mermaidRef.current) {
-          mermaidRef.current.innerHTML = svg;
-        }
-      } catch (error: any) {
-        console.error('Mermaid render error:', error);
-        setRenderError(error.message || 'Failed to render diagram');
-        setRenderedSvg('');
-      }
-    };
-
-    void renderMermaid();
+    if (!mindMapRef.current || !mermaidCode) return;
+    try {
+      const markdown = isMermaidMindmap(mermaidCode) ? mermaidToMarkdown(mermaidCode) : mermaidCode;
+      const data = transformMarkdownTo(markdown);
+      setRenderError(null);
+      setTooltip(null);
+      setAskMenu(null);
+      shouldAutoFitRef.current = mermaidCode !== lastRenderedCodeRef.current;
+      lastRenderedCodeRef.current = mermaidCode;
+      mindMapRef.current.setData(data);
+    } catch {
+      setRenderError('解析思维导图数据失败');
+    }
   }, [mermaidCode]);
 
-  const renderSvgForExport = async () => {
-    if (renderedSvg) return renderedSvg;
-    const id = `mermaid-export-${Date.now()}`;
-    const { svg } = await mermaid.render(id, mermaidCode);
-    return svg;
+  const handleExpandAll = () => {
+    mindMapRef.current?.execCommand('EXPAND_ALL');
   };
 
-  const normalizeSvg = (svg: string) =>
-    svg.replace(/<svg([^>]*?)>/i, (match, attrs) => {
-      let next = attrs.replace(/\swidth="[^"]*"/i, '').replace(/\sheight="[^"]*"/i, '');
+  const handleCollapseAll = () => {
+    mindMapRef.current?.execCommand('UNEXPAND_ALL');
+  };
 
-      if (!/preserveAspectRatio=/i.test(next)) {
-        next += ' preserveAspectRatio="xMidYMid meet"';
-      }
+  const handleZoomIn = () => mindMapRef.current?.view.enlarge();
+  const handleZoomOut = () => mindMapRef.current?.view.narrow();
+  const handleFit = () => mindMapRef.current?.view.fit(undefined, false, previewFitPadding);
 
-      if (/style="/i.test(next)) {
-        next = next.replace(/style="([^"]*)"/i, (_, style) => `style="${style}; width:100%; height:100%;"`);
-      } else {
-        next += ' style="width:100%; height:100%;"';
-      }
-
-      return `<svg${next}>`;
-    });
-
-  const handleDownloadSVG = async () => {
-    if (!mermaidCode) return;
+  const handleDownloadPng = async () => {
+    if (!mindMapRef.current) return;
     try {
-      const svgData = await renderSvgForExport();
-      const blob = new Blob([svgData], { type: 'image/svg+xml' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `mindmap_${Date.now()}.svg`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Download SVG failed:', error);
+      const viewState = mindMapRef.current.view.getTransformData();
+      const fullData = mindMapRef.current.getData();
+      mindMapRef.current.execCommand('EXPAND_ALL');
+      await new Promise((resolve) => setTimeout(resolve, 800));
+      mindMapRef.current.view.fit(undefined, false, previewFitPadding);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await mindMapRef.current.export('png', true, `mindmap_${Date.now()}`);
+      mindMapRef.current.setData(fullData);
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      mindMapRef.current.view.setTransformData(viewState);
+    } catch {
+      // keep preview usable even if export fails
     }
   };
 
-  const handleDownloadCode = () => {
-    const blob = new Blob([mermaidCode], { type: 'text/plain' });
+  const handleDownloadTxt = async () => {
+    if (!mindMapRef.current) return;
+    try {
+      await mindMapRef.current.export('txt', true, `mindmap_${Date.now()}`);
+    } catch {
+      // keep preview usable even if export fails
+    }
+  };
+
+  const handleDownloadMermaid = () => {
+    const normalized = isMermaidMindmap(mermaidCode) ? mermaidCode : markdownToMermaid(mermaidCode);
+    const blob = new Blob([normalized], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -117,188 +238,121 @@ export function MermaidPreview({ mermaidCode, title = '思维导图预览' }: Me
     URL.revokeObjectURL(url);
   };
 
-  const handleExpand = async () => {
-    if (!mermaidCode) return;
-    try {
-      const svgData = await renderSvgForExport();
-      setModalSvg(normalizeSvg(svgData));
-      setZoom(1);
-      setOffset({ x: 0, y: 0 });
-      setShowModal(true);
-    } catch (error) {
-      console.error('Expand preview failed:', error);
-    }
-  };
-
-  const clampZoom = (value: number) => Math.min(5, Math.max(0.2, value));
-
-  const handleWheel = (event: React.WheelEvent<HTMLDivElement>) => {
-    event.preventDefault();
-    const direction = event.deltaY > 0 ? 0.9 : 1.1;
-    setZoom((previous) => clampZoom(previous * direction));
-  };
-
-  const handleMouseDown = (event: React.MouseEvent<HTMLDivElement>) => {
-    setIsDragging(true);
-    setDragStart({ x: event.clientX, y: event.clientY });
-    setDragOrigin(offset);
-  };
-
-  const handleMouseMove = (event: React.MouseEvent<HTMLDivElement>) => {
-    if (!isDragging) return;
-    const dx = event.clientX - dragStart.x;
-    const dy = event.clientY - dragStart.y;
-    setOffset({ x: dragOrigin.x + dx, y: dragOrigin.y + dy });
-  };
-
-  const handleMouseUp = () => {
-    setIsDragging(false);
-  };
+  const btnBase = 'flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] transition-colors';
+  const btnGhost = `${btnBase} border border-sky-200 bg-white text-sky-700 shadow-sm hover:bg-sky-50`;
+  const btnAccent = `${btnBase} border border-sky-200 bg-sky-50 text-sky-700 shadow-sm hover:bg-sky-100`;
 
   return (
-    <div className="border-t border-neutral-200 pt-6">
-      <div className="mb-4 flex items-center justify-between">
-        <h4 className="text-sm font-medium text-neutral-600">{title}</h4>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={() => void handleExpand()}
-            className="flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:bg-neutral-100"
-          >
-            <Maximize2 size={14} />
-            放大
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowCode((previous) => !previous)}
-            className="flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-neutral-50 px-3 py-1.5 text-xs text-neutral-600 transition-colors hover:bg-neutral-100"
-          >
-            {showCode ? <Eye size={14} /> : <Code size={14} />}
-            {showCode ? '查看图形' : '查看代码'}
-          </button>
-          <button
-            type="button"
-            onClick={() => void handleDownloadSVG()}
-            className="flex items-center gap-1.5 rounded-lg border border-accent-200 bg-accent-50 px-3 py-1.5 text-xs text-accent-600 transition-colors hover:bg-accent-100"
-          >
-            <Download size={14} />
-            下载 SVG
-          </button>
-          <button
-            type="button"
-            onClick={handleDownloadCode}
-            className="flex items-center gap-1.5 rounded-lg border border-accent-200 bg-accent-50 px-3 py-1.5 text-xs text-accent-600 transition-colors hover:bg-accent-100"
-          >
-            <Download size={14} />
-            下载代码
-          </button>
-        </div>
+    <div className="px-6 pb-5 pt-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h4 className="text-sm font-semibold text-gray-700">{title}</h4>
       </div>
 
-      {showCode ? (
-        <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-4">
-          <div className="mb-2 text-xs text-neutral-400">Mermaid 代码:</div>
-          <pre className="max-h-96 overflow-x-auto rounded bg-neutral-900 p-3 text-xs text-neutral-600">
-            {mermaidCode}
-          </pre>
+      <div className="mb-4 flex flex-wrap items-center gap-2">
+        <button type="button" onClick={handleExpandAll} className={btnGhost} title="展开全部">
+          <Expand size={12} />
+          展开全部
+        </button>
+        <button type="button" onClick={handleCollapseAll} className={btnGhost} title="收缩全部">
+          <Shrink size={12} />
+          收缩全部
+        </button>
+        <button type="button" onClick={handleZoomIn} className={btnGhost} title="放大">
+          <ZoomIn size={12} />
+        </button>
+        <button type="button" onClick={handleZoomOut} className={btnGhost} title="缩小">
+          <ZoomOut size={12} />
+        </button>
+        <button type="button" onClick={handleFit} className={btnGhost} title="适应画布">
+          <Maximize2 size={12} />
+          适应
+        </button>
+
+        <div className="mx-1 h-5 w-px bg-gray-200" />
+
+        <button type="button" onClick={() => void handleDownloadPng()} className={btnAccent} title="下载 PNG（全部展开）">
+          <Download size={12} />
+          PNG
+        </button>
+        <button type="button" onClick={() => void handleDownloadTxt()} className={btnAccent} title="下载层级文本">
+          <FileText size={12} />
+          文本
+        </button>
+        <button type="button" onClick={handleDownloadMermaid} className={btnAccent} title="下载 Mermaid 代码">
+          <Code size={12} />
+          Mermaid
+        </button>
+      </div>
+
+      {renderError ? (
+        <div className="rounded-xl border border-red-200 bg-red-50 p-6 text-center">
+          <div className="mb-2 text-sm text-red-600">渲染失败</div>
+          <div className="text-xs text-red-400">{renderError}</div>
         </div>
       ) : (
-        <div className="rounded-lg border border-neutral-200 bg-neutral-50 p-6">
-          {renderError ? (
-            <div className="py-8 text-center">
-              <div className="mb-2 text-sm text-error-500">渲染失败</div>
-              <div className="text-xs text-neutral-500">{renderError}</div>
-              <button
-                type="button"
-                onClick={() => setShowCode(true)}
-                className="mt-4 text-xs text-accent-600 hover:text-accent-600"
-              >
-                查看原始代码
-              </button>
-            </div>
-          ) : (
+        <div className="relative rounded-2xl border border-gray-200 bg-[linear-gradient(180deg,rgba(248,250,252,0.95),rgba(255,255,255,0.98))] p-3 shadow-sm">
+          <div
+            ref={containerRef}
+            className="overflow-hidden rounded-xl border border-gray-200 bg-white"
+            style={{
+              width: '100%',
+              height: '500px',
+              cursor: onNodeClick ? 'pointer' : 'default',
+            }}
+          />
+          {tooltip && !askMenu ? (
             <div
-              ref={mermaidRef}
-              className="flex items-center justify-center overflow-x-auto"
-              style={{ minHeight: '200px' }}
-            />
-          )}
+              className="pointer-events-none absolute z-50 whitespace-nowrap rounded-lg bg-gray-800 px-2.5 py-1.5 text-xs text-white shadow-lg"
+              style={{ left: tooltip.x, top: tooltip.y, transform: 'translateX(-50%)' }}
+            >
+              {tooltip.text}
+            </div>
+          ) : null}
         </div>
       )}
 
-      {showModal &&
-        createPortal(
+      {askMenu && onNodeClick ? (
+        <>
+          <div className="fixed inset-0 z-[100]" onClick={() => setAskMenu(null)} />
           <div
-            className="fixed inset-0 z-[200] flex items-center justify-center bg-neutral-900/60 p-6 backdrop-blur-md"
-            onClick={() => setShowModal(false)}
+            className="fixed z-[101] w-80 space-y-1 rounded-xl border border-sky-100 bg-white p-2 shadow-xl"
+            style={{
+              left: askMenu.x + (containerRef.current?.getBoundingClientRect()?.left || 0),
+              top: askMenu.y + (containerRef.current?.getBoundingClientRect()?.top || 0) + 8,
+            }}
           >
-            <div
-              className="flex h-[90vh] w-[92vw] max-w-none flex-col overflow-hidden rounded-2xl border border-neutral-200 bg-white shadow-2xl"
-              onClick={(event) => event.stopPropagation()}
+            <div className="px-3 py-1.5 text-xs font-medium text-gray-400">针对「{askMenu.nodeText}」提问</div>
+            <button
+              type="button"
+              className="w-full rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-cyan-50 hover:text-cyan-700"
+              onClick={() => {
+                onNodeClick(`根据来源，展开说明「${askMenu.nodeText}」。`);
+                setAskMenu(null);
+              }}
             >
-              <div className="flex items-center justify-between border-b border-neutral-200 px-4 py-3">
-                <div className="text-sm text-neutral-600">思维导图放大预览</div>
-                <div className="flex items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setZoom((previous) => clampZoom(previous * 0.9))}
-                    className="rounded-lg bg-neutral-50 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-100"
-                  >
-                    缩小
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setZoom((previous) => clampZoom(previous * 1.1))}
-                    className="rounded-lg bg-neutral-50 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-100"
-                  >
-                    放大
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setZoom(1);
-                      setOffset({ x: 0, y: 0 });
-                    }}
-                    className="rounded-lg bg-neutral-50 px-2 py-1 text-xs text-neutral-600 hover:bg-neutral-100"
-                  >
-                    复位
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setShowModal(false)}
-                    className="rounded-lg p-2 text-neutral-400 transition-colors hover:bg-neutral-100 hover:text-neutral-700"
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-              </div>
-              <div
-                className="flex-1 overflow-hidden bg-neutral-50 p-6"
-                onWheel={handleWheel}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
-                style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+              <MessageSquare size={14} className="mr-2 inline text-cyan-500" />
+              根据来源，展开说明「{askMenu.nodeText}」
+            </button>
+            {askMenu.parentText ? (
+              <button
+                type="button"
+                className="w-full rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition-colors hover:bg-cyan-50 hover:text-cyan-700"
+                onClick={() => {
+                  onNodeClick(`在「${askMenu.parentText}」背景下，根据来源展开说明「${askMenu.nodeText}」。`);
+                  setAskMenu(null);
+                }}
               >
-                {modalSvg ? (
-                  <div className="flex h-full w-full items-center justify-center">
-                    <div
-                      style={{
-                        transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})`,
-                        transformOrigin: 'center center',
-                      }}
-                      dangerouslySetInnerHTML={{ __html: modalSvg }}
-                    />
-                  </div>
-                ) : (
-                  <div className="text-sm text-neutral-500">暂无可预览内容</div>
-                )}
-              </div>
-            </div>
-          </div>,
-          document.body,
-        )}
+                <MessageSquare size={14} className="mr-2 inline text-cyan-500" />
+                在「{askMenu.parentText}」背景下，根据来源展开说明「{askMenu.nodeText}」
+              </button>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+
+      <div className="mt-3 text-xs text-gray-400">
+        {onNodeClick ? '提示：点击拖拽，Ctrl+滚轮缩放，点击节点并发起提问并自动选中来源。' : '提示：滚轮缩放，点击节点旁按钮可展开/收缩。'}
+      </div>
     </div>
   );
 }

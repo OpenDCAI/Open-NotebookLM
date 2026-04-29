@@ -8,6 +8,7 @@ type DocumentPanelSectionProps = {
   documents: Array<{ id: string; title: string }>;
   activeDocumentId: string;
   activeDocument: { id: string; title: string; document_type?: string } | null;
+  pendingDocument?: { title: string; content: string } | null;
   documentTitle: string;
   documentContent: string;
   editMode: boolean;
@@ -50,6 +51,7 @@ export function DocumentPanelSection({
   documents,
   activeDocumentId,
   activeDocument,
+  pendingDocument,
   documentTitle,
   documentContent,
   editMode,
@@ -87,7 +89,14 @@ export function DocumentPanelSection({
   const [outputWizardOpen, setOutputWizardOpen] = useState(false);
   const [outputWizardTitle, setOutputWizardTitle] = useState('PPT 产出文档');
   const [outputWizardSources, setOutputWizardSources] = useState<Record<string, { body: boolean; stash: boolean }>>({});
-  const isOutputDocument = activeDocument?.document_type === 'output_doc';
+  const displayedActiveDocument = pendingDocument
+    ? { id: '__ppt_output_pending__', title: pendingDocument.title, document_type: 'output_doc' }
+    : activeDocument;
+  const displayedActiveDocumentId = pendingDocument ? '__ppt_output_pending__' : activeDocumentId;
+  const displayedDocumentTitle = pendingDocument ? pendingDocument.title : documentTitle;
+  const displayedDocumentContent = pendingDocument ? pendingDocument.content : documentContent;
+  const isOutputDocument = displayedActiveDocument?.document_type === 'output_doc';
+  const isPendingDocument = Boolean(pendingDocument);
   const focusText = focusState.description || (isOutputDocument ? '确认模块：全文' : '焦点：全文');
 
   const toggleOutputWizardSource = (documentId: string, key: 'body' | 'stash') => {
@@ -131,7 +140,7 @@ export function DocumentPanelSection({
             <button
               key={doc.id}
               type="button"
-              className={`thinkflow-doc-tab ${activeDocumentId === doc.id ? 'is-active' : ''} ${conversationActiveDocumentId === doc.id ? 'is-conversation-active' : ''}`}
+              className={`thinkflow-doc-tab ${displayedActiveDocumentId === doc.id ? 'is-active' : ''} ${conversationActiveDocumentId === doc.id ? 'is-conversation-active' : ''}`}
               onClick={() => void onSelectDocument(doc.id)}
             >
               {conversationActiveDocumentId === doc.id ? <span className="thinkflow-doc-active-dot" /> : null}
@@ -147,14 +156,14 @@ export function DocumentPanelSection({
             + 产出文档
           </button>
           <div className="thinkflow-doc-actions">
-            <button type="button" className={`thinkflow-doc-action-btn ${editMode ? 'is-active' : ''}`} onClick={onToggleDocumentEdit}>
+            <button type="button" className={`thinkflow-doc-action-btn ${editMode ? 'is-active' : ''}`} onClick={onToggleDocumentEdit} disabled={isPendingDocument}>
               {editMode ? '编辑中' : '编辑全文'}
             </button>
-            <button type="button" className={`thinkflow-doc-action-btn ${showVersionPanel ? 'is-active' : ''}`} onClick={onToggleVersionPanel} disabled={versions.length <= 1}>
+            <button type="button" className={`thinkflow-doc-action-btn ${showVersionPanel ? 'is-active' : ''}`} onClick={onToggleVersionPanel} disabled={isPendingDocument || versions.length <= 1}>
               历史{versions.length > 1 ? `(${versions.length})` : ''}
             </button>
-            {activeDocument ? (
-              <button type="button" className="thinkflow-doc-action-btn is-danger" onClick={() => void onDeleteDocument(activeDocument.id)}>
+            {displayedActiveDocument && !isPendingDocument ? (
+              <button type="button" className="thinkflow-doc-action-btn is-danger" onClick={() => void onDeleteDocument(displayedActiveDocument.id)}>
                 <Trash2 size={14} />
                 删除
               </button>
@@ -163,24 +172,25 @@ export function DocumentPanelSection({
         </div>
       </div>
 
-      {activeDocument ? (
+      {displayedActiveDocument ? (
         <div className="thinkflow-doc-title-row">
           <input
             className="thinkflow-doc-title-input"
-            value={documentTitle}
+            value={displayedDocumentTitle}
             onChange={(event) => onDocumentTitleChange(event.target.value)}
+            disabled={isPendingDocument}
             placeholder="为这份梳理输入标题，或稍后从对话内容整理命名"
           />
         </div>
       ) : null}
 
-      {activeDocument ? (
+      {displayedActiveDocument ? (
         <div className={`thinkflow-doc-focus-bar ${isOutputDocument ? 'is-output-module-focus' : ''}`}>
           <div>
             <Target size={13} />
             <span>{isOutputDocument ? focusText.replace(/^焦点：/, '确认模块：') : focusText}</span>
           </div>
-          {focusState.type !== 'full' ? (
+          {focusState.type !== 'full' && !isPendingDocument ? (
             <button type="button" className="thinkflow-doc-action-btn" onClick={() => void onClearFocus()}>
               <X size={12} />
               {isOutputDocument ? '取消确认' : '回到全文'}
@@ -189,9 +199,9 @@ export function DocumentPanelSection({
         </div>
       ) : null}
 
-      {activeDocument && conversationActiveDocumentId && activeDocument.id !== conversationActiveDocumentId ? (
+      {displayedActiveDocument && !isPendingDocument && conversationActiveDocumentId && displayedActiveDocument.id !== conversationActiveDocumentId ? (
         <div className="thinkflow-doc-active-warning">
-          <span>当前显示的是「{activeDocument.title}」，对话活跃文档是「{conversationActiveDocument?.title || '未命名文档'}」</span>
+          <span>当前显示的是「{displayedActiveDocument.title}」，对话活跃文档是「{conversationActiveDocument?.title || '未命名文档'}」</span>
           <button type="button" className="thinkflow-doc-action-btn" onClick={() => void onActivateDisplayedDocument()}>
             <CheckCircle2 size={13} />
             切换活跃为本文档
@@ -202,22 +212,24 @@ export function DocumentPanelSection({
       {panelGuide}
 
       <div className="thinkflow-doc-body" ref={docBodyRef}>
-        {!activeDocument ? (
+        {!displayedActiveDocument ? (
         <div className="thinkflow-empty">
             来源是主输入；梳理文档用于沉淀结构化理解，也可以作为后续产出的增强上下文。
             <br />
             先在中间持续对话，再把真正有价值的段落或回答推送到这里。
           </div>
-        ) : !documentContent.trim() ? (
+        ) : isPendingDocument ? (
+          <pre className="thinkflow-markdown thinkflow-ppt-output-pending-doc">{displayedDocumentContent}</pre>
+        ) : !displayedDocumentContent.trim() ? (
           <div className="thinkflow-empty">
             在左边对话中选中内容，点击 <strong>⟩</strong> 推送到这里。
           </div>
         ) : editMode ? (
-          <textarea className="thinkflow-doc-editor" value={documentContent} onChange={(event) => onDocumentContentChange(event.target.value)} />
+          <textarea className="thinkflow-doc-editor" value={displayedDocumentContent} onChange={(event) => onDocumentContentChange(event.target.value)} />
         ) : (
           <div className="thinkflow-doc-sections">{documentSections.map(renderDocumentSection)}</div>
         )}
-        {activeDocument ? (
+        {displayedActiveDocument && !isPendingDocument ? (
           <div className="thinkflow-doc-stash">
             <div className="thinkflow-doc-stash-head">暂存区 ({stashItems.length})</div>
             {stashItems.length === 0 ? (

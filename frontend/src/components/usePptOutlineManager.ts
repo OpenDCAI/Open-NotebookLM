@@ -140,6 +140,12 @@ type OutputContextState = {
   ignoredDraftSignature?: string;
 };
 
+type PptOutputCreationPending = {
+  title: string;
+  content: string;
+  startedAt: string;
+};
+
 type PptSourceLockIntent = {
   outputDocumentId: string;
   outputDocumentTitle: string;
@@ -571,6 +577,7 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
   const [activePptSlideIndex, setActivePptSlideIndex] = useState<number>(0);
   const [pptOutlineReadonlyOpen, setPptOutlineReadonlyOpen] = useState(false);
   const [pptOutlinePendingMessages, setPptOutlinePendingMessages] = useState<ThinkFlowMessage[]>([]);
+  const [pptOutputCreationPending, setPptOutputCreationPending] = useState<PptOutputCreationPending | null>(null);
   const [outputContexts, setOutputContexts] = useState<Record<string, OutputContextState>>({});
   const [pptSourceLockIntent, setPptSourceLockIntent] = useState<PptSourceLockIntent | null>(null);
   const [directOutputIntent, setDirectOutputIntent] = useState<DirectOutputIntent | null>(null);
@@ -792,16 +799,40 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     if (!pptSourceLockIntent || pptSourceLockIntent.loading || pptSourceLockIntent.errorMessage) return;
     const intent = pptSourceLockIntent;
     setPptSourceLockIntent(null);
-    await createOutline('ppt', {
-      titleOverride: intent.outputTitle,
-      documentIdOverride: intent.outputDocumentId,
-      guidanceItemIdsOverride: intent.guidanceItemIds,
-      boundDocumentIdsOverride: intent.boundDocumentIds,
-      sourcePathsOverride: intent.sourcePaths,
-      sourceNamesOverride: intent.sourceNames,
+    setWorkspaceMode('normal');
+    setRightMode('doc');
+    setRightPanelOpen(true);
+    setChatInput('');
+    setPptOutlinePendingMessages([]);
+    setPptOutputCreationPending({
+      title: intent.outputTitle || 'PPT 产出文档',
+      startedAt: formatThinkFlowTime(new Date()),
+      content: [
+        `# ${intent.outputTitle || 'PPT 产出文档'}`,
+        '',
+        '## 产出须知',
+        '',
+        '正在整理来源、参考文档和产出约束...',
+        '',
+        '## PPT 大纲',
+        '',
+        '正在生成页级大纲...',
+      ].join('\n'),
     });
+    try {
+      await createOutline('ppt', {
+        titleOverride: intent.outputTitle,
+        documentIdOverride: intent.outputDocumentId,
+        guidanceItemIdsOverride: intent.guidanceItemIds,
+        boundDocumentIdsOverride: intent.boundDocumentIds,
+        sourcePathsOverride: intent.sourcePaths,
+        sourceNamesOverride: intent.sourceNames,
+      });
+    } finally {
+      setPptOutputCreationPending(null);
+    }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pptSourceLockIntent]);
+  }, [pptSourceLockIntent, setWorkspaceMode, setRightMode, setRightPanelOpen, setChatInput]);
 
   const openDirectOutputIntent = useCallback(async (targetType: Exclude<OutputType, 'ppt'>) => {
     setGlobalError('');
@@ -1358,6 +1389,7 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     setPptOutlineReadonlyOpen,
     pptOutlinePendingMessages,
     setPptOutlinePendingMessages,
+    pptOutputCreationPending,
     outputContexts,
     setOutputContexts,
     pptSourceLockIntent,

@@ -774,6 +774,43 @@ function buildDocumentSections(content: string, traces: DocumentPushTrace[], hea
   return sections;
 }
 
+type PptOutlineDocCard = {
+  pageNum: number;
+  title: string;
+  body: string;
+};
+
+function parsePptOutlineDocCards(markdown: string): { intro: string; cards: PptOutlineDocCard[] } {
+  const lines = String(markdown || '').split(/\r?\n/u);
+  const cards: PptOutlineDocCard[] = [];
+  const introLines: string[] = [];
+  let current: PptOutlineDocCard | null = null;
+  const headingPattern = /^###\s*第\s*(\d+)\s*页[：:]\s*(.+)$/u;
+
+  for (const line of lines) {
+    if (/^##\s+PPT\s*大纲\s*$/u.test(line.trim())) {
+      continue;
+    }
+    const match = line.match(headingPattern);
+    if (match) {
+      if (current) cards.push({ ...current, body: current.body.trim() });
+      current = {
+        pageNum: Number(match[1]),
+        title: match[2].trim() || `页面 ${match[1]}`,
+        body: '',
+      };
+      continue;
+    }
+    if (current) {
+      current.body = `${current.body}${current.body ? '\n' : ''}${line}`;
+    } else {
+      introLines.push(line);
+    }
+  }
+  if (current) cards.push({ ...current, body: current.body.trim() });
+  return { intro: introLines.join('\n').trim(), cards };
+}
+
 const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: () => void }) => {
   const { user } = useAuthStore();
   const effectiveUser = user || DEFAULT_USER;
@@ -1034,6 +1071,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     setPptOutlineReadonlyOpen,
     pptOutlinePendingMessages,
     setPptOutlinePendingMessages,
+    pptOutputCreationPending,
     outputContexts,
     setOutputContexts,
     pptSourceLockIntent,
@@ -1136,10 +1174,20 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   });
   // ─────────────────────────────────────────────────────────────────────────
 
-  const visibleChatMessages = useMemo(
-    () => (isPptOutlineChatStage ? [...pptOutlineChatMessages, ...pptOutlinePendingMessages] : chatMessages),
-    [chatMessages, isPptOutlineChatStage, pptOutlineChatMessages, pptOutlinePendingMessages],
-  );
+  const isPptOutputConversationMode = Boolean(pptOutputCreationPending) || isPptOutlineChatStage;
+  const visibleChatMessages = useMemo(() => {
+    if (pptOutputCreationPending) {
+      return [
+        {
+          id: 'ppt_output_creation_pending',
+          role: 'assistant' as const,
+          content: '正在根据已确认的来源生成 PPT 产出文档和初始大纲...',
+          time: pptOutputCreationPending.startedAt,
+        },
+      ];
+    }
+    return isPptOutlineChatStage ? [...pptOutlineChatMessages, ...pptOutlinePendingMessages] : chatMessages;
+  }, [chatMessages, isPptOutlineChatStage, pptOutputCreationPending, pptOutlineChatMessages, pptOutlinePendingMessages]);
 
   const buildOutputContextSnapshot = ({
     outputId,
@@ -2168,20 +2216,26 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   );
 
   const renderOutlineChatTopPanel = () => {
-    if (!isPptOutlineChatStage) return null;
+    if (!isPptOutputConversationMode) return null;
     return (
       <div className="thinkflow-outline-chat-top-panel">
         <div className="thinkflow-outline-chat-top-head">
           <span className="thinkflow-output-workspace-kicker">PPT 产出文档</span>
-          <strong>右侧是本轮 PPT 的“产出须知 + 大纲”。聊清楚后点击确认，系统会直接进入工作台生图。</strong>
-          <button
-            type="button"
-            className="thinkflow-generate-btn"
-            onClick={() => void confirmPptOutline()}
-            disabled={outlineSaving || generatingOutput}
-          >
-            {outlineSaving || generatingOutput ? '生成中...' : '确认并生成 PPT'}
-          </button>
+          <strong>
+            {pptOutputCreationPending
+              ? '正在生成右侧产出文档和初始大纲。完成后可继续对话调整。'
+              : '右侧是本轮 PPT 的“产出须知 + 大纲”。聊清楚后点击确认，系统会直接进入工作台生图。'}
+          </strong>
+          {!pptOutputCreationPending ? (
+            <button
+              type="button"
+              className="thinkflow-generate-btn"
+              onClick={() => void confirmPptOutline()}
+              disabled={outlineSaving || generatingOutput}
+            >
+              {outlineSaving || generatingOutput ? '生成中...' : '确认并生成 PPT'}
+            </button>
+          ) : null}
         </div>
         <div className="thinkflow-inline-outline-rule-list">
           {activePptGlobalDirectives.length > 0 ? (
@@ -2499,6 +2553,49 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     );
   };
 
+  const renderPptOutlineDocumentSection = (section: ReturnType<typeof buildDocumentSections>[number]) => {
+    const parsed = parsePptOutlineDocCards(section.content);
+    if (parsed.cards.length === 0) {
+      return (
+        <div className="thinkflow-doc-render">
+          <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+            {section.content}
+          </ReactMarkdown>
+        </div>
+      );
+    }
+    return (
+      <div className="thinkflow-ppt-doc-outline">
+        <div className="thinkflow-ppt-doc-outline-head">
+          <span>PPT 大纲</span>
+          <strong>{parsed.cards.length} 页</strong>
+        </div>
+        {parsed.intro ? (
+          <div className="thinkflow-doc-render">
+            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+              {parsed.intro}
+            </ReactMarkdown>
+          </div>
+        ) : null}
+        <div className="thinkflow-ppt-doc-slide-list">
+          {parsed.cards.map((card) => (
+            <article key={`${section.id}_${card.pageNum}_${card.title}`} className="thinkflow-ppt-doc-slide-card">
+              <div className="thinkflow-ppt-doc-slide-card-head">
+                <span>第 {card.pageNum} 页</span>
+                <h4>{card.title}</h4>
+              </div>
+              <div className="thinkflow-doc-render thinkflow-ppt-doc-slide-body">
+                <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                  {card.body}
+                </ReactMarkdown>
+              </div>
+            </article>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   const renderDocumentSection = (section: ReturnType<typeof buildDocumentSections>[number]) => {
     const shouldHighlight = section.traces.some((trace) => trace.id === highlightedTraceId);
     const isFocused = documentFocusState.type === 'sections' && documentFocusState.section_ids.includes(section.id);
@@ -2540,6 +2637,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             {moduleActionLabel}
           </button>
         ) : null}
+        {isOutputDocument && /PPT\s*大纲/u.test(section.heading || '') ? (
+          renderPptOutlineDocumentSection(section)
+        ) : (
         <div className="thinkflow-doc-render">
           <ReactMarkdown
             remarkPlugins={[remarkMath]}
@@ -2566,6 +2666,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             {section.content}
           </ReactMarkdown>
         </div>
+        )}
         {section.traces.length > 0 ? (
           <div className="thinkflow-doc-traces">
             <div className="thinkflow-doc-traces-label">关联对话</div>
@@ -2813,17 +2914,17 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       const pageNum = slide.pageNum || index + 1;
       lines.push(`### 第 ${pageNum} 页：${slide.title || `页面 ${pageNum}`}`);
       if (slide.layout_description || slide.summary) {
-        lines.push('', slide.layout_description || slide.summary || '');
+        lines.push('', '**布局说明**', '', slide.layout_description || slide.summary || '');
       }
       const points = slide.key_points || slide.bullets || [];
       if (points.length > 0) {
-        lines.push('');
+        lines.push('', '**页面要点**', '');
         points.forEach((point) => lines.push(`- ${point}`));
       }
       if (slide.asset_ref) {
-        lines.push('', `素材建议：${slide.asset_ref}`);
+        lines.push('', '**素材建议**', '', `\`${slide.asset_ref}\``);
       }
-      lines.push('');
+      lines.push('', '---', '');
     });
     return lines.join('\n').trim();
   };
@@ -3320,6 +3421,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const handleSendMessage = async () => {
     const query = chatInput.trim();
     if (!query || chatLoading) return;
+    if (pptOutputCreationPending) return;
     if (isPptOutlineChatStage) {
       await handlePptOutlineChatMessage(query);
       return;
@@ -4333,6 +4435,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     documents: documents.map((doc) => ({ id: doc.id, title: doc.title })),
     activeDocumentId,
     activeDocument: activeDocument ? { id: activeDocument.id, title: activeDocument.title, document_type: activeDocument.document_type } : null,
+    pendingDocument: pptOutputCreationPending
+      ? { title: pptOutputCreationPending.title, content: pptOutputCreationPending.content }
+      : null,
     documentTitle,
     documentContent,
     editMode,
@@ -4452,13 +4557,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         <ThinkFlowCenterPanel
           activeOutput={activeOutput}
           boundDocIds={boundDocIds}
-          chatTitle={isPptOutlineChatStage ? '📋 PPT 产出文档讨论' : undefined}
+          chatTitle={isPptOutputConversationMode ? '📋 PPT 产出文档讨论' : undefined}
           chatInput={chatInput}
-          chatLoading={chatLoading}
+          chatLoading={chatLoading || Boolean(pptOutputCreationPending)}
           chatMessages={visibleChatMessages}
           chatPlaceholder={
-            isPptOutlineChatStage
-              ? '继续调整右侧产出文档，例如“整体更偏业务汇报，弱化技术细节”'
+            isPptOutputConversationMode
+              ? (pptOutputCreationPending ? '正在生成初始大纲，请稍候...' : '继续调整右侧产出文档，例如“整体更偏业务汇报，弱化技术细节”')
               : undefined
           }
           chatTopPanel={renderOutlineChatTopPanel()}
@@ -4466,7 +4571,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           documents={documents}
           focusedMessageId={focusedMessageId}
           handleSendMessage={handleSendMessage}
-          isOutlineChatMode={isPptOutlineChatStage}
+          isOutlineChatMode={isPptOutputConversationMode}
           messageRefs={messageRefs}
           multiSelectPrompt={multiSelectPrompt}
           openMultiMessagePush={openMultiMessagePush}

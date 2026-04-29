@@ -272,7 +272,7 @@ export function ThinkFlowCenterPanel({
           />
           <div className="thinkflow-chat-toolbar">
             {isOutlineChatMode ? (
-              <span className="thinkflow-doc-check-tip">当前消息会综合来源、梳理文档、产出指导和当前 notebook 对话，先整理这份 PPT 的候选大纲；只有点击“推送改动”后才会覆盖正式大纲，也不会写入普通问答历史。</span>
+              <span className="thinkflow-doc-check-tip">当前消息会综合来源、梳理文档、产出指导和当前产出文档，先整理这份 PPT 的候选修改；只有点击“应用候选修改”后才会覆盖正式产出文档，也不会写入普通问答历史。</span>
             ) : (
               <>
                 <button type="button" className="thinkflow-toolbar-btn">

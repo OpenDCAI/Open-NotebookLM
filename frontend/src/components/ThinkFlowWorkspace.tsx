@@ -42,9 +42,7 @@ import { ThinkFlowRightPanel } from './ThinkFlowRightPanel';
 import { PptOutlinePanel, PptLockedOutlinePreview } from './PptOutlinePanel';
 import { PptPageReviewPanel, PptGeneratedResultPanel } from './PptPageReviewPanel';
 import {
-  diffPptGlobalDirectives,
   diffPptOutline,
-  getPptDirectiveDiffKindLabel,
   getPptOutlineDiffKindLabel,
 } from './pptOutlineDiff';
 import {
@@ -77,8 +75,6 @@ import {
   getActiveOutlineChatSession,
   getArchivedOutlineChatSessions,
   getVisiblePptOutline,
-  getAppliedOutlineGlobalDirectives,
-  getDraftOutlineGlobalDirectives,
   hasPendingOutlineDraft,
   buildOutlineChatMessages,
 } from './usePptOutlineManager';
@@ -216,6 +212,25 @@ type OutlineSection = {
   generated_img_path?: string;
 };
 
+type PptOutputInfo = {
+  type?: string;
+  title?: string;
+  page_count?: number;
+  audience?: string;
+  source_names?: string[];
+  bound_document_titles?: string[];
+  stage_label?: string;
+};
+
+type PptStyleInfo = {
+  preset?: string;
+  label?: string;
+  tone?: string;
+  visual_style?: string;
+  audience_assumption?: string;
+  supplement_prompt?: string[];
+};
+
 type WorkspaceItemType = 'summary' | 'guidance';
 type PanelGuideKey = 'summary' | 'doc' | 'guidance';
 type WorkspaceMode = 'normal' | 'output_focus' | 'output_immersive';
@@ -246,6 +261,8 @@ type OutlineChatSession = {
   status?: 'active' | 'applied' | 'archived';
   messages?: ConversationHistoryMessage[];
   draft_outline?: OutlineSection[];
+  draft_output_info?: PptOutputInfo;
+  draft_style_info?: PptStyleInfo;
   draft_global_directives?: OutlineDirective[];
   intent_summary?: OutlineIntentSummary;
   summary?: string;
@@ -303,8 +320,12 @@ type ThinkFlowOutput = {
   outline_chat_sessions?: OutlineChatSession[];
   outline_chat_active_session_id?: string;
   outline_chat_draft_outline?: OutlineSection[];
+  outline_chat_draft_output_info?: PptOutputInfo;
+  outline_chat_draft_style_info?: PptStyleInfo;
   outline_chat_draft_global_directives?: OutlineDirective[];
   outline_chat_has_pending_changes?: boolean;
+  output_info?: PptOutputInfo;
+  style_info?: PptStyleInfo;
   page_reviews?: PptPageReview[];
   page_versions?: PptPageVersion[];
   created_at: string;
@@ -1086,7 +1107,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     activePptDraftPending,
     activeOutlineChatSession,
     archivedOutlineChatSessions,
-    activePptGlobalDirectives,
     activePptPreviewImages,
     activePptSlide,
     isPptOutlineChatStage,
@@ -2133,7 +2153,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             </div>
             <div className="thinkflow-inline-outline-card-actions">
               <button type="button" className="thinkflow-generate-btn" onClick={() => void applyPptOutlineDraft()} disabled={outlineSaving}>
-                {outlineSaving ? '推送中...' : '推送这版'}
+                {outlineSaving ? '应用中...' : '应用候选修改'}
               </button>
             </div>
           </div>
@@ -2145,38 +2165,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
               <strong>本轮意图：</strong>
               <span>
                 {message.meta.intentSummary.mode === 'mixed'
-                  ? '全局规则 + 页级修改'
+                  ? '风格信息 + 页级修改'
                   : message.meta.intentSummary.mode === 'global'
-                    ? '全局规则'
+                    ? '风格信息'
                     : '页级修改'}
               </span>
-            </div>
-          ) : null}
-          <div className="thinkflow-inline-outline-rule-block">
-            <div className="thinkflow-inline-outline-rule-title">当前生效规则</div>
-            <div className="thinkflow-inline-outline-rule-list">
-              {(message.meta.appliedDirectives || []).length > 0 ? (
-                (message.meta.appliedDirectives || []).map((directive: OutlineDirective) => (
-                  <span key={`applied_${directive.id}`} className="thinkflow-inline-outline-chip">
-                    {directive.label}
-                  </span>
-                ))
-              ) : (
-                <span className="thinkflow-inline-outline-empty">当前还没有全局规则。</span>
-              )}
-            </div>
-          </div>
-          {(message.meta.directiveDiff?.totalCount || 0) > 0 ? (
-            <div className="thinkflow-inline-outline-rule-block">
-              <div className="thinkflow-inline-outline-rule-title">规则改动</div>
-              <div className="thinkflow-inline-outline-rule-list">
-                {message.meta.directiveDiff.entries.map((entry: any) => (
-                  <div key={entry.key} className={`thinkflow-inline-outline-diff-line is-${entry.kind}`}>
-                    <span>{getPptDirectiveDiffKindLabel(entry.kind)}</span>
-                    <strong>{entry.label}</strong>
-                  </div>
-                ))}
-              </div>
             </div>
           ) : null}
           {(message.meta.outlineDiff?.totalCount || 0) > 0 ? (
@@ -2232,7 +2225,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           <strong>
             {pptOutputCreationPending
               ? '正在生成右侧产出文档和初始大纲。完成后可继续对话调整。'
-              : '右侧是本轮 PPT 的“产出须知 + 大纲”。聊清楚后点击确认，系统会直接进入工作台生图。'}
+              : '右侧是本轮 PPT 的“产出信息 + 风格信息 + 大纲”。聊清楚后点击确认，系统会直接进入工作台生图。'}
           </strong>
           {!pptOutputCreationPending ? (
             <button
@@ -2246,15 +2239,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           ) : null}
         </div>
         <div className="thinkflow-inline-outline-rule-list">
-          {activePptGlobalDirectives.length > 0 ? (
-            activePptGlobalDirectives.map((directive) => (
-              <span key={`top_${directive.id}`} className="thinkflow-inline-outline-chip">
-                {directive.label}
-              </span>
-            ))
-          ) : (
-            <span className="thinkflow-inline-outline-empty">可以继续补充受众、风格、页数、重点取舍或单页修改要求。</span>
-          )}
+          <span className="thinkflow-inline-outline-empty">可以继续补充受众、风格、页数、重点取舍或单页修改要求。</span>
         </div>
       </div>
     );
@@ -2926,19 +2911,37 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     const outline = Array.isArray(output.outline_chat_draft_outline) && output.outline_chat_draft_outline.length > 0
       ? output.outline_chat_draft_outline
       : output.outline || [];
-    const sourceNames = (output.source_names || []).filter(Boolean);
-    const boundTitles = (output.bound_document_titles || []).filter(Boolean);
+    const outputInfo = output.outline_chat_draft_output_info || output.output_info || {};
+    const styleInfo = output.outline_chat_draft_style_info || output.style_info || {};
+    const sourceNames = (outputInfo.source_names || output.source_names || []).filter(Boolean);
+    const boundTitles = (outputInfo.bound_document_titles || output.bound_document_titles || []).filter(Boolean);
     const guidanceText = String(output.guidance_snapshot_text || '').trim();
+    const supplementPrompt = Array.isArray(styleInfo.supplement_prompt)
+      ? styleInfo.supplement_prompt.filter(Boolean)
+      : [];
     const lines = [
-      `# ${output.title || 'PPT 产出文档'}`,
+      `# ${outputInfo.title || output.title || 'PPT 产出文档'}`,
       '',
-      '## 产出须知',
+      '## 产出信息',
       '',
       `- 产出类型：PPT`,
-      `- 目标页数：${output.page_count || outline.length || 10} 页`,
+      `- 产出标题：${outputInfo.title || output.title || 'PPT 产出文档'}`,
+      `- 目标页数：${outputInfo.page_count || output.page_count || outline.length || 10} 页`,
+      outputInfo.audience ? `- 面向对象：${outputInfo.audience}` : '- 面向对象：未指定',
       sourceNames.length > 0 ? `- 来源文件：${sourceNames.join('、')}` : '- 来源文件：未选择',
       boundTitles.length > 0 ? `- 参考文档：${boundTitles.join('、')}` : '- 参考文档：未选择',
-      guidanceText ? `- 产出指导：${guidanceText}` : '- 产出指导：无',
+      `- 生成状态：${outputInfo.stage_label || '大纲讨论中'}`,
+      '',
+      '## 风格信息',
+      '',
+      `- 风格类型：${styleInfo.label || styleInfo.preset || '自定义'}`,
+      `- 表达语气：${styleInfo.tone || '清晰、准确、贴合用户补充要求'}`,
+      `- 视觉倾向：${styleInfo.visual_style || '结构清楚，视觉表达服务内容重点'}`,
+      styleInfo.audience_assumption ? `- 受众假设：${styleInfo.audience_assumption}` : '- 受众假设：根据产出信息和用户补充要求确定',
+      '- 补充提示词：',
+      ...(supplementPrompt.length > 0
+        ? supplementPrompt.map((item) => `  - ${item}`)
+        : [guidanceText ? `  - ${guidanceText}` : '  - 无']),
       '',
       '## PPT 大纲',
       '',

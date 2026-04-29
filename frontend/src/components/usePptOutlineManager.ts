@@ -1,10 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { apiFetch } from '../config/api';
 import type { KnowledgeFile } from '../types';
-import {
-  diffPptGlobalDirectives,
-  diffPptOutline,
-} from './pptOutlineDiff';
+import { diffPptOutline } from './pptOutlineDiff';
 import { mergeOutlineWithManualEdits, formatConflictToast } from './pptOutlineMerge';
 import { formatThinkFlowTime } from './thinkflow-document-utils';
 import type { ManualEditLog } from './thinkflow-types';
@@ -45,6 +42,25 @@ type OutlineSection = {
   generated_img_path?: string;
 };
 
+type PptOutputInfo = {
+  type?: string;
+  title?: string;
+  page_count?: number;
+  audience?: string;
+  source_names?: string[];
+  bound_document_titles?: string[];
+  stage_label?: string;
+};
+
+type PptStyleInfo = {
+  preset?: string;
+  label?: string;
+  tone?: string;
+  visual_style?: string;
+  audience_assumption?: string;
+  supplement_prompt?: string[];
+};
+
 type ConversationHistoryMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -57,6 +73,8 @@ type OutlineChatSession = {
   status?: 'active' | 'applied' | 'archived';
   messages?: ConversationHistoryMessage[];
   draft_outline?: OutlineSection[];
+  draft_output_info?: PptOutputInfo;
+  draft_style_info?: PptStyleInfo;
   draft_global_directives?: OutlineDirective[];
   intent_summary?: OutlineIntentSummary;
   summary?: string;
@@ -91,8 +109,12 @@ type ThinkFlowOutput = {
   outline_chat_sessions?: OutlineChatSession[];
   outline_chat_active_session_id?: string;
   outline_chat_draft_outline?: OutlineSection[];
+  outline_chat_draft_output_info?: PptOutputInfo;
+  outline_chat_draft_style_info?: PptStyleInfo;
   outline_chat_draft_global_directives?: OutlineDirective[];
   outline_chat_has_pending_changes?: boolean;
+  output_info?: PptOutputInfo;
+  style_info?: PptStyleInfo;
   page_reviews?: PptPageReview[];
   page_versions?: PptPageVersion[];
   created_at: string;
@@ -261,7 +283,7 @@ export function buildOutlineSummaryFallback(outline: OutlineSection[]) {
     }
     parts.push(`最后收束到「${titles[titles.length - 1]}」。`);
   }
-  parts.push('你可以继续说想怎么改结构、页序、重点或表达方式，我会先整理成候选大纲，是否推送由你决定。');
+  parts.push('你可以继续说想怎么改产出信息、风格、结构、页序或单页重点，我会先整理成候选修改，是否应用由你决定。');
   return parts.join('');
 }
 
@@ -315,16 +337,12 @@ export function getVisiblePptOutline(output: ThinkFlowOutput | null): OutlineSec
   return [];
 }
 
-export function getAppliedOutlineGlobalDirectives(output: ThinkFlowOutput | null): OutlineDirective[] {
-  if (Array.isArray(output?.outline_global_directives)) return output!.outline_global_directives!;
+export function getAppliedOutlineGlobalDirectives(_output: ThinkFlowOutput | null): OutlineDirective[] {
   return [];
 }
 
-export function getDraftOutlineGlobalDirectives(output: ThinkFlowOutput | null): OutlineDirective[] {
-  const activeSession = getActiveOutlineChatSession(output);
-  if (Array.isArray(activeSession?.draft_global_directives)) return activeSession!.draft_global_directives!;
-  if (Array.isArray(output?.outline_chat_draft_global_directives)) return output!.outline_chat_draft_global_directives!;
-  return getAppliedOutlineGlobalDirectives(output);
+export function getDraftOutlineGlobalDirectives(_output: ThinkFlowOutput | null): OutlineDirective[] {
+  return [];
 }
 
 export function hasPendingOutlineDraft(output: ThinkFlowOutput | null): boolean {
@@ -359,10 +377,7 @@ export function buildOutlineChatMessages(output: ThinkFlowOutput | null): ThinkF
   }
   const appliedOutline = Array.isArray(output?.outline) ? output!.outline! : [];
   const draftOutline = getVisiblePptOutline(output);
-  const appliedDirectives = getAppliedOutlineGlobalDirectives(output);
-  const draftDirectives = getDraftOutlineGlobalDirectives(output);
   const outlineDiff = diffPptOutline(appliedOutline, draftOutline);
-  const directiveDiff = diffPptGlobalDirectives(appliedDirectives, draftDirectives);
   const hasPendingChanges = hasPendingOutlineDraft(output);
   const lastAssistantIndex = history.reduce((latest, item, index) => (item.role === 'assistant' ? index : latest), -1);
 
@@ -376,9 +391,6 @@ export function buildOutlineChatMessages(output: ThinkFlowOutput | null): ThinkF
         ? {
             type: 'ppt_outline_draft',
             outlineDiff,
-            directiveDiff,
-            appliedDirectives,
-            draftDirectives,
             intentSummary: activeSession?.intent_summary || { mode: 'none', global_directives: [], slide_targets: [] },
             changeSummary: String(activeSession?.change_summary || '').trim(),
           }
@@ -810,9 +822,17 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
       content: [
         `# ${intent.outputTitle || 'PPT 产出文档'}`,
         '',
-        '## 产出须知',
+        '## 产出信息',
         '',
-        '正在整理来源、参考文档和产出约束...',
+        '- 产出类型：PPT',
+        `- 产出标题：${intent.outputTitle || 'PPT 产出文档'}`,
+        '- 生成状态：正在整理来源、参考文档和产出约束...',
+        '',
+        '## 风格信息',
+        '',
+        '- 风格类型：正在识别',
+        '- 补充提示词：',
+        '  - 正在根据已确认的来源和参考文档整理...',
         '',
         '## PPT 大纲',
         '',

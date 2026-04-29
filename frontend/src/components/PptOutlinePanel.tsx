@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo } from 'react';
 import type { OutlineSection, ThinkFlowOutput, PptPipelineStage } from './thinkflow-types';
 import { getPptStageLabel } from './usePptOutlineManager';
 import { diffPptOutline } from './pptOutlineDiff';
@@ -13,7 +13,6 @@ type PptOutlinePanelProps = {
   outlineSaving: boolean;
   generatingOutput: boolean;
   draftOutline?: OutlineSection[];
-  globalDirectives?: any[];
   onSetRightMode: (mode: string) => void;
   onSaveOutline: () => Promise<void>;
   onConfirmPptOutline: () => Promise<void>;
@@ -59,7 +58,6 @@ export function PptOutlinePanel({
   outlineSaving,
   generatingOutput,
   draftOutline,
-  globalDirectives,
   onSetRightMode,
   onSaveOutline,
   onConfirmPptOutline,
@@ -68,7 +66,6 @@ export function PptOutlinePanel({
   onSetActivePptSlideIndex,
   onAddPptOutlineSection,
 }: PptOutlinePanelProps) {
-  const [directivesOpen, setDirectivesOpen] = useState(false);
   const slides = activePptOutline;
   const selectedSlide = activePptSlide?.slide || null;
   const selectedSlideIndex = activePptSlide?.index ?? 0;
@@ -97,8 +94,8 @@ export function PptOutlinePanel({
           <h4>{getPptStageLabel(activePptStage)}</h4>
           <p>
             {activePptDraftPending
-              ? '当前正在预览一版候选大纲。它还没有覆盖正式大纲，只有点击"推送改动"后才会真正生效。'
-              : '这一步先确认整套页级大纲。中间对话先讨论出候选大纲，推送后再决定是否进入逐页生成。'}
+              ? '当前正在预览一版候选修改。它还没有覆盖正式产出文档，只有点击"应用候选修改"后才会真正生效。'
+              : '这一步先确认产出信息、风格信息和整套页级大纲。中间对话会先生成候选修改，应用后再决定是否进入逐页生成。'}
           </p>
         </div>
         <div className="thinkflow-ppt-stage-actions">
@@ -120,7 +117,7 @@ export function PptOutlinePanel({
       </div>
       <div className="thinkflow-ppt-refine-panel">
         <div className="thinkflow-doc-check-tip">
-          中间对话区现在是当前 PPT 的主交互入口。系统会先识别你的修改意图，区分全局规则和页级修改，再在对话里生成候选改动卡片；只有点击对话里的"推送这版"后才会覆盖正式大纲。
+          中间对话区现在是当前 PPT 的主交互入口。系统会先识别你要改产出信息、风格信息还是页级大纲，再在对话里生成候选改动卡片；只有点击"应用候选修改"后才会覆盖正式产出文档。
         </div>
         {archivedOutlineChatSessions.length > 0 ? (
           <div className="thinkflow-doc-check-tip">已收起 {archivedOutlineChatSessions.length} 轮历史对话，当前只显示这次产出的最新一轮讨论。</div>
@@ -198,32 +195,10 @@ export function PptOutlinePanel({
                 placeholder="可选：来源素材引用（asset_ref）"
                 disabled={activePptDraftPending}
               />
-              {activePptDraftPending ? <div className="thinkflow-doc-check-tip">当前页面展示的是候选大纲。若认可这版内容，请在对话区点击"推送这版"。</div> : null}
+              {activePptDraftPending ? <div className="thinkflow-doc-check-tip">当前页面展示的是候选修改。若认可这版内容，请在对话区点击"应用候选修改"。</div> : null}
             </div>
           </div>
         ) : null}
-
-        {globalDirectives && globalDirectives.length > 0 && (
-          <div className="tf-global-directives">
-            <div className="tf-global-directives__header" onClick={() => setDirectivesOpen(!directivesOpen)}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 12, fontWeight: 600, color: '#495057' }}>全局规则</span>
-                <span className="tf-global-directives__badge">{globalDirectives.length}</span>
-              </div>
-              <span style={{ fontSize: 11, color: '#868e96' }}>{directivesOpen ? '▲ 收起' : '▼ 展开'}</span>
-            </div>
-            {directivesOpen && (
-              <>
-                <div style={{ padding: '0 12px 8px', display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-                  {globalDirectives.map((d: any) => (
-                    <span key={d.id} className="tf-global-directives__tag">{d.label}</span>
-                  ))}
-                </div>
-                <div className="tf-global-directives__hint">通过左侧对话添加或修改</div>
-              </>
-            )}
-          </div>
-        )}
 
         <div className="thinkflow-ppt-outline-strip">
           {slides.map((item, index) => (

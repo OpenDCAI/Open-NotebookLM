@@ -110,6 +110,25 @@ export type OutlineSection = {
   generated_img_path?: string;
 };
 
+export type PptOutputInfo = {
+  type?: string;
+  title?: string;
+  page_count?: number;
+  audience?: string;
+  source_names?: string[];
+  bound_document_titles?: string[];
+  stage_label?: string;
+};
+
+export type PptStyleInfo = {
+  preset?: 'business' | 'academic' | 'clean' | 'custom' | string;
+  label?: string;
+  tone?: string;
+  visual_style?: string;
+  audience_assumption?: string;
+  supplement_prompt?: string[];
+};
+
 export type WorkspaceItemType = 'summary' | 'guidance';
 export type PanelGuideKey = 'summary' | 'doc' | 'guidance';
 export type ThinkFlowLeftTab = 'conversations' | 'materials' | 'outputs';
@@ -190,6 +209,8 @@ export type ThinkFlowOutput = {
     status?: 'active' | 'applied' | 'archived';
     messages?: ConversationHistoryMessage[];
     draft_outline?: OutlineSection[];
+    draft_output_info?: PptOutputInfo;
+    draft_style_info?: PptStyleInfo;
     draft_global_directives?: OutlineDirective[];
     intent_summary?: OutlineIntentSummary;
     summary?: string;
@@ -201,8 +222,12 @@ export type ThinkFlowOutput = {
   }[];
   outline_chat_active_session_id?: string;
   outline_chat_draft_outline?: OutlineSection[];
+  outline_chat_draft_output_info?: PptOutputInfo;
+  outline_chat_draft_style_info?: PptStyleInfo;
   outline_chat_draft_global_directives?: OutlineDirective[];
   outline_chat_has_pending_changes?: boolean;
+  output_info?: PptOutputInfo;
+  style_info?: PptStyleInfo;
   page_reviews?: PptPageReview[];
   page_versions?: PptPageVersion[];
   stage_history?: StageHistorySnapshot[];

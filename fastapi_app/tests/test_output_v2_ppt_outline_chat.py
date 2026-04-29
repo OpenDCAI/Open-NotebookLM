@@ -127,3 +127,77 @@ def test_discard_outline_chat_resets_pending_draft_without_changing_confirmed_ou
     assert active_session["messages"][-1]["role"] == "system"
     assert "已放弃上一版候选大纲" in active_session["messages"][-1]["content"]
     assert assistant_message == "已放弃上一版候选大纲，继续基于当前正式大纲讨论。"
+
+
+def test_sync_outline_state_migrates_global_rules_into_style_info() -> None:
+    service = OutputV2Service()
+    item = _base_ppt_output()
+    item["page_count"] = 1
+    item["source_names"] = ["paper.pdf"]
+    item["bound_document_titles"] = ["梳理摘要"]
+    item["guidance_snapshot_text"] = "整体商务风格，少讲公式。"
+    item["outline_global_directives"] = [
+        {"id": "rule_1", "scope": "global", "type": "tone", "label": "所有页更商务", "instruction": "所有页更商务"},
+    ]
+
+    output, changed = service._sync_outline_chat_state(item)
+
+    assert changed is True
+    assert output["output_info"]["title"] == "测试 PPT"
+    assert output["output_info"]["source_names"] == ["paper.pdf"]
+    assert output["style_info"]["preset"] == "business"
+    assert "整体商务风格，少讲公式。" in output["style_info"]["supplement_prompt"]
+    assert "所有页更商务" in output["style_info"]["supplement_prompt"]
+    assert output["outline_global_directives"] == []
+    assert output["outline_chat_draft_global_directives"] == []
+
+
+def test_apply_outline_chat_promotes_style_info_draft(tmp_path: Path, monkeypatch: Any) -> None:
+    item = _base_ppt_output()
+    item["output_info"] = {"type": "ppt", "title": "测试 PPT", "page_count": 1}
+    item["style_info"] = {"preset": "clean", "tone": "简洁", "visual_style": "留白", "supplement_prompt": []}
+    draft_outline = [dict(item["outline"][0], title="候选标题")]
+    item["outline_chat_sessions"] = [
+        {
+            "id": "session_1",
+            "status": "active",
+            "messages": [
+                {
+                    "id": "message_1",
+                    "role": "assistant",
+                    "content": "当前有一版候选修改。",
+                    "created_at": "2026-04-29T00:00:00+00:00",
+                }
+            ],
+            "draft_outline": draft_outline,
+            "draft_output_info": item["output_info"],
+            "draft_style_info": {
+                "preset": "business",
+                "tone": "简洁、清晰、结论先行",
+                "visual_style": "浅色背景、少量强调色、图文平衡",
+                "supplement_prompt": ["整体改成商务风格"],
+            },
+            "has_pending_changes": True,
+            "created_at": "2026-04-29T00:00:00+00:00",
+            "updated_at": "2026-04-29T00:00:00+00:00",
+        }
+    ]
+    item["outline_chat_active_session_id"] = "session_1"
+    service, _ = _service_with_manifest(tmp_path, monkeypatch, [item])
+
+    output, assistant_message = asyncio.run(
+        service.apply_outline_chat(
+            notebook_id="notebook_1",
+            notebook_title="测试笔记本",
+            user_id="user_1",
+            output_id="out_ppt_1",
+        )
+    )
+
+    assert output["outline"][0]["title"] == "候选标题"
+    assert output["style_info"]["preset"] == "business"
+    assert output["style_info"]["supplement_prompt"] == ["整体改成商务风格"]
+    assert output["outline_global_directives"] == []
+    assert output["outline_chat_draft_global_directives"] == []
+    assert output["outline_chat_has_pending_changes"] is False
+    assert "已应用候选修改" in assistant_message

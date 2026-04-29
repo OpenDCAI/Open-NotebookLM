@@ -337,6 +337,49 @@ export function getVisiblePptOutline(output: ThinkFlowOutput | null): OutlineSec
   return [];
 }
 
+function normalizeStyleText(value: unknown): string {
+  if (Array.isArray(value)) {
+    return value.map((item) => String(item || '').trim()).filter(Boolean).join('；');
+  }
+  return String(value || '').trim();
+}
+
+function getAppliedPptStyleInfo(output: ThinkFlowOutput | null): PptStyleInfo {
+  return output?.style_info || {};
+}
+
+function getDraftPptStyleInfo(output: ThinkFlowOutput | null): PptStyleInfo {
+  const activeSession = getActiveOutlineChatSession(output);
+  if (activeSession?.draft_style_info) return activeSession.draft_style_info;
+  if (output?.outline_chat_draft_style_info) return output.outline_chat_draft_style_info;
+  return getAppliedPptStyleInfo(output);
+}
+
+function buildPptStyleInfoDiff(applied: PptStyleInfo, draft: PptStyleInfo) {
+  const fields: Array<{ field: keyof PptStyleInfo; label: string }> = [
+    { field: 'label', label: '风格类型' },
+    { field: 'tone', label: '表达语气' },
+    { field: 'visual_style', label: '视觉倾向' },
+    { field: 'audience_assumption', label: '受众假设' },
+    { field: 'supplement_prompt', label: '补充要求' },
+  ];
+  const entries = fields
+    .map(({ field, label }) => {
+      const before = normalizeStyleText(applied?.[field]);
+      const after = normalizeStyleText(draft?.[field]);
+      return before === after
+        ? null
+        : {
+            field,
+            label,
+            before: before || '未设置',
+            after: after || '未设置',
+          };
+    })
+    .filter(Boolean);
+  return { totalCount: entries.length, entries };
+}
+
 export function getAppliedOutlineGlobalDirectives(_output: ThinkFlowOutput | null): OutlineDirective[] {
   return [];
 }
@@ -378,6 +421,7 @@ export function buildOutlineChatMessages(output: ThinkFlowOutput | null): ThinkF
   const appliedOutline = Array.isArray(output?.outline) ? output!.outline! : [];
   const draftOutline = getVisiblePptOutline(output);
   const outlineDiff = diffPptOutline(appliedOutline, draftOutline);
+  const styleDiff = buildPptStyleInfoDiff(getAppliedPptStyleInfo(output), getDraftPptStyleInfo(output));
   const hasPendingChanges = hasPendingOutlineDraft(output);
   const lastAssistantIndex = history.reduce((latest, item, index) => (item.role === 'assistant' ? index : latest), -1);
 
@@ -391,6 +435,7 @@ export function buildOutlineChatMessages(output: ThinkFlowOutput | null): ThinkF
         ? {
             type: 'ppt_outline_draft',
             outlineDiff,
+            styleDiff,
             intentSummary: activeSession?.intent_summary || { mode: 'none', global_directives: [], slide_targets: [] },
             changeSummary: String(activeSession?.change_summary || '').trim(),
           }
@@ -1096,6 +1141,7 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
       if (data.assistant_message) {
         setGlobalError('');
       }
+      pushToast(data.assistant_message || '已应用候选修改到产出文档', 'success');
       return data.output;
     } catch (error: any) {
       setGlobalError(error?.message || '推送大纲改动失败');

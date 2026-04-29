@@ -201,3 +201,53 @@ def test_apply_outline_chat_promotes_style_info_draft(tmp_path: Path, monkeypatc
     assert output["outline_chat_draft_global_directives"] == []
     assert output["outline_chat_has_pending_changes"] is False
     assert "已应用候选修改" in assistant_message
+
+
+def test_style_only_outline_chat_updates_style_without_refining_outline() -> None:
+    service = OutputV2Service()
+    item = _base_ppt_output()
+    outline = service._normalize_ppt_outline(item["outline"])
+    style_info = service._normalize_ppt_style_info(
+        {
+            "preset": "clean",
+            "label": "简洁干净",
+            "tone": "简洁",
+            "visual_style": "留白",
+            "supplement_prompt": [],
+        }
+    )
+
+    mutation = asyncio.run(
+        service._apply_outline_chat(
+            item=item,
+            outline=outline,
+            output_info=service._normalize_ppt_output_info(item.get("output_info"), item=item),
+            style_info=style_info,
+            global_directives=[],
+            intent_summary=service._build_outline_chat_intent_summary(
+                message="风格调整为商务风格，修改一下风格信息",
+                active_slide_index=None,
+            ),
+            history=[],
+            conversation_history=None,
+            context_snapshot=None,
+            message="风格调整为商务风格，修改一下风格信息",
+            active_slide_index=None,
+            email="user@example.com",
+            api_url=None,
+            api_key=None,
+            model=None,
+        )
+    )
+
+    assert mutation["outline"] == outline
+    assert mutation["draft_style_info"]["preset"] == "business"
+    assert "风格调整为商务风格，修改一下风格信息" in mutation["draft_style_info"]["supplement_prompt"]
+    assert mutation["applied_scope"] == "style"
+    assert "风格信息" in mutation["assistant_message"]
+    assert "修改" not in mutation["assistant_message"] or "页" not in mutation["assistant_message"]
+    assert service._is_ppt_style_only_message(
+        message="改成商务风格",
+        intent_summary=service._build_outline_chat_intent_summary(message="改成商务风格", active_slide_index=None),
+        active_slide_index=None,
+    )

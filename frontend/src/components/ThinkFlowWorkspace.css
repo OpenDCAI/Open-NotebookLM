@@ -2999,6 +2999,51 @@
   font-weight: 600;
 }
 
+.thinkflow-inline-outline-style-diff {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.thinkflow-inline-outline-style-row {
+  display: grid;
+  grid-template-columns: minmax(72px, 0.6fr) minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 9px 10px;
+  border-radius: 12px;
+  border: 1px solid rgba(127, 91, 48, 0.12);
+  background: #fff;
+  color: #4d3721;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.thinkflow-inline-outline-style-row strong {
+  color: #8a6542;
+}
+
+.thinkflow-inline-outline-style-before,
+.thinkflow-inline-outline-style-after {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.thinkflow-inline-outline-style-before {
+  color: #8a7660;
+  text-decoration: line-through;
+  text-decoration-color: rgba(173, 68, 46, 0.45);
+}
+
+.thinkflow-inline-outline-style-after {
+  color: #2f684f;
+  font-weight: 600;
+}
+
+.thinkflow-inline-outline-style-arrow {
+  color: #9a7a58;
+}
+
 .thinkflow-inline-outline-empty {
   font-size: 12px;
   color: #7f6d58;

@@ -974,6 +974,77 @@ class OutputV2Service:
         next_info["supplement_prompt"] = supplement
         return self._normalize_ppt_style_info(next_info)
 
+    def _is_ppt_style_only_message(
+        self,
+        *,
+        message: str,
+        intent_summary: Optional[Dict[str, Any]] = None,
+        active_slide_index: Optional[int] = None,
+    ) -> bool:
+        text = str(message or "").strip()
+        if not text:
+            return False
+        style_markers = ("风格", "商务", "学术", "简洁", "干净", "语气", "视觉", "受众", "汇报", "表达")
+        if not any(marker in text for marker in style_markers):
+            return False
+        outline_markers = (
+            "页",
+            "页面",
+            "单页",
+            "当前页",
+            "这页",
+            "标题",
+            "大纲",
+            "结构",
+            "顺序",
+            "新增",
+            "增加",
+            "删除",
+            "移除",
+            "合并",
+            "拆分",
+            "要点",
+            "素材",
+            "图片",
+            "图表",
+        )
+        if re.search(r"第\s*\d+\s*页", text):
+            return False
+        if any(marker in text for marker in outline_markers):
+            # “修改风格信息” is still a style metadata request, not a slide outline mutation.
+            style_info_phrase = any(phrase in text for phrase in ("风格信息", "风格调整", "调整风格", "修改风格"))
+            non_style_outline_phrase = any(
+                marker in text
+                for marker in (
+                    "页面",
+                    "单页",
+                    "当前页",
+                    "这页",
+                    "标题",
+                    "大纲",
+                    "结构",
+                    "顺序",
+                    "新增",
+                    "增加",
+                    "删除",
+                    "移除",
+                    "合并",
+                    "拆分",
+                    "要点",
+                    "素材",
+                    "图片",
+                    "图表",
+                )
+            )
+            if non_style_outline_phrase or not style_info_phrase:
+                return False
+        normalized_intent = self._normalize_outline_chat_intent_summary(intent_summary)
+        if normalized_intent.get("slide_targets"):
+            return False
+        if active_slide_index is not None and any(marker in text for marker in ("当前页", "这页", "单页")):
+            return False
+        return True
+
     def _normalize_outline_chat_history(self, history: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
         for item in history or []:
@@ -1669,6 +1740,33 @@ class OutputV2Service:
         api_key: Optional[str],
         model: Optional[str],
     ) -> Dict[str, Any]:
+        if self._is_ppt_style_only_message(
+            message=message,
+            intent_summary=intent_summary,
+            active_slide_index=active_slide_index,
+        ):
+            normalized_outline = self._normalize_ppt_outline(outline)
+            next_style_info = self._apply_ppt_style_message(self._normalize_ppt_style_info(style_info), message)
+            return {
+                "outline": normalized_outline,
+                "draft_output_info": self._normalize_ppt_output_info(output_info, item={**item, "outline": normalized_outline}),
+                "draft_style_info": next_style_info,
+                "assistant_message": "已整理一版候选风格信息，当前不会改动页级大纲。",
+                "applied_scope": "style",
+                "applied_slide_index": None,
+                "change_summary": "已整理一版候选风格信息，当前不会改动页级大纲。",
+                "draft_global_directives": [],
+                "intent_summary": {
+                    "mode": "global",
+                    "global_directives": [],
+                    "slide_targets": [],
+                },
+                "review": {
+                    "passed": True,
+                    "issues": [],
+                    "review_summary": "候选风格信息已更新，页级大纲保持不变。",
+                },
+            }
         from fastapi_app.schemas import OutlineRefineRequest
         from fastapi_app.services.paper2ppt_service import Paper2PPTService
 
@@ -3013,9 +3111,9 @@ class OutputV2Service:
         if self._ppt_structured_signature(next_style_info) != self._ppt_structured_signature(draft_style_info):
             applied_scope = "style"
             applied_slide_index = None
-            assistant_message = "已整理一版候选风格信息，并同步检查当前 PPT 大纲。"
+            assistant_message = str(mutation.get("assistant_message") or "").strip() or "已整理一版候选风格信息，当前不会改动页级大纲。"
         assistant_message = str(assistant_message or "").strip() or "我先整理出一版候选大纲，你确认后再推送改动。"
-        change_summary = assistant_message
+        change_summary = str(mutation.get("change_summary") or "").strip() or assistant_message
         normalized_intent_summary = self._normalize_outline_chat_intent_summary(mutation.get("intent_summary") or intent_summary)
 
         next_history = [

@@ -2191,6 +2191,19 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
               ) : null}
             </div>
           ) : null}
+          {(message.meta.styleDiff?.totalCount || 0) > 0 ? (
+            <div className="thinkflow-inline-outline-style-diff">
+              <div className="thinkflow-inline-outline-rule-title">风格信息改动</div>
+              {message.meta.styleDiff.entries.map((entry: any) => (
+                <div key={entry.field} className="thinkflow-inline-outline-style-row">
+                  <strong>{entry.label}</strong>
+                  <span className="thinkflow-inline-outline-style-before">{entry.before}</span>
+                  <span className="thinkflow-inline-outline-style-arrow">→</span>
+                  <span className="thinkflow-inline-outline-style-after">{entry.after}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
           {(message.meta.outlineDiff?.totalCount || 0) > 0 ? (
             <div className="thinkflow-inline-outline-diff-list">
               {message.meta.outlineDiff.entries.map((entry: any) => (

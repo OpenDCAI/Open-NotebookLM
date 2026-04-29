@@ -1,5 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import {
   ArrowRight,
   BarChart3,
@@ -81,6 +83,7 @@ import {
 } from './usePptOutlineManager';
 
 import './ThinkFlowWorkspace.css';
+import 'katex/dist/katex.min.css';
 
 const DEFAULT_USER = { id: 'local', email: '' };
 const PANEL_GUIDE_STORAGE_KEY = 'thinkflow_panel_guides_v1';
@@ -222,6 +225,19 @@ type ConversationHistoryMessage = {
   role: 'user' | 'assistant';
   content: string;
   created_at?: string;
+  fileAnalyses?: any[];
+  sourceMapping?: Record<string, string>;
+  sourcePreviewMapping?: Record<string, string>;
+  sourceReferenceMapping?: Record<string, CitationReference>;
+};
+
+type ConversationMessageDraft = {
+  role: 'user' | 'assistant';
+  content: string;
+  fileAnalyses?: any[];
+  sourceMapping?: Record<string, string>;
+  sourcePreviewMapping?: Record<string, string>;
+  sourceReferenceMapping?: Record<string, CitationReference>;
 };
 
 type OutlineChatSession = {
@@ -425,14 +441,6 @@ type PushPopoverState = {
   prompt: string;
   sourceContent: string;
   sourceEntries: PushSourceEntry[];
-};
-
-type SelectionToolbarState = {
-  show: boolean;
-  x: number;
-  y: number;
-  messageId: string;
-  content: string;
 };
 
 type ParsedWorkspaceSection = {
@@ -650,9 +658,9 @@ function getCitationMeta(message: ThinkFlowMessage, sourceNumber: string) {
   return { reference, title, preview };
 }
 
-function splitTextWithCitations(text: string): Array<{ type: 'text' | 'citation'; value: string }> {
-  const pattern = /\[(\d{1,3})\]/g;
-  const parts: Array<{ type: 'text' | 'citation'; value: string }> = [];
+function splitTextWithCitations(text: string): Array<{ type: 'text' | 'citation'; value: string[] }> {
+  const pattern = /\[((?:\d{1,3}\s*[,，]\s*)*\d{1,3})\]/g;
+  const parts: Array<{ type: 'text' | 'citation'; value: string[] }> = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -660,7 +668,13 @@ function splitTextWithCitations(text: string): Array<{ type: 'text' | 'citation'
     if (match.index > lastIndex) {
       parts.push({ type: 'text', value: text.slice(lastIndex, match.index) });
     }
-    parts.push({ type: 'citation', value: match[1] });
+    parts.push({
+      type: 'citation',
+      value: match[1]
+        .split(/[,，]/)
+        .map((item) => item.trim())
+        .filter(Boolean),
+    });
     lastIndex = match.index + match[0].length;
   }
 
@@ -914,13 +928,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     prompt: '',
     sourceContent: '',
     sourceEntries: [],
-  });
-  const [selectionToolbar, setSelectionToolbar] = useState<SelectionToolbarState>({
-    show: false,
-    x: 0,
-    y: 0,
-    messageId: '',
-    content: '',
   });
   const [highlightedTraceId, setHighlightedTraceId] = useState('');
   const [focusedMessageId, setFocusedMessageId] = useState('');
@@ -1550,14 +1557,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }
   }, [documentSections, highlightedTraceId]);
 
-  useEffect(() => {
-    const clearSelectionToolbar = () => {
-      setSelectionToolbar((previous) => (previous.show ? { ...previous, show: false } : previous));
-    };
-    document.addEventListener('selectionchange', clearSelectionToolbar);
-    return () => document.removeEventListener('selectionchange', clearSelectionToolbar);
-  }, []);
-
   const ensureDocumentContent = async (documentId: string): Promise<ThinkFlowDocument | null> => {
     const existing = documents.find((item) => item.id === documentId);
     if (existing?.content) return existing;
@@ -1645,6 +1644,10 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             role: item.role === 'assistant' ? 'assistant' : 'user',
             content: item.content || '',
             time: formatThinkFlowTime(item.created_at),
+            fileAnalyses: item.fileAnalyses,
+            sourceMapping: item.sourceMapping,
+            sourcePreviewMapping: item.sourcePreviewMapping,
+            sourceReferenceMapping: item.sourceReferenceMapping,
           }))
         : welcomeMessages,
     );
@@ -1713,8 +1716,17 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     return '';
   };
 
-  const appendConversationMessages = async (messages: Array<{ role: 'user' | 'assistant'; content: string }>) => {
-    const rows = messages.map((item) => ({ role: item.role, content: String(item.content || '').trim() })).filter((item) => item.content);
+  const appendConversationMessages = async (messages: ConversationMessageDraft[]) => {
+    const rows = messages
+      .map((item) => ({
+        role: item.role,
+        content: String(item.content || '').trim(),
+        fileAnalyses: item.fileAnalyses,
+        sourceMapping: item.sourceMapping,
+        sourcePreviewMapping: item.sourcePreviewMapping,
+        sourceReferenceMapping: item.sourceReferenceMapping,
+      }))
+      .filter((item) => item.content);
     if (rows.length === 0) return;
     const targetConversationId = await ensureConversationId();
     if (!targetConversationId) return;
@@ -1953,18 +1965,28 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     splitTextWithCitations(text).map((part, index) => {
       if (part.type === 'text') return <React.Fragment key={`text_${index}`}>{part.value}</React.Fragment>;
 
-      const { reference, title, preview } = getCitationMeta(message, part.value);
-      const hasMeta = Boolean(title || preview);
       return (
-        <button
-          key={`cite_${part.value}_${index}`}
-          type="button"
-          className={`thinkflow-citation ${hasMeta ? 'has-tooltip' : ''}`}
-          onClick={() => focusSourceByReference(reference, title)}
-        >
-          [{part.value}]
-          {renderSourceTooltip(title, preview, reference)}
-        </button>
+        <sup className="thinkflow-citation-group" key={`cite_group_${index}`}>
+          [
+          {part.value.map((sourceNumber, citationIndex) => {
+            const { reference, title, preview } = getCitationMeta(message, sourceNumber);
+            const hasMeta = Boolean(title || preview);
+            return (
+              <React.Fragment key={`cite_${sourceNumber}_${index}_${citationIndex}`}>
+                {citationIndex > 0 ? ', ' : ''}
+                <button
+                  type="button"
+                  className={`thinkflow-citation ${hasMeta ? 'has-tooltip' : ''}`}
+                  onClick={() => focusSourceByReference(reference, title)}
+                >
+                  {sourceNumber}
+                  {renderSourceTooltip(title, preview, reference)}
+                </button>
+              </React.Fragment>
+            );
+          })}
+          ]
+        </sup>
       );
     });
 
@@ -1997,6 +2019,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     const element = node as React.ReactElement<{ children?: React.ReactNode }>;
     const typeName = typeof element.type === 'string' ? element.type : '';
     if (typeName === 'code' || typeName === 'pre') return element;
+    const className = typeof (element.props as any)?.className === 'string' ? (element.props as any).className : '';
+    if (className.includes('katex')) return element;
 
     return React.cloneElement(
       element,
@@ -2008,6 +2032,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const renderMessageMarkdown = (message: ThinkFlowMessage) => (
     <div className={`thinkflow-message-markdown ${message.role === 'assistant' ? 'is-assistant' : 'is-user'}`}>
       <ReactMarkdown
+        remarkPlugins={[remarkMath]}
+        rehypePlugins={[rehypeKatex]}
         components={{
           h1: ({ children, ...props }: any) => <h1 {...props}>{injectCitationsIntoNode(children, message)}</h1>,
           h2: ({ children, ...props }: any) => <h2 {...props}>{injectCitationsIntoNode(children, message)}</h2>,
@@ -2215,7 +2241,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     );
     setRightPanelOpen(true);
     setRightMode('doc');
-    setSelectionToolbar((previous) => ({ ...previous, show: false }));
     const defaultTargetType = getDefaultPushTarget(documentFocusState);
     const defaultTargetDocId = conversationActiveDocumentId || activeDocumentId || documents[0]?.id || '';
     if (preferredDestination === 'document' && !defaultTargetDocId) {
@@ -2319,81 +2344,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       preferredDestination: 'document',
       prompt: '提炼这一轮问答的核心结论、关键依据与待确认点。',
       preset: 'qa',
-    });
-  };
-
-  const handleChatSelectionMouseUp = () => {
-    const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
-      setSelectionToolbar((previous) => ({ ...previous, show: false }));
-      return;
-    }
-
-    const selectedText = selection.toString().trim();
-    if (!selectedText) {
-      setSelectionToolbar((previous) => ({ ...previous, show: false }));
-      return;
-    }
-
-    const range = selection.getRangeAt(0);
-    const startElement = range.startContainer.parentElement;
-    const endElement = range.endContainer.parentElement;
-    const startMessage = startElement?.closest('[data-message-id]') as HTMLElement | null;
-    const endMessage = endElement?.closest('[data-message-id]') as HTMLElement | null;
-    if (!startMessage || !endMessage || startMessage.dataset.messageId !== endMessage.dataset.messageId) {
-      setSelectionToolbar((previous) => ({ ...previous, show: false }));
-      return;
-    }
-
-    const messageId = startMessage.dataset.messageId || '';
-    const rect = range.getBoundingClientRect();
-    if (!messageId || !rect.width) {
-      setSelectionToolbar((previous) => ({ ...previous, show: false }));
-      return;
-    }
-
-    setSelectionToolbar({
-      show: true,
-      x: rect.left + rect.width / 2,
-      y: Math.max(rect.top - 12, 80),
-      messageId,
-      content: selectedText,
-    });
-  };
-
-  const handleSelectionCopy = async () => {
-    if (!selectionToolbar.content) return;
-    try {
-      await navigator.clipboard.writeText(selectionToolbar.content);
-      window.getSelection()?.removeAllRanges();
-      setSelectionToolbar((previous) => ({ ...previous, show: false }));
-    } catch (error: any) {
-      setGlobalError(error?.message || '复制失败');
-    }
-  };
-
-  const handleSelectionPush = () => {
-    const message = chatMessages.find((item) => item.id === selectionToolbar.messageId);
-    if (!message || !selectionToolbar.content) return;
-    window.getSelection()?.removeAllRanges();
-    const rect = {
-      left: selectionToolbar.x,
-      right: selectionToolbar.x,
-      top: selectionToolbar.y,
-    } as Pick<DOMRect, 'left' | 'right' | 'top'>;
-    openPushPopoverForContent({
-      content: selectionToolbar.content,
-      rect,
-      sourceEntries: [
-        {
-          messageId: message.id,
-          role: message.role,
-          time: message.time,
-          selectionText: selectionToolbar.content,
-          kind: 'selection',
-        },
-      ],
-      preferredDestination: 'document',
     });
   };
 
@@ -2573,6 +2523,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         ) : null}
         <div className="thinkflow-doc-render">
           <ReactMarkdown
+            remarkPlugins={[remarkMath]}
+            rehypePlugins={[rehypeKatex]}
             components={{
               h1: ({ children, ...props }: any) => <h1 {...props}>{renderDocumentTextWithBadges(children)}</h1>,
               h2: ({ children, ...props }: any) => <h2 {...props}>{renderDocumentTextWithBadges(children)}</h2>,
@@ -3022,7 +2974,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         setCaptureFeedback(`已沉淀到${destinationType === 'summary' ? '摘要' : '产出指导'}《${data.item.title}》`);
       }
 
-      setSelectionToolbar((previous) => ({ ...previous, show: false }));
       window.getSelection()?.removeAllRanges();
       setChatMessages((previous) =>
         previous.map((item) =>
@@ -3130,9 +3081,10 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           })
         : null;
       const contextData = contextResponse
-        ? await parseJson<{ context?: { context_text?: string } }>(contextResponse)
+        ? await parseJson<{ context?: { context_text?: string; rag_query?: string } }>(contextResponse)
         : null;
       const finalQuery = contextData?.context?.context_text || query;
+      const ragQuery = contextData?.context?.rag_query || query;
 
       const response = await apiFetch('/api/v1/kb/chat/stream', {
         method: 'POST',
@@ -3140,6 +3092,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         body: JSON.stringify({
           files: selectedFilePaths,
           query: finalQuery,
+          rag_query: ragQuery,
           history: chatMessages
             .filter((item) => item.id !== 'welcome')
             .filter((item) => item.role === 'user' || item.role === 'assistant')
@@ -3227,7 +3180,14 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       }
       await appendConversationMessages([
         { role: 'user', content: query },
-        { role: 'assistant', content: fullAnswer },
+        {
+          role: 'assistant',
+          content: fullAnswer,
+          fileAnalyses,
+          sourceMapping,
+          sourcePreviewMapping,
+          sourceReferenceMapping,
+        },
       ]);
       if (targetConversationId) {
         await apiFetch(`/api/v1/kb/conversations/${targetConversationId}/mark-sent`, {
@@ -3638,7 +3598,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       return (
         <div className="thinkflow-output-preview">
           <div className="thinkflow-markdown">
-            <ReactMarkdown>{String(result.preview_markdown)}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+              {String(result.preview_markdown)}
+            </ReactMarkdown>
           </div>
         </div>
       );
@@ -4329,7 +4291,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
 
   return (
     <div className="thinkflow-root">
-      <ThinkFlowTopBar notebookTitle={notebookTitle} onBack={onBack} onOpenHistory={openHistoryPanel} />
+      <ThinkFlowTopBar notebookTitle={notebookTitle} onBack={onBack} />
 
       {/* ── Toast stack ─────────────────────────────────────────────── */}
       {toasts.length > 0 && (
@@ -4399,9 +4361,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           chatScrollRef={chatScrollRef}
           documents={documents}
           focusedMessageId={focusedMessageId}
-          handleChatSelectionMouseUp={handleChatSelectionMouseUp}
-          handleSelectionCopy={handleSelectionCopy}
-          handleSelectionPush={handleSelectionPush}
           handleSendMessage={handleSendMessage}
           isOutlineChatMode={isPptOutlineChatStage}
           messageRefs={messageRefs}
@@ -4421,13 +4380,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           renderMessageMarkdown={renderMessageMarkdown}
           rightPanelOpen={rightPanelOpen}
           selectedMessageIds={selectedMessageIds}
-          selectionToolbar={selectionToolbar}
           setChatInput={setChatInput}
           setMultiSelectPrompt={setMultiSelectPrompt}
           toggleBoundDoc={toggleBoundDoc}
           toggleMessageSelection={toggleMessageSelection}
           workspaceMode={workspaceMode}
-          onOpenHistory={openHistoryPanel}
           onNewConversation={handleNewConversation}
           chatMode={chatMode}
           onChatModeChange={setChatMode}
@@ -4873,7 +4830,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
               {sourcePreviewLoading ? <div className="thinkflow-empty">正在加载来源内容...</div> : null}
               {!sourcePreviewLoading ? (
                 <div className="thinkflow-source-preview-content">
-                  <ReactMarkdown>{sourcePreviewContent}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                    {sourcePreviewContent}
+                  </ReactMarkdown>
                 </div>
               ) : null}
             </div>

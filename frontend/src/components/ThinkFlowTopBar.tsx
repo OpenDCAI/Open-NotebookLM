@@ -1,12 +1,11 @@
-import { FolderOpen, History } from 'lucide-react';
+import { FolderOpen } from 'lucide-react';
 
 type ThinkFlowTopBarProps = {
   notebookTitle: string;
   onBack: () => void;
-  onOpenHistory: () => void;
 };
 
-export function ThinkFlowTopBar({ notebookTitle, onBack, onOpenHistory }: ThinkFlowTopBarProps) {
+export function ThinkFlowTopBar({ notebookTitle, onBack }: ThinkFlowTopBarProps) {
   return (
     <div className="thinkflow-topbar">
       <div className="thinkflow-brand" onClick={onBack}>
@@ -15,10 +14,6 @@ export function ThinkFlowTopBar({ notebookTitle, onBack, onOpenHistory }: ThinkF
       </div>
       <div className="thinkflow-workspace-badge"><FolderOpen size={13} /> {notebookTitle} ▾</div>
       <div className="thinkflow-topbar-spacer" />
-      <button type="button" className="thinkflow-topbar-btn" onClick={onOpenHistory}>
-        <History size={14} />
-        历史
-      </button>
     </div>
   );
 }

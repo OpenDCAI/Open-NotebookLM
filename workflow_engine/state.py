@@ -408,6 +408,7 @@ class IntelligentQARequest(MainRequest):
     """
     file_ids: List[str] = field(default_factory=list)  # 引入层处理后的文件ID列表
     query: str = ""  # 用户问题
+    rag_query: str = ""  # RAG/embedding 检索问题；为空时回退到 query
     history: List[Dict[str, str]] = field(default_factory=list)  # 历史记录 [{"role": "user", "content": "..."}]
     vector_store_base_dir: Optional[str] = None  # 可选，用于 RAG：向量库根目录（与 kb_embedding 约定一致）
 

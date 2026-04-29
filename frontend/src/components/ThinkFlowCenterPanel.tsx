@@ -1,8 +1,7 @@
 import type { MutableRefObject, ReactNode, RefObject } from 'react';
-import { Check, FileText, History, MessageSquarePlus, Plus } from 'lucide-react';
+import { Check, FileText, MessageSquarePlus, Plus } from 'lucide-react';
 
 import type {
-  SelectionToolbarState,
   ThinkFlowDocument,
   ThinkFlowMessage,
   ThinkFlowOutput,
@@ -21,7 +20,6 @@ type ThinkFlowCenterPanelProps = {
   isOutlineChatMode?: boolean;
   chatMessages: ThinkFlowMessage[];
   chatScrollRef: RefObject<HTMLDivElement | null>;
-  handleChatSelectionMouseUp: () => void;
   messageRefs: MutableRefObject<Record<string, HTMLDivElement | null>>;
   focusedMessageId: string;
   selectedMessageIds: string[];
@@ -30,9 +28,6 @@ type ThinkFlowCenterPanelProps = {
   openPushPopover: (message: ThinkFlowMessage, event: React.MouseEvent<HTMLButtonElement>) => void;
   openQAPushPopover: (message: ThinkFlowMessage, event: React.MouseEvent<HTMLButtonElement>) => void;
   toggleMessageSelection: (messageId: string) => void;
-  selectionToolbar: SelectionToolbarState;
-  handleSelectionCopy: () => Promise<void>;
-  handleSelectionPush: () => void;
   multiSelectPrompt: string;
   setMultiSelectPrompt: (value: string) => void;
   clearSelectedMessages: () => void;
@@ -46,7 +41,6 @@ type ThinkFlowCenterPanelProps = {
   toggleBoundDoc: (docId: string) => void;
   openRightPanelForDocument: () => void;
   openRightPanelForActiveOutput: () => void;
-  onOpenHistory: () => void;
   onNewConversation: () => void;
   // ─── 表格分析模式 ────────────────────────────────────────────────────────
   chatMode: ChatMode;
@@ -66,7 +60,6 @@ export function ThinkFlowCenterPanel({
   isOutlineChatMode = false,
   chatMessages,
   chatScrollRef,
-  handleChatSelectionMouseUp,
   messageRefs,
   focusedMessageId,
   selectedMessageIds,
@@ -75,9 +68,6 @@ export function ThinkFlowCenterPanel({
   openPushPopover,
   openQAPushPopover,
   toggleMessageSelection,
-  selectionToolbar,
-  handleSelectionCopy,
-  handleSelectionPush,
   multiSelectPrompt,
   setMultiSelectPrompt,
   clearSelectedMessages,
@@ -91,7 +81,6 @@ export function ThinkFlowCenterPanel({
   toggleBoundDoc,
   openRightPanelForDocument,
   openRightPanelForActiveOutput,
-  onOpenHistory,
   onNewConversation,
   chatMode,
   onChatModeChange,
@@ -154,18 +143,9 @@ export function ThinkFlowCenterPanel({
             <MessageSquarePlus size={14} />
             新对话
           </button>
-          <button
-            type="button"
-            className="thinkflow-chat-header-btn"
-            onClick={onOpenHistory}
-            title="查看历史对话"
-          >
-            <History size={14} />
-            历史
-          </button>
         </div>
       </div>
-      <div className="thinkflow-chat-scroll" ref={chatScrollRef} onMouseUp={handleChatSelectionMouseUp}>
+      <div className="thinkflow-chat-scroll" ref={chatScrollRef}>
         {/* 表格分析模式 */}
         {chatMode === 'table-analysis' && activeDataset ? (
           <TableAnalysisPanel
@@ -209,7 +189,7 @@ export function ThinkFlowCenterPanel({
                   {renderMessageMarkdown(message)}
                 </div>
                 {!isOutlineChatMode && (message.role === 'assistant' || message.role === 'user') ? (
-                  <div className="thinkflow-message-actions">
+                  <div className={`thinkflow-message-actions ${message.role === 'user' ? 'is-user-side' : ''}`}>
                     <button
                       type="button"
                       className={`thinkflow-push-trigger ${message.pushed ? 'is-done' : ''}`}
@@ -245,23 +225,6 @@ export function ThinkFlowCenterPanel({
           </>
         )}
       </div>
-
-      {selectionToolbar.show ? (
-        <div
-          className="thinkflow-selection-toolbar"
-          style={{
-            left: selectionToolbar.x,
-            top: selectionToolbar.y,
-          }}
-        >
-          <button type="button" className="thinkflow-selection-btn" onClick={() => void handleSelectionCopy()}>
-            📋 复制
-          </button>
-          <button type="button" className="thinkflow-selection-btn is-primary" onClick={handleSelectionPush}>
-            ⟩ 沉淀
-          </button>
-        </div>
-      ) : null}
 
       {selectedMessageIds.length > 0 ? (
         <div className="thinkflow-multi-select-bar">

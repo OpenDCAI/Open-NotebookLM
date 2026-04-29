@@ -123,6 +123,10 @@ export type ConversationHistoryMessage = {
   role: 'user' | 'assistant';
   content: string;
   created_at?: string;
+  fileAnalyses?: any[];
+  sourceMapping?: Record<string, string>;
+  sourcePreviewMapping?: Record<string, string>;
+  sourceReferenceMapping?: Record<string, CitationReference>;
 };
 
 export type ThinkFlowWorkspaceItem = {

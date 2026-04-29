@@ -836,31 +836,45 @@
   color: inherit;
 }
 
+.thinkflow-citation-group {
+  margin-left: 2px;
+  color: var(--tf-accent);
+  font-size: 0.72em;
+  font-weight: 700;
+  line-height: 0;
+  vertical-align: super;
+  white-space: nowrap;
+}
+
 .thinkflow-citation {
   position: relative;
-  display: inline-flex;
+  display: inline;
   align-items: center;
   justify-content: center;
-  margin: 0 2px;
-  padding: 1px 6px;
+  margin: 0;
+  padding: 0 1px;
   border: 0;
-  border-radius: 999px;
-  background: rgba(47, 103, 239, 0.14);
+  border-radius: 3px;
+  background: transparent;
   color: var(--tf-accent);
-  font-size: 11px;
+  font: inherit;
   font-weight: 700;
-  line-height: 1.5;
+  line-height: inherit;
   vertical-align: baseline;
   cursor: pointer;
 }
 
 .thinkflow-citation.has-tooltip:hover,
 .thinkflow-citation.has-tooltip:focus-visible {
-  background: rgba(47, 103, 239, 0.22);
+  background: rgba(47, 103, 239, 0.12);
 }
 
 .thinkflow-bubble.user .thinkflow-citation {
-  background: rgba(255, 255, 255, 0.16);
+  background: transparent;
+  color: #fff;
+}
+
+.thinkflow-bubble.user .thinkflow-citation-group {
   color: #fff;
 }
 

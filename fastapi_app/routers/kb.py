@@ -38,11 +38,20 @@ router = APIRouter(prefix="/kb", tags=["Knowledge Base"])
 
 # Link sources JSON filename under notebook dir (excluded from regular file list)
 LINK_SOURCES_FILENAME = "link_sources.json"
+MESSAGE_METADATA_BASE_DIR = get_project_root() / "outputs" / "kb_conversation_message_metadata"
 
 # Base directory for storing KB files
 # Layout: outputs/kb_data/{email}/{notebook_id}/ for per-notebook isolation
 KB_BASE_DIR = Path("outputs/kb_data")
 OUTPUTS_BASE = Path("outputs/kb_outputs")
+
+
+MESSAGE_METADATA_FIELDS = (
+    "fileAnalyses",
+    "sourceMapping",
+    "sourcePreviewMapping",
+    "sourceReferenceMapping",
+)
 
 
 def _notebook_dir(email: str, notebook_id: Optional[str]) -> Path:
@@ -65,6 +74,104 @@ def _outputs_dir(email: str, notebook_id: Optional[str], subdir: str) -> Path:
     else:
         base = base / "_shared"
     return base / subdir
+
+
+def _safe_conversation_filename(conversation_id: str) -> str:
+    cleaned = str(conversation_id or "").strip()
+    if not cleaned:
+        return "unknown"
+    return cleaned.replace("/", "_").replace("\\", "_")[:160]
+
+
+def _message_metadata_path(conversation_id: str) -> Path:
+    return MESSAGE_METADATA_BASE_DIR / f"{_safe_conversation_filename(conversation_id)}.json"
+
+
+def _extract_message_metadata(message: Dict[str, Any]) -> Dict[str, Any]:
+    metadata: Dict[str, Any] = {}
+    for field in MESSAGE_METADATA_FIELDS:
+        value = message.get(field)
+        if isinstance(value, (dict, list)) and value:
+            metadata[field] = value
+    return metadata
+
+
+def _read_message_metadata(conversation_id: str) -> List[Dict[str, Any]]:
+    path = _message_metadata_path(conversation_id)
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return []
+    if not isinstance(payload, dict):
+        return []
+    entries = payload.get("messages")
+    return entries if isinstance(entries, list) else []
+
+
+def _write_message_metadata(conversation_id: str, entries: List[Dict[str, Any]]) -> None:
+    path = _message_metadata_path(conversation_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(f"{path.suffix}.tmp")
+    tmp_path.write_text(
+        json.dumps({"conversation_id": conversation_id, "messages": entries}, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(tmp_path, path)
+
+
+def _append_message_metadata(conversation_id: str, messages: List[Dict[str, Any]]) -> None:
+    next_entries = _read_message_metadata(conversation_id)
+    changed = False
+    for message in messages:
+        metadata = _extract_message_metadata(message)
+        if not metadata:
+            continue
+        next_entries.append(
+            {
+                "role": "assistant" if message.get("role") == "assistant" else "user",
+                "content": str(message.get("content") or ""),
+                "metadata": metadata,
+            }
+        )
+        changed = True
+    if changed:
+        _write_message_metadata(conversation_id, next_entries)
+
+
+def _merge_message_metadata(conversation_id: str, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    entries = _read_message_metadata(conversation_id)
+    if not entries:
+        return rows
+    used: set[int] = set()
+    merged: List[Dict[str, Any]] = []
+    for row in rows:
+        next_row = dict(row)
+        row_id = str(row.get("id") or "")
+        row_role = str(row.get("role") or "")
+        row_content = str(row.get("content") or "")
+        match_index = -1
+        for index, entry in enumerate(entries):
+            if index in used or not isinstance(entry, dict):
+                continue
+            entry_id = str(entry.get("id") or "")
+            if entry_id and row_id and entry_id == row_id:
+                match_index = index
+                break
+            if str(entry.get("role") or "") == row_role and str(entry.get("content") or "") == row_content:
+                match_index = index
+                break
+        if match_index >= 0:
+            used.add(match_index)
+            metadata = entries[match_index].get("metadata")
+            if isinstance(metadata, dict):
+                for field in MESSAGE_METADATA_FIELDS:
+                    value = metadata.get(field)
+                    if isinstance(value, (dict, list)) and value:
+                        next_row[field] = value
+        merged.append(next_row)
+    return merged
 
 
 def _get_cjk_font_path() -> Optional[str]:
@@ -950,6 +1057,7 @@ def _build_chat_request(
     api_url: Optional[str],
     api_key: Optional[str],
     model: str,
+    rag_query: Optional[str] = None,
 ) -> IntelligentQARequest:
     local_files = _resolve_chat_files(files)
     if not local_files:
@@ -963,12 +1071,31 @@ def _build_chat_request(
     return IntelligentQARequest(
         file_ids=local_files,
         query=query,
+        rag_query=_resolve_rag_query(query=query, rag_query=rag_query),
         history=history,
         vector_store_base_dir=_resolve_vector_store_dir(email, notebook_id),
         chat_api_url=resolved_api_url,
         api_key=resolved_api_key,
         model=model,
     )
+
+
+def _resolve_rag_query(*, query: str, rag_query: Optional[str] = None) -> str:
+    explicit = str(rag_query or "").strip()
+    if explicit:
+        return explicit
+
+    text = str(query or "").strip()
+    marker = "[用户新消息]"
+    if marker in text:
+        tail = text.rsplit(marker, 1)[-1].strip()
+        next_block = re.search(r"\n\s*\[[^\]\n]+]\s*\n", tail)
+        if next_block:
+            tail = tail[: next_block.start()].strip()
+        if tail:
+            return tail
+
+    return text[:1000].strip()
 
 
 def _resolve_llm_api_url(explicit_api_url: Optional[str] = None) -> str:
@@ -1065,6 +1192,7 @@ def _require_workflow_available(name: str, *, feature_label: str, missing_detail
 async def chat_with_kb(
     files: List[str] = Body(..., embed=True),
     query: str = Body(..., embed=True),
+    rag_query: Optional[str] = Body(None, embed=True),
     history: List[Dict[str, str]] = Body([], embed=True),
     email: Optional[str] = Body(None, embed=True),
     notebook_id: Optional[str] = Body(None, embed=True),
@@ -1082,7 +1210,7 @@ async def chat_with_kb(
     log.info(f"[chat_with_kb] query length: {len(query)}")
 
     try:
-        req = _build_chat_request(files, query, history, email, notebook_id, api_url, api_key, model)
+        req = _build_chat_request(files, query, history, email, notebook_id, api_url, api_key, model, rag_query)
 
         state = IntelligentQAState(request=req)
         
@@ -1139,6 +1267,7 @@ async def chat_with_kb(
 async def chat_with_kb_stream(
     files: List[str] = Body(..., embed=True),
     query: str = Body(..., embed=True),
+    rag_query: Optional[str] = Body(None, embed=True),
     history: List[Dict[str, str]] = Body([], embed=True),
     email: Optional[str] = Body(None, embed=True),
     notebook_id: Optional[str] = Body(None, embed=True),
@@ -1151,7 +1280,7 @@ async def chat_with_kb_stream(
     async def event_generator():
         full_answer = ""
         try:
-            req = _build_chat_request(files, query, history, email, notebook_id, api_url, api_key, model)
+            req = _build_chat_request(files, query, history, email, notebook_id, api_url, api_key, model, rag_query)
             state = IntelligentQAState(request=req)
             yield _jsonl_line({
                 "type": "stage",
@@ -1302,6 +1431,7 @@ async def get_conversation_messages(conversation_id: str) -> Dict[str, Any]:
             "conversation_id", conversation_id
         ).order("created_at", desc=False).execute()
         rows = (r.data or []) if hasattr(r, "data") else []
+        rows = _merge_message_metadata(conversation_id, rows)
         return {"success": True, "messages": rows}
     except Exception as e:
         log.warning("get_conversation_messages failed: %s", e)
@@ -1311,7 +1441,7 @@ async def get_conversation_messages(conversation_id: str) -> Dict[str, Any]:
 @router.post("/conversations/{conversation_id}/messages")
 async def append_conversation_messages(
     conversation_id: str,
-    messages: List[Dict[str, str]] = Body(..., embed=True),
+    messages: List[Dict[str, Any]] = Body(..., embed=True),
 ) -> Dict[str, Any]:
     """Append messages (list of {role, content})."""
     sb = get_supabase_admin_client()
@@ -1320,6 +1450,7 @@ async def append_conversation_messages(
     try:
         rows = [{"conversation_id": conversation_id, "role": m.get("role", "user"), "content": m.get("content", "")} for m in messages]
         sb.table("kb_chat_messages").insert(rows).execute()
+        _append_message_metadata(conversation_id, messages)
         first_user_message = next((m.get("content", "").strip() for m in messages if m.get("role") == "user" and m.get("content", "").strip()), "")
         next_updated_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         if first_user_message:

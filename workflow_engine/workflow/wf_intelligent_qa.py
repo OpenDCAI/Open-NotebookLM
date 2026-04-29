@@ -269,9 +269,10 @@ async def prepare_parallel_file_analyses(state: IntelligentQAState) -> Intellige
 
 def try_rag_retrieve(state: IntelligentQAState) -> None:
     base_dir = getattr(state.request, "vector_store_base_dir", None) or ""
+    retrieval_query = (getattr(state.request, "rag_query", "") or state.request.query or "").strip()
     log.info(f"[_try_rag_retrieve] base_dir={base_dir}")
     log.info(f"[_try_rag_retrieve] file_ids={state.request.file_ids}")
-    log.info(f"[_try_rag_retrieve] query={state.request.query[:100] if state.request.query else None}...")
+    log.info(f"[_try_rag_retrieve] query={retrieval_query[:100] if retrieval_query else None}...")
 
     if not base_dir:
         log.warning("[_try_rag_retrieve] Skipped: no base_dir")
@@ -279,7 +280,7 @@ def try_rag_retrieve(state: IntelligentQAState) -> None:
     if not state.request.file_ids:
         log.warning("[_try_rag_retrieve] Skipped: no file_ids")
         return
-    if not state.request.query:
+    if not retrieval_query:
         log.warning("[_try_rag_retrieve] Skipped: no query")
         return
 
@@ -315,7 +316,7 @@ def try_rag_retrieve(state: IntelligentQAState) -> None:
             file_ids = None
 
         results = manager.search(
-            query=state.request.query,
+            query=retrieval_query,
             top_k=RAG_TOP_K,
             file_ids=file_ids,
         )
@@ -726,9 +727,10 @@ def create_intelligent_qa_graph() -> GenericGraphBuilder:
     def _try_rag_retrieve(state: IntelligentQAState) -> None:
         """若配置了 vector_store_base_dir 且索引存在，按 query 检索 Top-K 片段并写入 state.retrieved_chunks。"""
         base_dir = getattr(state.request, "vector_store_base_dir", None) or ""
+        retrieval_query = (getattr(state.request, "rag_query", "") or state.request.query or "").strip()
         log.info(f"[_try_rag_retrieve] base_dir={base_dir}")
         log.info(f"[_try_rag_retrieve] file_ids={state.request.file_ids}")
-        log.info(f"[_try_rag_retrieve] query={state.request.query[:100] if state.request.query else None}...")
+        log.info(f"[_try_rag_retrieve] query={retrieval_query[:100] if retrieval_query else None}...")
 
         if not base_dir:
             log.warning("[_try_rag_retrieve] Skipped: no base_dir")
@@ -736,7 +738,7 @@ def create_intelligent_qa_graph() -> GenericGraphBuilder:
         if not state.request.file_ids:
             log.warning("[_try_rag_retrieve] Skipped: no file_ids")
             return
-        if not state.request.query:
+        if not retrieval_query:
             log.warning("[_try_rag_retrieve] Skipped: no query")
             return
 
@@ -779,7 +781,7 @@ def create_intelligent_qa_graph() -> GenericGraphBuilder:
             log.info(f"[_try_rag_retrieve] Searching with file_ids={file_ids}, top_k={RAG_TOP_K}")
 
             results = manager.search(
-                query=state.request.query,
+                query=retrieval_query,
                 top_k=RAG_TOP_K,
                 file_ids=file_ids,
             )

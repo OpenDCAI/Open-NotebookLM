@@ -66,6 +66,7 @@ import { splitSummaryCards } from './summaryCards';
 import type { NotebookContext } from './TableAnalysisPanel';
 import { usePptPageReviewManager } from './usePptPageReviewManager';
 import { useConversationSourceRefs, type ConversationSourceRef } from './useConversationSourceRefs';
+import { findPptOutputDocumentId } from './pptOutputDocuments';
 import {
   usePptOutlineManager,
   normalizePptStage,
@@ -931,6 +932,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const ensureDocumentContentRef = useRef<(documentId: string) => Promise<ThinkFlowDocument | null>>(async () => null);
   const loadDocumentDetailRef = useRef<(documentId: string) => Promise<ThinkFlowDocument>>(async () => ({} as ThinkFlowDocument));
   const pptOutputDocumentIdsRef = useRef<Record<string, string>>({});
+  const pptOutputDocumentSyncLocksRef = useRef<Record<string, Promise<void>>>({});
   const syncPptOutputDocumentRef = useRef<(output: ThinkFlowOutput) => Promise<void>>(async () => {});
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -1314,11 +1316,15 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   };
   loadDocumentDetailRef.current = loadDocumentDetail;
 
-  const refreshDocuments = async (preferredId?: string) => {
+  const fetchDocumentSummaries = async (): Promise<ThinkFlowDocument[]> => {
+    const response = await apiFetch(`/api/v1/kb/documents?${notebookQuery}`);
+    const data = await parseJson<{ documents: ThinkFlowDocument[] }>(response);
+    return data.documents || [];
+  };
+
+  const refreshDocuments = async (preferredId?: string): Promise<ThinkFlowDocument[]> => {
     try {
-      const response = await apiFetch(`/api/v1/kb/documents?${notebookQuery}`);
-      const data = await parseJson<{ documents: ThinkFlowDocument[] }>(response);
-      const items = data.documents || [];
+      const items = await fetchDocumentSummaries();
       setDocuments(items);
       const targetId = preferredId || (activeDocumentId && items.some((item) => item.id === activeDocumentId) ? activeDocumentId : '') || '';
       if (targetId) {
@@ -1343,8 +1349,10 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           ? previous.targetDocId
           : targetId || items[0]?.id || '',
       }));
+      return items;
     } catch (error: any) {
       setGlobalError(error?.message || '加载文档失败');
+      return [];
     }
   };
 
@@ -2929,12 +2937,17 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     return lines.join('\n').trim();
   };
 
-  const syncPptOutputDocument = async (output: ThinkFlowOutput) => {
+  const syncPptOutputDocumentOnce = async (output: ThinkFlowOutput) => {
     if (!output?.id || output.target_type !== 'ppt') return;
     const content = buildPptOutputDocumentContent(output);
-    const existingId =
+    let existingId =
       pptOutputDocumentIdsRef.current[output.id] ||
-      (documents.find((doc: any) => doc?.metadata?.related_output_id === output.id)?.id || '');
+      findPptOutputDocumentId(documents, output.id);
+    if (!existingId) {
+      const refreshedDocuments = await fetchDocumentSummaries();
+      setDocuments(refreshedDocuments);
+      existingId = findPptOutputDocumentId(refreshedDocuments, output.id);
+    }
     if (existingId) {
       await updateDocumentContent({
         documentId: existingId,
@@ -2966,6 +2979,27 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     setRightMode('doc');
     setRightPanelOpen(true);
     await loadDocumentDetail(documentId);
+  };
+
+  const syncPptOutputDocument = async (output: ThinkFlowOutput) => {
+    if (!output?.id || output.target_type !== 'ppt') return;
+    while (pptOutputDocumentSyncLocksRef.current[output.id]) {
+      try {
+        await pptOutputDocumentSyncLocksRef.current[output.id];
+      } catch {
+        // The next run below gets a fresh document list and can recover from a failed sync.
+      }
+    }
+
+    const currentSync = syncPptOutputDocumentOnce(output);
+    pptOutputDocumentSyncLocksRef.current[output.id] = currentSync;
+    try {
+      await currentSync;
+    } finally {
+      if (pptOutputDocumentSyncLocksRef.current[output.id] === currentSync) {
+        delete pptOutputDocumentSyncLocksRef.current[output.id];
+      }
+    }
   };
   syncPptOutputDocumentRef.current = syncPptOutputDocument;
 

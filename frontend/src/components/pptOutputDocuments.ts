@@ -23,3 +23,9 @@ export function findPptOutputDocumentId(
 
   return match?.id || '';
 }
+
+export function resolvePptDocSlideIndex(cardIndex: number, slideCount: number): number {
+  const safeSlideCount = Math.max(0, Math.floor(Number(slideCount) || 0));
+  if (safeSlideCount <= 0) return 0;
+  return Math.min(Math.max(0, Math.floor(Number(cardIndex) || 0)), safeSlideCount - 1);
+}

@@ -1661,6 +1661,25 @@
   background: #fff;
   box-shadow: 0 8px 18px rgba(25, 34, 52, 0.05);
   overflow: hidden;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease, background 160ms ease;
+}
+
+.thinkflow-ppt-doc-slide-card:hover,
+.thinkflow-ppt-doc-slide-card:focus-visible,
+.thinkflow-ppt-doc-slide-card.is-active {
+  border-color: rgba(37, 99, 235, 0.62);
+  box-shadow: 0 18px 42px rgba(37, 99, 235, 0.18);
+  transform: translateY(-1px);
+}
+
+.thinkflow-ppt-doc-slide-card.is-active {
+  background: rgba(247, 250, 255, 0.98);
+}
+
+.thinkflow-ppt-doc-slide-card:focus-visible {
+  outline: 2px solid rgba(37, 99, 235, 0.3);
+  outline-offset: 2px;
 }
 
 .thinkflow-ppt-doc-slide-card-head {
@@ -1680,10 +1699,23 @@
 }
 
 .thinkflow-ppt-doc-slide-card-head h4 {
+  flex: 1 1 auto;
   margin: 0;
   color: var(--tf-text);
   font-size: 14px;
   line-height: 1.35;
+}
+
+.thinkflow-ppt-doc-slide-card-head em {
+  flex: 0 0 auto;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  color: var(--tf-muted);
+}
+
+.thinkflow-ppt-doc-slide-card.is-active .thinkflow-ppt-doc-slide-card-head em {
+  color: #2563eb;
 }
 
 .thinkflow-ppt-doc-slide-body {

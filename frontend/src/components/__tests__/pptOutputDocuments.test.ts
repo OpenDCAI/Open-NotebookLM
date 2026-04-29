@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { findPptOutputDocumentId } from '../pptOutputDocuments';
+import { findPptOutputDocumentId, resolvePptDocSlideIndex } from '../pptOutputDocuments';
 
 describe('findPptOutputDocumentId', () => {
   it('finds the existing PPT output document by related output id', () => {
@@ -51,5 +51,15 @@ describe('findPptOutputDocumentId', () => {
     ];
 
     expect(findPptOutputDocumentId(documents, 'out_1')).toBe('');
+  });
+});
+
+describe('resolvePptDocSlideIndex', () => {
+  it('selects slides by rendered card order instead of page number text', () => {
+    expect(resolvePptDocSlideIndex(2, 5)).toBe(2);
+  });
+
+  it('clamps out-of-range rendered cards to the last available slide', () => {
+    expect(resolvePptDocSlideIndex(8, 3)).toBe(2);
   });
 });

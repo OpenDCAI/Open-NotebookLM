@@ -66,7 +66,7 @@ import { splitSummaryCards } from './summaryCards';
 import type { NotebookContext } from './TableAnalysisPanel';
 import { usePptPageReviewManager } from './usePptPageReviewManager';
 import { useConversationSourceRefs, type ConversationSourceRef } from './useConversationSourceRefs';
-import { findPptOutputDocumentId } from './pptOutputDocuments';
+import { findPptOutputDocumentId, resolvePptDocSlideIndex } from './pptOutputDocuments';
 import {
   usePptOutlineManager,
   normalizePptStage,
@@ -2586,19 +2586,48 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           </div>
         ) : null}
         <div className="thinkflow-ppt-doc-slide-list">
-          {parsed.cards.map((card) => (
-            <article key={`${section.id}_${card.pageNum}_${card.title}`} className="thinkflow-ppt-doc-slide-card">
-              <div className="thinkflow-ppt-doc-slide-card-head">
-                <span>第 {card.pageNum} 页</span>
-                <h4>{card.title}</h4>
-              </div>
-              <div className="thinkflow-doc-render thinkflow-ppt-doc-slide-body">
-                <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                  {card.body}
-                </ReactMarkdown>
-              </div>
-            </article>
-          ))}
+          {parsed.cards.map((card, cardIndex) => {
+            const slideIndex = resolvePptDocSlideIndex(cardIndex, activePptOutline.length);
+            const isActiveSlide = activeOutput?.target_type === 'ppt' && activePptOutline.length > 0 && activePptSlideIndex === slideIndex;
+            const selectSlide = () => {
+              if (activeOutput?.target_type !== 'ppt' || activePptOutline.length === 0) return;
+              setActivePptSlideIndex(slideIndex);
+            };
+            const handleSlideCardClick = (event: React.MouseEvent<HTMLElement>) => {
+              const target = event.target instanceof HTMLElement ? event.target : null;
+              if (target?.closest('a')) return;
+              event.stopPropagation();
+              selectSlide();
+            };
+            const handleSlideCardKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
+              if (event.key !== 'Enter' && event.key !== ' ') return;
+              event.preventDefault();
+              event.stopPropagation();
+              selectSlide();
+            };
+            return (
+              <article
+                key={`${section.id}_${card.pageNum}_${card.title}`}
+                className={`thinkflow-ppt-doc-slide-card ${isActiveSlide ? 'is-active' : ''}`}
+                role="button"
+                tabIndex={0}
+                aria-pressed={isActiveSlide}
+                onClick={handleSlideCardClick}
+                onKeyDown={handleSlideCardKeyDown}
+              >
+                <div className="thinkflow-ppt-doc-slide-card-head">
+                  <span>第 {card.pageNum} 页</span>
+                  <h4>{card.title}</h4>
+                  <em>{isActiveSlide ? '已选中' : '点击选择'}</em>
+                </div>
+                <div className="thinkflow-doc-render thinkflow-ppt-doc-slide-body">
+                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
+                    {card.body}
+                  </ReactMarkdown>
+                </div>
+              </article>
+            );
+          })}
         </div>
       </div>
     );

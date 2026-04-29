@@ -512,7 +512,10 @@ export type UsePptOutlineManagerDeps = {
   selectedSourceNames: string[];
   setLeftTab: React.Dispatch<React.SetStateAction<'conversations' | 'materials' | 'outputs'>>;
   setRightMode: React.Dispatch<React.SetStateAction<'summary' | 'doc' | 'guidance' | 'outline'>>;
+  setRightPanelOpen: React.Dispatch<React.SetStateAction<boolean>>;
+  setWorkspaceMode: React.Dispatch<React.SetStateAction<WorkspaceMode>>;
   enterOutputWorkspace: (mode?: WorkspaceMode) => void;
+  syncPptOutputDocument?: (output: ThinkFlowOutput) => Promise<void>;
   buildOutputContextSnapshot: (params: {
     outputId: string;
     targetType: OutputType;
@@ -549,7 +552,10 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     selectedSourceNames,
     setLeftTab,
     setRightMode,
+    setRightPanelOpen,
+    setWorkspaceMode,
     enterOutputWorkspace,
+    syncPptOutputDocument,
     buildOutputContextSnapshot,
     ensureDocumentContent,
     setIsOutputHeaderCollapsed,
@@ -874,7 +880,14 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     setPptOutlinePendingMessages([]);
     setActivePptSlideIndex(0);
     setActiveOutputId(output.id);
-    setLeftTab('outputs');
+    const isPptDraftStage = output.target_type === 'ppt' && normalizePptStage(output) === 'outline_ready';
+    if (isPptDraftStage) {
+      setWorkspaceMode('normal');
+      setRightMode('doc');
+      setRightPanelOpen(true);
+    } else {
+      setLeftTab('outputs');
+    }
     setOutputContexts((previous) => {
       if (previous[output.id]) return previous;
       if (!output?.id || output.target_type === 'ppt') return previous;
@@ -903,14 +916,18 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
         },
       };
     });
-    enterOutputWorkspace(output.target_type === 'ppt' ? 'output_focus' : 'output_immersive');
+    if (isPptDraftStage) {
+      await syncPptOutputDocument?.(output);
+    } else {
+      enterOutputWorkspace(output.target_type === 'ppt' ? 'output_focus' : 'output_immersive');
+    }
     if (output.document_id) {
       try {
         await loadDocumentDetail(output.document_id);
       } catch {}
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [setLeftTab, enterOutputWorkspace, files, buildOutputContextSnapshot, loadDocumentDetail]);
+  }, [setLeftTab, setRightMode, setRightPanelOpen, setWorkspaceMode, enterOutputWorkspace, files, buildOutputContextSnapshot, loadDocumentDetail, syncPptOutputDocument]);
 
   const handlePptOutlineChatMessage = useCallback(async (query: string) => {
     if (!activeOutputId || !activeOutput || activeOutput.target_type !== 'ppt') return;
@@ -949,6 +966,9 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
       const nextOutput = data.output;
       const appliedSlideIndex = data.applied_slide_index;
       setOutputs((previous) => previous.map((item) => (item.id === nextOutput.id ? nextOutput : item)));
+      if (nextOutput.target_type === 'ppt') {
+        await syncPptOutputDocument?.(nextOutput);
+      }
       setPptOutlinePendingMessages([]);
 
       // Auto-navigate to affected slide
@@ -979,10 +999,11 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     activeOutputId, activeOutput, activePptSlide, activePptSlideIndex,
     setChatLoading, setGlobalError, setChatInput,
     notebook.id, notebookTitle, effectiveUser,
+    syncPptOutputDocument,
   ]);
 
-  const applyPptOutlineDraft = useCallback(async () => {
-    if (!activeOutputId || !activeOutput || activeOutput.target_type !== 'ppt') return;
+  const applyPptOutlineDraft = useCallback(async (): Promise<ThinkFlowOutput | null> => {
+    if (!activeOutputId || !activeOutput || activeOutput.target_type !== 'ppt') return null;
     setOutlineSaving(true);
     setGlobalError('');
     try {
@@ -1018,18 +1039,21 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
       });
       const data = await parseJson<{ output: ThinkFlowOutput; assistant_message?: string }>(response);
       setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+      await syncPptOutputDocument?.(data.output);
       setPptOutlinePendingMessages([]);
       lastSavedOutlineRef.current = [];  // Will be re-initialized by the useEffect
       if (data.assistant_message) {
         setGlobalError('');
       }
+      return data.output;
     } catch (error: any) {
       setGlobalError(error?.message || '推送大纲改动失败');
+      return null;
     } finally {
       setOutlineSaving(false);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeOutputId, activeOutput, notebook.id, notebookTitle, effectiveUser, setGlobalError, manualEditsBuffer, pushToast]);
+  }, [activeOutputId, activeOutput, notebook.id, notebookTitle, effectiveUser, setGlobalError, manualEditsBuffer, pushToast, syncPptOutputDocument]);
 
   const discardPptOutlineDraft = useCallback(async () => {
     if (!activeOutputId || !activeOutput || activeOutput.target_type !== 'ppt') return;
@@ -1048,13 +1072,14 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
       });
       const data = await parseJson<{ output: ThinkFlowOutput; assistant_message?: string }>(response);
       setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+      await syncPptOutputDocument?.(data.output);
       setPptOutlinePendingMessages([]);
     } catch (error: any) {
       setGlobalError(error?.message || '放弃候选大纲失败');
     } finally {
       setOutlineSaving(false);
     }
-  }, [activeOutputId, activeOutput, notebook.id, notebookTitle, effectiveUser, setGlobalError]);
+  }, [activeOutputId, activeOutput, notebook.id, notebookTitle, effectiveUser, setGlobalError, syncPptOutputDocument]);
 
   const generateOutputById = useCallback(async (outputId: string) => {
     if (!outputId) return;
@@ -1110,9 +1135,15 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     setActiveOutputId('');
     setPptOutlinePendingMessages([]);
     setActivePptSlideIndex(0);
-    setLeftTab('outputs');
-    setRightMode('outline');
-    enterOutputWorkspace(targetType === 'ppt' ? 'output_focus' : 'output_immersive');
+    if (targetType === 'ppt') {
+      setWorkspaceMode('normal');
+      setRightMode('doc');
+      setRightPanelOpen(true);
+    } else {
+      setLeftTab('outputs');
+      setRightMode('outline');
+      enterOutputWorkspace('output_immersive');
+    }
     try {
       const {
         outputDocumentId,
@@ -1148,8 +1179,10 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
       const data = await parseJson<{ output: ThinkFlowOutput }>(response);
       const nextOutput = data.output;
       setActivePptSlideIndex(0);
-      setRightMode('outline');
-      setLeftTab('outputs');
+      setRightMode(targetType === 'ppt' ? 'doc' : 'outline');
+      if (targetType !== 'ppt') {
+        setLeftTab('outputs');
+      }
       setOutputs((previous) => {
         const existingIndex = previous.findIndex((item) => item.id === nextOutput.id);
         if (existingIndex >= 0) {
@@ -1160,6 +1193,9 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
         return [nextOutput, ...previous];
       });
       setActiveOutputId(nextOutput.id);
+      if (targetType === 'ppt') {
+        await syncPptOutputDocument?.(nextOutput);
+      }
       if (targetType !== 'ppt') {
         setOutputContexts((previous) => ({
           ...previous,
@@ -1189,6 +1225,7 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     setGlobalError, setLeftTab, setRightMode, enterOutputWorkspace,
+    setRightPanelOpen, setWorkspaceMode, syncPptOutputDocument,
     resolveOutputCreationInputs, notebook.id, notebookTitle, effectiveUser,
     buildOutputContextSnapshot, refreshOutputs, generateOutputById,
   ]);
@@ -1227,8 +1264,44 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
   }, [activeOutputId, activeOutput, notebook.id, notebookTitle, effectiveUser, setGlobalError]);
 
   const confirmPptOutline = useCallback(async () => {
-    await saveOutline({ pipelineStage: 'pages_ready' });
-  }, [saveOutline]);
+    if (!activeOutputId || !activeOutput || activeOutput.target_type !== 'ppt') return;
+    let outputForGeneration = activeOutput;
+    if (activePptDraftPending) {
+      const appliedOutput = await applyPptOutlineDraft();
+      if (!appliedOutput) return;
+      outputForGeneration = appliedOutput;
+    }
+    setOutlineSaving(true);
+    try {
+      const response = await apiFetch(`/api/v1/kb/outputs/${outputForGeneration.id}/outline`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+          title: outputForGeneration.title,
+          prompt: outputForGeneration.prompt || '',
+          outline: outputForGeneration.outline || [],
+          pipeline_stage: 'pages_ready',
+          enable_images: outputForGeneration.enable_images,
+        }),
+      });
+      const data = await parseJson<{ output: ThinkFlowOutput }>(response);
+      setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+      enterOutputWorkspace('output_focus');
+      await generateOutputById(outputForGeneration.id);
+    } catch (error: any) {
+      setGlobalError(error?.message || '确认生成 PPT 失败');
+    } finally {
+      setOutlineSaving(false);
+    }
+  }, [
+    activeOutputId, activeOutput, activePptDraftPending, applyPptOutlineDraft,
+    notebook.id, notebookTitle, effectiveUser, enterOutputWorkspace,
+    generateOutputById, setGlobalError,
+  ]);
 
   const updateOutlineSection = useCallback((index: number, patch: Partial<OutlineSection>) => {
     setOutputs(prev => prev.map(o => {

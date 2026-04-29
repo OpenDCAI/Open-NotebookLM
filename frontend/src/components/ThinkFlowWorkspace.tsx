@@ -893,6 +893,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   }) => OutputContextSnapshot>(() => ({} as OutputContextSnapshot));
   const ensureDocumentContentRef = useRef<(documentId: string) => Promise<ThinkFlowDocument | null>>(async () => null);
   const loadDocumentDetailRef = useRef<(documentId: string) => Promise<ThinkFlowDocument>>(async () => ({} as ThinkFlowDocument));
+  const pptOutputDocumentIdsRef = useRef<Record<string, string>>({});
+  const syncPptOutputDocumentRef = useRef<(output: ThinkFlowOutput) => Promise<void>>(async () => {});
   // ─────────────────────────────────────────────────────────────────────────
 
   const [pushSubmitting, setPushSubmitting] = useState(false);
@@ -1087,7 +1089,10 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     selectedSourceNames,
     setLeftTab,
     setRightMode,
+    setRightPanelOpen,
+    setWorkspaceMode,
     enterOutputWorkspace: (mode) => enterOutputWorkspaceRef.current(mode),
+    syncPptOutputDocument: (output) => syncPptOutputDocumentRef.current(output),
     buildOutputContextSnapshot: (params) => buildOutputContextSnapshotRef.current(params),
     ensureDocumentContent: (id) => ensureDocumentContentRef.current(id),
     setIsOutputHeaderCollapsed,
@@ -2167,8 +2172,16 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     return (
       <div className="thinkflow-outline-chat-top-panel">
         <div className="thinkflow-outline-chat-top-head">
-          <span className="thinkflow-output-workspace-kicker">当前生效规则</span>
-          <strong>这轮大纲修改会先在对话里生成候选稿，再由你决定是否推送。</strong>
+          <span className="thinkflow-output-workspace-kicker">PPT 产出文档</span>
+          <strong>右侧是本轮 PPT 的“产出须知 + 大纲”。聊清楚后点击确认，系统会直接进入工作台生图。</strong>
+          <button
+            type="button"
+            className="thinkflow-generate-btn"
+            onClick={() => void confirmPptOutline()}
+            disabled={outlineSaving || generatingOutput}
+          >
+            {outlineSaving || generatingOutput ? '生成中...' : '确认并生成 PPT'}
+          </button>
         </div>
         <div className="thinkflow-inline-outline-rule-list">
           {activePptGlobalDirectives.length > 0 ? (
@@ -2178,7 +2191,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
               </span>
             ))
           ) : (
-            <span className="thinkflow-inline-outline-empty">当前还没有全局规则，直接在下面说即可，例如“所有页标题使用黑色”。</span>
+            <span className="thinkflow-inline-outline-empty">可以继续补充受众、风格、页数、重点取舍或单页修改要求。</span>
           )}
         </div>
       </div>
@@ -2770,6 +2783,90 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     });
     return parseJson<{ document: ThinkFlowDocument }>(response);
   };
+
+  const buildPptOutputDocumentContent = (output: ThinkFlowOutput): string => {
+    const outline = Array.isArray(output.outline_chat_draft_outline) && output.outline_chat_draft_outline.length > 0
+      ? output.outline_chat_draft_outline
+      : output.outline || [];
+    const sourceNames = (output.source_names || []).filter(Boolean);
+    const boundTitles = (output.bound_document_titles || []).filter(Boolean);
+    const guidanceText = String(output.guidance_snapshot_text || '').trim();
+    const lines = [
+      `# ${output.title || 'PPT 产出文档'}`,
+      '',
+      '## 产出须知',
+      '',
+      `- 产出类型：PPT`,
+      `- 目标页数：${output.page_count || outline.length || 10} 页`,
+      sourceNames.length > 0 ? `- 来源文件：${sourceNames.join('、')}` : '- 来源文件：未选择',
+      boundTitles.length > 0 ? `- 参考文档：${boundTitles.join('、')}` : '- 参考文档：未选择',
+      guidanceText ? `- 产出指导：${guidanceText}` : '- 产出指导：无',
+      '',
+      '## PPT 大纲',
+      '',
+    ];
+    if (outline.length === 0) {
+      lines.push('[待补充]');
+      return lines.join('\n');
+    }
+    outline.forEach((slide, index) => {
+      const pageNum = slide.pageNum || index + 1;
+      lines.push(`### 第 ${pageNum} 页：${slide.title || `页面 ${pageNum}`}`);
+      if (slide.layout_description || slide.summary) {
+        lines.push('', slide.layout_description || slide.summary || '');
+      }
+      const points = slide.key_points || slide.bullets || [];
+      if (points.length > 0) {
+        lines.push('');
+        points.forEach((point) => lines.push(`- ${point}`));
+      }
+      if (slide.asset_ref) {
+        lines.push('', `素材建议：${slide.asset_ref}`);
+      }
+      lines.push('');
+    });
+    return lines.join('\n').trim();
+  };
+
+  const syncPptOutputDocument = async (output: ThinkFlowOutput) => {
+    if (!output?.id || output.target_type !== 'ppt') return;
+    const content = buildPptOutputDocumentContent(output);
+    const existingId =
+      pptOutputDocumentIdsRef.current[output.id] ||
+      (documents.find((doc: any) => doc?.metadata?.related_output_id === output.id)?.id || '');
+    if (existingId) {
+      await updateDocumentContent({
+        documentId: existingId,
+        title: output.title || 'PPT 产出文档',
+        content,
+      });
+      pptOutputDocumentIdsRef.current[output.id] = existingId;
+      setActiveDocumentId(existingId);
+      setRightMode('doc');
+      setRightPanelOpen(true);
+      await refreshDocuments(existingId);
+      return;
+    }
+    const documentId = await createDocument(output.title || 'PPT 产出文档', {
+      documentType: 'output_doc',
+      metadata: {
+        output_type: 'ppt',
+        related_output_id: output.id,
+        source_paths: output.source_paths || [],
+        source_names: output.source_names || [],
+        bound_document_ids: output.bound_document_ids || [],
+        guidance_item_ids: output.guidance_item_ids || [],
+      },
+      content,
+    });
+    if (!documentId) return;
+    pptOutputDocumentIdsRef.current[output.id] = documentId;
+    setActiveDocumentId(documentId);
+    setRightMode('doc');
+    setRightPanelOpen(true);
+    await loadDocumentDetail(documentId);
+  };
+  syncPptOutputDocumentRef.current = syncPptOutputDocument;
 
   const saveDocument = async () => {
     if (!activeDocumentId) return;
@@ -4355,13 +4452,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         <ThinkFlowCenterPanel
           activeOutput={activeOutput}
           boundDocIds={boundDocIds}
-          chatTitle={isPptOutlineChatStage ? '📋 PPT 大纲讨论' : undefined}
+          chatTitle={isPptOutlineChatStage ? '📋 PPT 产出文档讨论' : undefined}
           chatInput={chatInput}
           chatLoading={chatLoading}
           chatMessages={visibleChatMessages}
           chatPlaceholder={
             isPptOutlineChatStage
-              ? '先说你想怎么调整这份 PPT，例如“整体更偏业务汇报，弱化技术细节”'
+              ? '继续调整右侧产出文档，例如“整体更偏业务汇报，弱化技术细节”'
               : undefined
           }
           chatTopPanel={renderOutlineChatTopPanel()}
@@ -4507,7 +4604,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   ? '正在整理来源，请稍候。'
                   : pptSourceLockIntent.errorMessage
                     ? '来源解析失败，请关闭后重试。'
-                    : '当前正在编辑的梳理文档也会在这里一并锁定。确认后将直接进入 PPT 大纲阶段。'}
+                    : '确认后会生成一份 PPT 产出文档和初始大纲，先留在主工作区继续对话调整。'}
               </span>
               <div className="thinkflow-output-context-actions">
                 <button type="button" className="thinkflow-doc-action-btn" onClick={() => setPptSourceLockIntent(null)}>
@@ -4519,7 +4616,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   onClick={() => void confirmPptSourceLockIntent()}
                   disabled={pptSourceLockIntent.loading || Boolean(pptSourceLockIntent.errorMessage)}
                 >
-                  {pptSourceLockIntent.loading ? '整理来源中...' : '确认并生成大纲'}
+                  {pptSourceLockIntent.loading ? '整理来源中...' : '确认并生成产出文档'}
                 </button>
               </div>
             </div>

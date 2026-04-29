@@ -64,7 +64,7 @@ import { splitSummaryCards } from './summaryCards';
 import type { NotebookContext } from './TableAnalysisPanel';
 import { usePptPageReviewManager } from './usePptPageReviewManager';
 import { useConversationSourceRefs, type ConversationSourceRef } from './useConversationSourceRefs';
-import { findPptOutputDocumentId, resolvePptDocSlideIndex } from './pptOutputDocuments';
+import { filterMaterialListDocuments, findPptOutputDocumentId, resolvePptDocSlideIndex } from './pptOutputDocuments';
 import {
   usePptOutlineManager,
   normalizePptStage,
@@ -1196,6 +1196,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   });
   // ─────────────────────────────────────────────────────────────────────────
 
+  const materialListDocuments = useMemo(
+    () => filterMaterialListDocuments(documents, outputs),
+    [documents, outputs],
+  );
+
   const isPptOutputConversationMode = Boolean(pptOutputCreationPending) || isPptOutlineChatStage;
   const visibleChatMessages = useMemo(() => {
     if (pptOutputCreationPending) {
@@ -1361,13 +1366,14 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         setEditMode(false);
         setShowVersionPanel(false);
       }
-      setBoundDocIds((previous) => previous.filter((id) => items.some((item) => item.id === id)));
+      const visibleItems = filterMaterialListDocuments(items, outputs);
+      setBoundDocIds((previous) => previous.filter((id) => visibleItems.some((item) => item.id === id)));
       setConversationActiveDocumentId((previous) => (previous && items.some((item) => item.id === previous) ? previous : targetId || ''));
       setPushPopover((previous) => ({
         ...previous,
-        targetDocId: previous.targetDocId && items.some((item) => item.id === previous.targetDocId)
+        targetDocId: previous.targetDocId && visibleItems.some((item) => item.id === previous.targetDocId)
           ? previous.targetDocId
-          : targetId || items[0]?.id || '',
+          : targetId || visibleItems[0]?.id || '',
       }));
       return items;
     } catch (error: any) {
@@ -4511,7 +4517,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   };
 
   const documentPanelProps = {
-    documents: documents.map((doc) => ({ id: doc.id, title: doc.title })),
+    documents: materialListDocuments.map((doc) => ({ id: doc.id, title: doc.title })),
     activeDocumentId,
     activeDocument: activeDocument ? { id: activeDocument.id, title: activeDocument.title, document_type: activeDocument.document_type } : null,
     pendingDocument: pptOutputCreationPending
@@ -4647,7 +4653,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           }
           chatTopPanel={renderOutlineChatTopPanel()}
           chatScrollRef={chatScrollRef}
-          documents={documents}
+          documents={materialListDocuments}
           focusedMessageId={focusedMessageId}
           handleSendMessage={handleSendMessage}
           isOutlineChatMode={isPptOutputConversationMode}

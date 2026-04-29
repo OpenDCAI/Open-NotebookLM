@@ -4,6 +4,13 @@ export type PptOutputDocumentSummary = {
   metadata?: Record<string, any> | null;
 };
 
+export type PptOutputStageSummary = {
+  id?: string;
+  target_type?: string;
+  pipeline_stage?: string;
+  status?: string;
+};
+
 export function findPptOutputDocumentId(
   documents: PptOutputDocumentSummary[] | null | undefined,
   outputId: string,
@@ -22,6 +29,28 @@ export function findPptOutputDocumentId(
   });
 
   return match?.id || '';
+}
+
+export function isPptOutputDocumentVisibleInMaterialList(
+  document: PptOutputDocumentSummary,
+  outputs: PptOutputStageSummary[] | null | undefined,
+): boolean {
+  if (document.document_type !== 'output_doc') return true;
+  const metadata = document.metadata || {};
+  if (metadata.output_type !== 'ppt') return true;
+  const relatedOutputId = String(metadata.related_output_id || '').trim();
+  if (!relatedOutputId) return true;
+  const output = (outputs || []).find((item) => String(item.id || '').trim() === relatedOutputId);
+  if (!output || output.target_type !== 'ppt') return false;
+  const stage = String(output.pipeline_stage || output.status || '').trim();
+  return stage === 'pages_ready' || stage === 'generated';
+}
+
+export function filterMaterialListDocuments<T extends PptOutputDocumentSummary>(
+  documents: T[] | null | undefined,
+  outputs: PptOutputStageSummary[] | null | undefined,
+): T[] {
+  return (documents || []).filter((document) => isPptOutputDocumentVisibleInMaterialList(document, outputs));
 }
 
 export function resolvePptDocSlideIndex(cardIndex: number, slideCount: number): number {

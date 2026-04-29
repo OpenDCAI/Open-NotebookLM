@@ -380,6 +380,18 @@ export function buildOutlineChatMessages(output: ThinkFlowOutput | null): ThinkF
   }));
 }
 
+export function resolveNextActiveOutputId(
+  currentOutputId: string,
+  preferredOutputId: string | undefined,
+  outputs: Array<{ id?: string }>,
+): string {
+  const targetId = preferredOutputId || currentOutputId;
+  if (targetId && outputs.some((item) => item.id === targetId)) {
+    return targetId;
+  }
+  return '';
+}
+
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 
 const outputButtons: Array<{ type: OutputType; label: string }> = [
@@ -605,14 +617,7 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
       const data = await parseJson<{ outputs: ThinkFlowOutput[] }>(response);
       const items = data.outputs || [];
       setOutputs(items);
-      const targetId = preferredId || activeOutputId;
-      if (targetId && items.some((item) => item.id === targetId)) {
-        setActiveOutputId(targetId);
-      } else if (items[0]) {
-        setActiveOutputId(items[0].id);
-      } else {
-        setActiveOutputId('');
-      }
+      setActiveOutputId(resolveNextActiveOutputId(activeOutputId, preferredId, items));
     } catch (error: any) {
       setGlobalError(error?.message || '加载产出失败');
     }

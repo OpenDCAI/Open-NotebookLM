@@ -1566,6 +1566,16 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   };
   ensureDocumentContentRef.current = ensureDocumentContent;
 
+  const resetOutputWorkspaceForConversation = () => {
+    setPptSourceLockIntent(null);
+    setDirectOutputIntent(null);
+    setPptOutlinePendingMessages([]);
+    setActiveOutputId('');
+    setWorkspaceMode('normal');
+    setRightMode('doc');
+    setRightPanelOpen(true);
+  };
+
   const persistConversationWorkspaceState = async ({
     targetConversationId = conversationId,
     sourceRefs = conversationSourceRefs,
@@ -1631,6 +1641,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   };
 
   const loadConversationMessages = async (targetConversationId: string) => {
+    resetOutputWorkspaceForConversation();
     setConversationId(targetConversationId);
     const response = await apiFetch(`/api/v1/kb/conversations/${targetConversationId}/messages`);
     const data = await parseJson<{ messages?: ConversationHistoryMessage[] }>(response);
@@ -1688,6 +1699,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     if (!nextId) {
       throw new Error('创建新对话失败');
     }
+    resetOutputWorkspaceForConversation();
     await refreshConversationList();
     setConversationId(nextId);
     setChatMessages(welcomeMessages);
@@ -1843,11 +1855,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   enterOutputWorkspaceRef.current = enterOutputWorkspace;
 
   const exitOutputWorkspace = () => {
-    setPptSourceLockIntent(null);
-    setDirectOutputIntent(null);
-    setWorkspaceMode('normal');
-    setRightMode('doc');
-    setRightPanelOpen(true);
+    resetOutputWorkspaceForConversation();
   };
 
   const toggleSource = (fileId: string) => {

@@ -233,6 +233,21 @@ async def apply_outline_chat(output_id: str, request: OutlineChatApplyRequest) -
     }
 
 
+@router.post("/{output_id}/outline-chat/discard")
+async def discard_outline_chat(output_id: str, request: OutlineChatApplyRequest) -> Dict[str, Any]:
+    output, assistant_message = service.discard_outline_chat(
+        notebook_id=request.notebook_id,
+        notebook_title=request.notebook_title,
+        user_id=_effective_user(request.user_id, request.email),
+        output_id=output_id,
+    )
+    return {
+        "success": True,
+        "output": output,
+        "assistant_message": assistant_message,
+    }
+
+
 @router.post("/{output_id}/generate")
 async def generate_output(output_id: str, request: GenerateOutputRequest) -> Dict[str, Any]:
     item = await service.generate_output(

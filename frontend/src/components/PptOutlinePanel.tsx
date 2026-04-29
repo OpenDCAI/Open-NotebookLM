@@ -17,6 +17,7 @@ type PptOutlinePanelProps = {
   onSetRightMode: (mode: string) => void;
   onSaveOutline: () => Promise<void>;
   onConfirmPptOutline: () => Promise<void>;
+  onDiscardPptOutlineDraft: () => Promise<void>;
   onUpdateOutlineSection: (index: number, patch: Partial<OutlineSection>) => void;
   onSetActivePptSlideIndex: (index: number) => void;
   onAddPptOutlineSection: () => void;
@@ -62,6 +63,7 @@ export function PptOutlinePanel({
   onSetRightMode,
   onSaveOutline,
   onConfirmPptOutline,
+  onDiscardPptOutlineDraft,
   onUpdateOutlineSection,
   onSetActivePptSlideIndex,
   onAddPptOutlineSection,
@@ -106,6 +108,11 @@ export function PptOutlinePanel({
           <button type="button" className="thinkflow-doc-action-btn is-active" onClick={() => void onSaveOutline()} disabled={outlineSaving || activePptDraftPending}>
             {outlineSaving ? '保存中...' : '保存大纲'}
           </button>
+          {activePptDraftPending ? (
+            <button type="button" className="thinkflow-doc-action-btn is-danger" onClick={() => void onDiscardPptOutlineDraft()} disabled={outlineSaving}>
+              放弃候选
+            </button>
+          ) : null}
           <button type="button" className="thinkflow-generate-btn" onClick={() => void onConfirmPptOutline()} disabled={outlineSaving || generatingOutput || activePptDraftPending}>
             确认大纲，进入逐页生成
           </button>
@@ -259,6 +266,11 @@ export function PptOutlinePanel({
           <button type="button" className="thinkflow-doc-action-btn is-active" onClick={() => void onSaveOutline()} disabled={outlineSaving || activePptDraftPending}>
             {outlineSaving ? '保存中...' : '保存大纲'}
           </button>
+          {activePptDraftPending ? (
+            <button type="button" className="thinkflow-doc-action-btn is-danger" onClick={() => void onDiscardPptOutlineDraft()} disabled={outlineSaving}>
+              放弃候选
+            </button>
+          ) : null}
           <button type="button" className="thinkflow-generate-btn" onClick={() => void onConfirmPptOutline()} disabled={outlineSaving || generatingOutput || activePptDraftPending}>
             确认大纲，进入逐页生成
           </button>

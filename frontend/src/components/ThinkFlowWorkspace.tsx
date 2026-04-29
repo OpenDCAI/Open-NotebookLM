@@ -1060,6 +1060,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     openExistingOutput,
     handlePptOutlineChatMessage,
     applyPptOutlineDraft,
+    discardPptOutlineDraft,
     createOutline,
     saveOutline,
     confirmPptOutline,
@@ -1070,11 +1071,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     effectiveUser,
     pushToast,
     setGlobalError,
-    chatMessages,
-    setChatMessages,
     setChatInput,
     setChatLoading,
-    buildConversationHistoryPayload,
     selectedGuidanceIds,
     guidanceItems,
     documents,
@@ -3958,6 +3956,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         onSetRightMode={setRightMode}
         onSaveOutline={saveOutline}
         onConfirmPptOutline={confirmPptOutline}
+        onDiscardPptOutlineDraft={discardPptOutlineDraft}
         onUpdateOutlineSection={updateOutlineSection}
         onSetActivePptSlideIndex={setActivePptSlideIndex}
         onAddPptOutlineSection={addPptOutlineSection}

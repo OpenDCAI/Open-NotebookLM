@@ -484,11 +484,8 @@ export type UsePptOutlineManagerDeps = {
   effectiveUser: EffectiveUser;
   pushToast: (message: string, kind?: 'error' | 'success' | 'info' | 'warning', duration?: number) => void;
   setGlobalError: (msg: string) => void;
-  chatMessages: ThinkFlowMessage[];
-  setChatMessages: React.Dispatch<React.SetStateAction<ThinkFlowMessage[]>>;
   setChatInput: React.Dispatch<React.SetStateAction<string>>;
   setChatLoading: React.Dispatch<React.SetStateAction<boolean>>;
-  buildConversationHistoryPayload: (messages: ThinkFlowMessage[]) => ConversationHistoryMessage[];
   selectedGuidanceIds: string[];
   guidanceItems: ThinkFlowWorkspaceItem[];
   documents: ThinkFlowDocument[];
@@ -524,11 +521,8 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     effectiveUser,
     pushToast,
     setGlobalError,
-    chatMessages,
-    setChatMessages,
     setChatInput,
     setChatLoading,
-    buildConversationHistoryPayload,
     selectedGuidanceIds,
     guidanceItems,
     documents,
@@ -944,7 +938,6 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
           email: effectiveUser?.email || '',
           message: query,
           active_slide_index: focusIndex,
-          conversation_history: buildConversationHistoryPayload(chatMessages),
         }),
       });
       const data = await parseJson<{ output: ThinkFlowOutput; assistant_message?: string; applied_slide_index?: number }>(response);
@@ -981,7 +974,6 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     activeOutputId, activeOutput, activePptSlide, activePptSlideIndex,
     setChatLoading, setGlobalError, setChatInput,
     notebook.id, notebookTitle, effectiveUser,
-    buildConversationHistoryPayload, chatMessages,
   ]);
 
   const applyPptOutlineDraft = useCallback(async () => {
@@ -1033,6 +1025,31 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeOutputId, activeOutput, notebook.id, notebookTitle, effectiveUser, setGlobalError, manualEditsBuffer, pushToast]);
+
+  const discardPptOutlineDraft = useCallback(async () => {
+    if (!activeOutputId || !activeOutput || activeOutput.target_type !== 'ppt') return;
+    setOutlineSaving(true);
+    setGlobalError('');
+    try {
+      const response = await apiFetch(`/api/v1/kb/outputs/${activeOutputId}/outline-chat/discard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+        }),
+      });
+      const data = await parseJson<{ output: ThinkFlowOutput; assistant_message?: string }>(response);
+      setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+      setPptOutlinePendingMessages([]);
+    } catch (error: any) {
+      setGlobalError(error?.message || '放弃候选大纲失败');
+    } finally {
+      setOutlineSaving(false);
+    }
+  }, [activeOutputId, activeOutput, notebook.id, notebookTitle, effectiveUser, setGlobalError]);
 
   const generateOutputById = useCallback(async (outputId: string) => {
     if (!outputId) return;
@@ -1293,6 +1310,7 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     openExistingOutput,
     handlePptOutlineChatMessage,
     applyPptOutlineDraft,
+    discardPptOutlineDraft,
     createOutline,
     saveOutline,
     confirmPptOutline,

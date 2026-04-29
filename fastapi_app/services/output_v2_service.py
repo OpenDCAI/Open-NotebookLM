@@ -856,7 +856,8 @@ class OutputV2Service:
             content = str(item.get("content") or "").strip()
             if not content:
                 continue
-            role = "assistant" if str(item.get("role") or "").strip() == "assistant" else "user"
+            raw_role = str(item.get("role") or "").strip()
+            role = raw_role if raw_role in {"user", "assistant", "system"} else "user"
             rows.append(
                 {
                     "id": str(item.get("id") or uuid4().hex),
@@ -2749,7 +2750,7 @@ class OutputV2Service:
             global_directives=draft_global_directives,
             intent_summary=intent_summary,
             history=history,
-            conversation_history=conversation_history,
+            conversation_history=None,
             context_snapshot=context_snapshot,
             message=cleaned_message,
             active_slide_index=active_slide_index,
@@ -2889,6 +2890,70 @@ class OutputV2Service:
             {"outline": item["outline"]},
         )
         return item, "已推送当前候选大纲，并开始新一轮对话。"
+
+    def discard_outline_chat(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        output_id: str,
+    ) -> tuple[Dict[str, Any], str]:
+        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
+        manifest = self._read_manifest(manifest_path)
+        index, item = self._find_output(manifest, output_id)
+        item, _ = self._sync_outline_chat_state(item)
+        if item.get("target_type") != "ppt":
+            raise HTTPException(status_code=400, detail="Only PPT outputs support outline chat discard")
+
+        current_stage = str(item.get("pipeline_stage") or item.get("status") or self.PPT_STAGE_OUTLINE)
+        if current_stage != self.PPT_STAGE_OUTLINE:
+            raise HTTPException(status_code=400, detail="PPT 大纲已确认，当前轮次不支持放弃候选改动")
+
+        sessions = list(item.get("outline_chat_sessions") or [])
+        active_session_id = str(item.get("outline_chat_active_session_id") or "").strip()
+        active_session = next(
+            (session for session in sessions if str(session.get("id") or "").strip() == active_session_id),
+            None,
+        )
+        if active_session is None:
+            active_session = self._get_active_outline_chat_session(sessions)
+        if active_session is None:
+            raise HTTPException(status_code=400, detail="当前没有可放弃的大纲候选")
+
+        current_outline = self._normalize_ppt_outline(item.get("outline") or [])
+        current_global_directives = self._normalize_outline_chat_directives(item.get("outline_global_directives") or [])
+        message = "已放弃上一版候选大纲，继续基于当前正式大纲讨论。"
+        now = self._now()
+        for session in sessions:
+            if str(session.get("id") or "").strip() != str(active_session.get("id") or "").strip():
+                continue
+            history = self._normalize_outline_chat_history(session.get("messages") or [])
+            history.append(
+                {
+                    "id": uuid4().hex,
+                    "role": "system",
+                    "content": message,
+                    "created_at": now,
+                }
+            )
+            session["draft_outline"] = current_outline
+            session["draft_global_directives"] = current_global_directives
+            session["messages"] = self._normalize_outline_chat_history(history)
+            session["has_pending_changes"] = False
+            session["updated_at"] = now
+            session["change_summary"] = message
+            session["intent_summary"] = {"mode": "none", "global_directives": [], "slide_targets": []}
+            break
+
+        item["outline_chat_sessions"] = sessions
+        item["pipeline_stage"] = self.PPT_STAGE_OUTLINE
+        item["status"] = self.PPT_STAGE_OUTLINE
+        item["updated_at"] = now
+        item, _ = self._sync_outline_chat_state(item)
+        manifest[index] = item
+        self._write_manifest(manifest_path, manifest)
+        return item, message
 
     def _build_generation_markdown(
         self,

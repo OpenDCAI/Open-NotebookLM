@@ -3,7 +3,7 @@
 
 echo "停止服务..."
 
-BACKEND_PORT=18213
+BACKEND_PORT=8213
 FRONTEND_PORT=13001
 
 kill_port() {

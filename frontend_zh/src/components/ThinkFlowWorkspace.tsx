@@ -44,6 +44,7 @@ import './ThinkFlowWorkspace.css';
 
 const DEFAULT_USER = { id: 'local', email: '' };
 const PANEL_GUIDE_STORAGE_KEY = 'thinkflow_panel_guides_v1';
+const ONLINE_EDITOR_FRAME_VERSION = 'v4';
 
 type Notebook = {
   id: string;
@@ -153,7 +154,14 @@ type ThinkFlowWorkspaceItem = {
   updated_at: string;
 };
 
-type OutputType = 'ppt' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
+type OnlyOfficeEditorPayload = {
+  enabled: boolean;
+  reason?: string;
+  script_url?: string;
+  config?: Record<string, any>;
+};
+
+type OutputType = 'ppt' | 'editable_ppt' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
 
 type ThinkFlowOutput = {
   id: string;
@@ -352,6 +360,7 @@ const outputButtons: Array<{
   icon: React.ReactNode;
 }> = [
   { type: 'ppt', label: 'PPT', icon: <LayoutGrid size={14} /> },
+  { type: 'editable_ppt', label: '可编辑PPT', icon: <Sparkles size={14} /> },
   { type: 'report', label: '报告', icon: <FileText size={14} /> },
   { type: 'mindmap', label: '导图', icon: <Brain size={14} /> },
   { type: 'podcast', label: '播客', icon: <Mic2 size={14} /> },
@@ -398,6 +407,8 @@ function outputEmoji(type: OutputType) {
   switch (type) {
     case 'ppt':
       return '📊';
+    case 'editable_ppt':
+      return '✦';
     case 'report':
       return '📝';
     case 'mindmap':
@@ -415,6 +426,10 @@ function outputEmoji(type: OutputType) {
 
 function outputLabel(type: OutputType) {
   return outputButtons.find((item) => item.type === type)?.label || type;
+}
+
+function isPptLikeOutput(type: OutputType) {
+  return type === 'ppt' || type === 'editable_ppt';
 }
 
 function normalizePptStage(output: ThinkFlowOutput | null): PptPipelineStage {
@@ -757,6 +772,18 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const [pptPagePrompt, setPptPagePrompt] = useState('');
   const [pptPageBusyAction, setPptPageBusyAction] = useState<'regenerate' | 'confirm' | 'select_version' | ''>('');
   const [pptPageStatus, setPptPageStatus] = useState('');
+  const [editablePptModelProfile, setEditablePptModelProfile] = useState<'general' | 'claude' | 'qwen'>('general');
+  const [editablePptCoderMode, setEditablePptCoderMode] = useState<'library' | 'direct'>('library');
+  const [editablePptLanguage, setEditablePptLanguage] = useState<'chinese' | 'english'>('chinese');
+  const [editablePptComplexity, setEditablePptComplexity] = useState<'simple' | 'balanced' | 'complex'>('balanced');
+  const [editablePptTargetSlides, setEditablePptTargetSlides] = useState('8');
+  const [editablePptSavingIr, setEditablePptSavingIr] = useState(false);
+  const [onlyOfficeLoading, setOnlyOfficeLoading] = useState(false);
+  const [onlyOfficeError, setOnlyOfficeError] = useState('');
+  const [onlyOfficeConfig, setOnlyOfficeConfig] = useState<OnlyOfficeEditorPayload | null>(null);
+  const [onlyOfficeModalOpen, setOnlyOfficeModalOpen] = useState(false);
+  const [onlyOfficeSessionId, setOnlyOfficeSessionId] = useState('');
+  const onlyOfficeFrameRef = useRef<HTMLIFrameElement | null>(null);
   const [outputContexts, setOutputContexts] = useState<Record<string, OutputContextState>>({});
   const [pptSourceLockIntent, setPptSourceLockIntent] = useState<PptSourceLockIntent | null>(null);
   const [directOutputIntent, setDirectOutputIntent] = useState<DirectOutputIntent | null>(null);
@@ -1340,6 +1367,46 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   }, [activeOutput]);
 
   useEffect(() => {
+    setOnlyOfficeError('');
+    setOnlyOfficeModalOpen(false);
+    setOnlyOfficeConfig(null);
+    setOnlyOfficeSessionId('');
+  }, [activeOutput?.id]);
+
+  const postOnlyOfficeFrameConfig = useCallback(() => {
+    if (!onlyOfficeSessionId || !onlyOfficeConfig?.enabled) return;
+    const targetWindow = onlyOfficeFrameRef.current?.contentWindow;
+    if (!targetWindow) return;
+    targetWindow.postMessage(
+      {
+        source: 'thinkflow-online-editor-init',
+        sessionId: onlyOfficeSessionId,
+        payload: onlyOfficeConfig,
+      },
+      window.location.origin,
+    );
+  }, [onlyOfficeConfig, onlyOfficeSessionId]);
+
+  useEffect(() => {
+    if (!onlyOfficeSessionId) return;
+    const handleMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      const data = event.data || {};
+      if (data.source !== 'thinkflow-online-editor') return;
+      if (data.type === 'frameReady') {
+        postOnlyOfficeFrameConfig();
+        return;
+      }
+      if (data.sessionId !== onlyOfficeSessionId) return;
+      if (data.type === 'error') {
+        setOnlyOfficeError(data.payload?.message || '在线编辑器加载失败');
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [onlyOfficeSessionId, postOnlyOfficeFrameConfig]);
+
+  useEffect(() => {
     if (!activeOutput || activeOutput.target_type !== 'ppt') return;
     const slideCount = activeOutput.outline?.length || 0;
     if (slideCount === 0) {
@@ -1614,6 +1681,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       deferSourceDerivedDocument?: boolean;
     },
   ) => {
+    const isPptLike = isPptLikeOutput(targetType);
     const overrideGuidanceIds = options?.guidanceItemIdsOverride;
     const overrideBoundDocIds = options?.boundDocumentIdsOverride;
     const overrideSourceIds = options?.sourceIdsOverride;
@@ -1643,7 +1711,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     let outputDocumentId =
       options?.documentIdOverride ??
       activeDocumentId ??
-      (targetType === 'ppt' ? activeOutput?.document_id || '' : '');
+      (isPptLike ? activeOutput?.document_id || '' : '');
     let outputDocumentTitle = documentTitle || activeDocument?.title || '文档';
     let outputDocumentContent = documentContent;
     if (outputDocumentId && outputDocumentId !== activeDocumentId) {
@@ -1653,11 +1721,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         outputDocumentContent = ensuredDocument.content || outputDocumentContent;
       }
     }
-    if (targetType === 'ppt' && (!outputDocumentTitle || outputDocumentTitle === '文档')) {
-      outputDocumentTitle = resolvedSourceNames[0] || notebookTitle || 'PPT';
+    if (isPptLike && (!outputDocumentTitle || outputDocumentTitle === '文档')) {
+      outputDocumentTitle = resolvedSourceNames[0] || notebookTitle || outputLabel(targetType);
     }
     if (
-      targetType !== 'ppt' &&
+      !isPptLike &&
       options?.deferSourceDerivedDocument &&
       (!outputDocumentId || !String(outputDocumentContent || '').trim())
     ) {
@@ -1668,7 +1736,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       outputDocumentContent = outputDocumentContent || '';
     }
     if (
-      targetType !== 'ppt' &&
+      !isPptLike &&
       !options?.deferSourceDerivedDocument &&
       (!outputDocumentId || !String(outputDocumentContent || '').trim())
     ) {
@@ -1678,20 +1746,20 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       outputDocumentContent = generatedDocument.content;
     }
     if (
-      targetType !== 'ppt' &&
+      !isPptLike &&
       !options?.deferSourceDerivedDocument &&
       (!outputDocumentId || !String(outputDocumentContent || '').trim())
     ) {
       throw new Error('没有可用于产出的内容，请先选择来源或准备梳理文档。');
     }
     if (
-      targetType === 'ppt' &&
+      isPptLike &&
       resolvedSourcePaths.length === 0 &&
       !String(outputDocumentContent || '').trim() &&
       resolvedBoundDocIds.length === 0 &&
       resolvedGuidanceIds.length === 0
     ) {
-      throw new Error('PPT 生成至少需要一个来源，或可用的梳理文档 / 参考文档 / 产出指导。');
+      throw new Error(`${outputLabel(targetType)}生成至少需要一个来源，或可用的梳理文档 / 参考文档 / 产出指导。`);
     }
 
     const resolvedGuidanceTitles = guidanceItems
@@ -1851,7 +1919,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     const intent = directOutputIntent;
     setDirectOutputIntent(null);
     await createOutline(intent.targetType, {
-      autoGenerate: true,
+      autoGenerate: intent.targetType !== 'editable_ppt',
       titleOverride: intent.outputTitle,
       documentIdOverride: intent.outputDocumentId,
       guidanceItemIdsOverride: intent.guidanceItemIds,
@@ -1874,7 +1942,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     setActiveOutputId(output.id);
     setLeftTab('outputs');
     ensureOutputContext(output);
-    enterOutputWorkspace(output.target_type === 'ppt' ? 'output_focus' : 'output_immersive');
+    enterOutputWorkspace(isPptLikeOutput(output.target_type) ? 'output_focus' : 'output_immersive');
     if (output.document_id) {
       setActiveDocumentId(output.document_id);
       try {
@@ -2983,7 +3051,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     setActivePptSlideIndex(0);
     setLeftTab('outputs');
     setRightMode('outline');
-    enterOutputWorkspace(targetType === 'ppt' ? 'output_focus' : 'output_immersive');
+    enterOutputWorkspace(isPptLikeOutput(targetType) ? 'output_focus' : 'output_immersive');
     try {
       const {
         outputDocumentId,
@@ -3003,12 +3071,17 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         target_type: targetType,
         title: outputTitle,
         prompt: '',
-        page_count: targetType === 'ppt' ? 10 : 6,
+        page_count:
+          targetType === 'ppt'
+            ? 10
+            : targetType === 'editable_ppt'
+              ? Math.max(1, Math.min(20, Number(editablePptTargetSlides) || 8))
+              : 6,
         guidance_item_ids: resolvedGuidanceIds,
         source_paths: resolvedSourcePaths,
         source_names: resolvedSourceNames,
         bound_document_ids: resolvedBoundDocIds,
-        enable_images: targetType === 'ppt' ? true : undefined,
+        enable_images: isPptLikeOutput(targetType) ? true : undefined,
         flashcard_config: targetType === 'flashcard' ? (options?.flashcardConfigOverride || null) : undefined,
       };
       console.info('[ThinkFlow] createOutline payload', outlinePayload);
@@ -3444,6 +3517,16 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           notebook_title: notebookTitle,
           user_id: effectiveUser?.id || 'local',
           email: effectiveUser?.email || '',
+          editable_ppt_options:
+            outputs.find((item) => item.id === outputId)?.target_type === 'editable_ppt'
+                ? {
+                  model_profile: editablePptModelProfile,
+                  coder_mode: editablePptCoderMode,
+                  language: editablePptLanguage,
+                  complexity: editablePptComplexity,
+                  target_slides: Math.max(1, Math.min(20, Number(editablePptTargetSlides) || 8)),
+                }
+              : undefined,
         }),
       });
       await parseJson<{ output: ThinkFlowOutput }>(response);
@@ -3699,6 +3782,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
 
   const renderDirectOutputWorkspace = () => {
     if (!activeOutput || activeOutput.target_type === 'ppt') return null;
+    if (activeOutput.target_type === 'editable_ppt') return renderEditablePptWorkspace();
     const result = activeOutput.result || {};
     const downloadUrl = result.download_url || result.pdf_path || result.previewUrl || result.preview_url || result.audio_path || '';
     return (
@@ -3727,6 +3811,294 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           ) : null}
         </div>
         <div className="thinkflow-direct-output-canvas">{renderOutputPreview()}</div>
+      </div>
+    );
+  };
+
+  const resolveEditablePptIr = (output: ThinkFlowOutput | null) => {
+    const result = output?.result || {};
+    const deck = result.editable_ir || result.deck_ir || {};
+    if (!deck || typeof deck !== 'object') return {};
+    if (Array.isArray((deck as any).slides)) return deck;
+    if (Array.isArray(result.slide_irs) && result.slide_irs.length > 0) {
+      return { ...deck, slides: result.slide_irs };
+    }
+    if (Array.isArray((deck as any).deck_outline)) {
+      return { ...deck, slides: (deck as any).deck_outline };
+    }
+    return deck;
+  };
+
+  const updateEditablePptIr = (patch: Record<string, any>) => {
+    if (!activeOutput || activeOutput.target_type !== 'editable_ppt') return;
+    const currentIr = resolveEditablePptIr(activeOutput);
+    const nextIr = { ...currentIr, ...patch };
+    setOutputs((previous) =>
+      previous.map((item) =>
+        item.id === activeOutput.id
+          ? {
+              ...item,
+              result: {
+                ...(item.result || {}),
+                editable_ir: nextIr,
+              },
+            }
+          : item,
+      ),
+    );
+  };
+
+  const updateEditablePptSlide = (slideIndex: number, patch: Record<string, any>) => {
+    if (!activeOutput || activeOutput.target_type !== 'editable_ppt') return;
+    const currentIr = resolveEditablePptIr(activeOutput);
+    const slides = Array.isArray(currentIr.slides) ? [...currentIr.slides] : [];
+    slides[slideIndex] = { ...(slides[slideIndex] || {}), ...patch };
+    updateEditablePptIr({ slides });
+  };
+
+  const saveEditablePptIr = async () => {
+    if (!activeOutput || activeOutput.target_type !== 'editable_ppt') return;
+    const deckIr = resolveEditablePptIr(activeOutput);
+    setEditablePptSavingIr(true);
+    try {
+      const response = await apiFetch(`/api/v1/kb/outputs/${activeOutput.id}/editable-ir`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+          deck_ir: deckIr,
+        }),
+      });
+      const data = await parseJson<{ output: ThinkFlowOutput }>(response);
+      setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+    } catch (error: any) {
+      setGlobalError(error?.message || '保存可编辑 PPT IR 失败');
+    } finally {
+      setEditablePptSavingIr(false);
+    }
+  };
+
+  const openOnlyOfficeEditor = async () => {
+    if (!activeOutput || activeOutput.target_type !== 'editable_ppt') return;
+    setOnlyOfficeLoading(true);
+    setOnlyOfficeError('');
+    try {
+      const editorSessionId = `${activeOutput.id}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const params = new URLSearchParams({
+        notebook_id: notebook.id,
+        notebook_title: notebookTitle,
+        user_id: effectiveUser?.id || 'local',
+        email: effectiveUser?.email || '',
+        browser_base_url: window.location.origin,
+        editor_session_id: editorSessionId,
+      });
+      const response = await apiFetch(`/api/v1/kb/outputs/${activeOutput.id}/onlyoffice/config?${params.toString()}`);
+      const payload = await parseJson<OnlyOfficeEditorPayload>(response);
+      if (!payload.enabled) {
+        setOnlyOfficeConfig(null);
+        setOnlyOfficeModalOpen(false);
+        setOnlyOfficeError(payload.reason || '在线编辑服务未配置');
+        return;
+      }
+      setOnlyOfficeConfig(payload);
+      setOnlyOfficeError('');
+      setOnlyOfficeSessionId(editorSessionId);
+      setOnlyOfficeModalOpen(true);
+    } catch (error: any) {
+      setOnlyOfficeConfig(null);
+      setOnlyOfficeModalOpen(false);
+      setOnlyOfficeError(error?.message || '打开在线编辑器失败');
+    } finally {
+      setOnlyOfficeLoading(false);
+    }
+  };
+
+  const renderEditablePptWorkspace = () => {
+    if (!activeOutput || activeOutput.target_type !== 'editable_ppt') return null;
+    const result = activeOutput.result || {};
+    const deckIr = resolveEditablePptIr(activeOutput);
+    const slides = Array.isArray(deckIr.slides) ? deckIr.slides : [];
+    const slideIrUrls = Array.isArray(result.slide_ir_urls) ? result.slide_ir_urls : [];
+    const generated = activeOutput.status === 'generated' || Boolean(result.pptx_url || result.pptx_path);
+    const effectiveCoderMode = editablePptCoderMode;
+
+    return (
+      <div className="thinkflow-output-workspace-body thinkflow-editable-ppt-workspace">
+        <div className="thinkflow-editable-ppt-toolbar">
+          <div className="thinkflow-editable-ppt-control">
+            <span>模型</span>
+            <select value={editablePptModelProfile} onChange={(event) => setEditablePptModelProfile(event.target.value as any)}>
+              <option value="general">通用 API</option>
+              <option value="claude">Claude API</option>
+              <option value="qwen">本地 Qwen 27B</option>
+            </select>
+          </div>
+          <div className="thinkflow-editable-ppt-control">
+            <span>生成模式</span>
+            <select
+              value={effectiveCoderMode}
+              onChange={(event) => setEditablePptCoderMode(event.target.value as any)}
+            >
+              <option value="library">Library</option>
+              <option value="direct">Direct</option>
+            </select>
+          </div>
+          <div className="thinkflow-editable-ppt-control">
+            <span>语言</span>
+            <select value={editablePptLanguage} onChange={(event) => setEditablePptLanguage(event.target.value as any)}>
+              <option value="chinese">中文</option>
+              <option value="english">英文</option>
+            </select>
+          </div>
+          <div className="thinkflow-editable-ppt-control">
+            <span>复杂度</span>
+            <select value={editablePptComplexity} onChange={(event) => setEditablePptComplexity(event.target.value as any)}>
+              <option value="simple">简单</option>
+              <option value="balanced">均衡</option>
+              <option value="complex">复杂</option>
+            </select>
+          </div>
+          <div className="thinkflow-editable-ppt-control">
+            <span>页数</span>
+            <input value={editablePptTargetSlides} onChange={(event) => setEditablePptTargetSlides(event.target.value)} inputMode="numeric" />
+          </div>
+          <button type="button" className="thinkflow-generate-btn" onClick={() => void generateOutputById(activeOutput.id)} disabled={generatingOutput}>
+            <Sparkles size={14} />
+            {generatingOutput ? '生成中...' : generated ? '重新生成 PPTX' : '生成可编辑 PPTX'}
+          </button>
+        </div>
+
+        <div className="thinkflow-editable-ppt-main">
+          <section className="thinkflow-editable-ppt-panel">
+            <div className="thinkflow-editable-ppt-panel-head">
+              <div>
+                <span className="thinkflow-output-workspace-kicker">Deck IR</span>
+                <h4>{deckIr.title || activeOutput.title}</h4>
+              </div>
+              {generated ? (
+                <button type="button" className="thinkflow-doc-action-btn is-active" onClick={() => void saveEditablePptIr()} disabled={editablePptSavingIr}>
+                  <Save size={14} />
+                  {editablePptSavingIr ? '保存中...' : '保存 IR'}
+                </button>
+              ) : null}
+            </div>
+            {generated ? (
+              <div className="thinkflow-editable-ppt-form">
+                <input className="thinkflow-outline-input" value={deckIr.title || ''} onChange={(event) => updateEditablePptIr({ title: event.target.value })} placeholder="Deck 标题" />
+                <input className="thinkflow-outline-input" value={deckIr.subtitle || ''} onChange={(event) => updateEditablePptIr({ subtitle: event.target.value })} placeholder="Deck 副标题" />
+                <textarea
+                  className="thinkflow-outline-textarea"
+                  value={(deckIr.planner_notes || []).join('\n')}
+                  onChange={(event) => updateEditablePptIr({ planner_notes: event.target.value.split('\n').map((item) => item.trim()).filter(Boolean) })}
+                  placeholder="Planner notes，每行一条"
+                  rows={4}
+                />
+              </div>
+            ) : (
+              <div className="thinkflow-empty">先生成一版可编辑 PPTX。生成后这里会展示 deck / slide IR，并可直接编辑。</div>
+            )}
+          </section>
+
+          <section className="thinkflow-editable-ppt-panel">
+            <div className="thinkflow-editable-ppt-panel-head">
+              <div>
+                <span className="thinkflow-output-workspace-kicker">产物</span>
+                <h4>可编辑 PPT 输出</h4>
+              </div>
+            </div>
+            <div className="thinkflow-editable-ppt-links">
+              {result.pptx_url ? (
+                <a href={result.pptx_url} target="_blank" rel="noreferrer" className="thinkflow-download-link">
+                  <Download size={14} />
+                  下载 PPTX
+                </a>
+              ) : null}
+              {generated ? (
+                <button
+                  type="button"
+                  className="thinkflow-download-link thinkflow-onlyoffice-open-btn"
+                  onClick={() => void openOnlyOfficeEditor()}
+                  disabled={onlyOfficeLoading}
+                >
+                  <ExternalLink size={14} />
+                  {onlyOfficeLoading ? '加载编辑器...' : '在线编辑 PPTX'}
+                </button>
+              ) : null}
+              {result.deck_ir_url ? (
+                <a href={result.deck_ir_url} target="_blank" rel="noreferrer" className="thinkflow-download-link">
+                  <ExternalLink size={14} />
+                  打开 Deck IR
+                </a>
+              ) : null}
+              {slideIrUrls.length > 0 ? (
+                <a href={slideIrUrls[0]} target="_blank" rel="noreferrer" className="thinkflow-download-link">
+                  <ExternalLink size={14} />
+                  打开 Slide IR
+                </a>
+              ) : null}
+              {result.token_usage_url ? (
+                <a href={result.token_usage_url} target="_blank" rel="noreferrer" className="thinkflow-download-link">
+                  <ExternalLink size={14} />
+                  Token 统计
+                </a>
+              ) : null}
+              {result.log_url ? (
+                <a href={result.log_url} target="_blank" rel="noreferrer" className="thinkflow-download-link">
+                  <ExternalLink size={14} />
+                  运行日志
+                </a>
+              ) : null}
+              {!generated ? <div className="thinkflow-empty">当前还没有可下载产物。</div> : null}
+              {onlyOfficeError ? <div className="thinkflow-empty">{onlyOfficeError}</div> : null}
+            </div>
+          </section>
+        </div>
+
+        {slides.length > 0 ? (
+          <div className="thinkflow-editable-ppt-slides">
+            {slides.map((slide: any, index: number) => (
+              <article key={slide.slide_id || `${activeOutput.id}_${index}`} className="thinkflow-editable-ppt-slide-card">
+                <div className="thinkflow-ppt-outline-card-top">
+                  <span className="thinkflow-ppt-outline-summary-index">第 {slide.slide_number || index + 1} 页</span>
+                  {slideIrUrls[index] ? (
+                    <a href={slideIrUrls[index]} target="_blank" rel="noreferrer" className="thinkflow-ppt-outline-card-cta">
+                      JSON
+                    </a>
+                  ) : (
+                    <span className="thinkflow-ppt-outline-card-cta">{slide.type || 'slide'}</span>
+                  )}
+                </div>
+                <input className="thinkflow-outline-input" value={slide.title || ''} onChange={(event) => updateEditablePptSlide(index, { title: event.target.value })} placeholder="Slide 标题" />
+                <textarea
+                  className="thinkflow-outline-textarea"
+                  value={slide.core_message || ''}
+                  onChange={(event) => updateEditablePptSlide(index, { core_message: event.target.value })}
+                  placeholder="Core message"
+                  rows={2}
+                />
+                <textarea
+                  className="thinkflow-outline-textarea"
+                  value={(slide.points || []).join('\n')}
+                  onChange={(event) => updateEditablePptSlide(index, { points: event.target.value.split('\n').map((item) => item.trim()).filter(Boolean) })}
+                  placeholder="每行一个 points"
+                  rows={5}
+                />
+                <textarea
+                  className="thinkflow-outline-textarea"
+                  value={slide.speaker_notes || ''}
+                  onChange={(event) => updateEditablePptSlide(index, { speaker_notes: event.target.value })}
+                  placeholder="Speaker notes"
+                  rows={3}
+                />
+              </article>
+            ))}
+          </div>
+        ) : generated ? (
+          <div className="thinkflow-empty">Deck IR 中暂未发现 slide 列表，可直接打开 JSON 检查可编辑 PPT 输出。</div>
+        ) : null}
       </div>
     );
   };
@@ -4698,6 +5070,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       if (type === 'ppt') {
         return openPptSourceLockIntent();
       }
+      if (type === 'editable_ppt') {
+        return openDirectOutputIntent(type as Exclude<OutputType, 'ppt'>);
+      }
       return openDirectOutputIntent(type as Exclude<OutputType, 'ppt'>);
     },
     onSaveDocument: saveDocument,
@@ -4940,7 +5315,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             <div className="thinkflow-output-context-modal-header">
               <div>
                 <h3>确认本次{outputLabel(directOutputIntent.targetType)}来源</h3>
-                <p>确认后会直接开始生成，并锁定这一版结果的来源快照。之后若要换输入范围，请重新生成一版。</p>
+                <p>
+                  {directOutputIntent.targetType === 'editable_ppt'
+                    ? '确认后会先创建可编辑 PPT 工作区，并锁定这一版结果的来源快照。你可以在工作区选择模型和模式后再开始生成。'
+                    : '确认后会直接开始生成，并锁定这一版结果的来源快照。之后若要换输入范围，请重新生成一版。'}
+                </p>
               </div>
               <button type="button" className="thinkflow-push-close" onClick={() => setDirectOutputIntent(null)}>
                 关闭
@@ -5120,9 +5499,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   ? '正在整理来源，请稍候。'
                   : directOutputIntent.errorMessage
                     ? '来源解析失败，请关闭后重试。'
-                    : directOutputIntent.outputDocumentId
-                      ? '当前正在编辑的梳理文档也会在这里一并锁定。确认后将直接开始生成结果。'
-                      : '你还没有准备梳理文档，确认后会先基于当前来源自动生成一份梳理文档，再继续生成结果。'}
+                    : directOutputIntent.targetType === 'editable_ppt'
+                      ? directOutputIntent.outputDocumentId
+                        ? '当前正在编辑的梳理文档也会在这里一并锁定。确认后将进入可编辑 PPT 工作区。'
+                        : '你还没有准备梳理文档，确认后会先基于当前来源自动生成一份梳理文档，再进入可编辑 PPT 工作区。'
+                      : directOutputIntent.outputDocumentId
+                        ? '当前正在编辑的梳理文档也会在这里一并锁定。确认后将直接开始生成结果。'
+                        : '你还没有准备梳理文档，确认后会先基于当前来源自动生成一份梳理文档，再继续生成结果。'}
               </span>
               <div className="thinkflow-output-context-actions">
                 <button type="button" className="thinkflow-doc-action-btn" onClick={() => setDirectOutputIntent(null)}>
@@ -5134,11 +5517,56 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   onClick={() => void confirmDirectOutputIntent()}
                   disabled={directOutputIntent.loading || Boolean(directOutputIntent.errorMessage)}
                 >
-                  {directOutputIntent.loading ? '整理来源中...' : '确认并开始生成'}
+                  {directOutputIntent.loading
+                    ? '整理来源中...'
+                    : directOutputIntent.targetType === 'editable_ppt'
+                      ? '确认并进入配置'
+                      : '确认并开始生成'}
                 </button>
               </div>
             </div>
           </div>
+        </>
+      ) : null}
+
+      {onlyOfficeModalOpen && onlyOfficeConfig?.enabled && activeOutput?.target_type === 'editable_ppt' ? (
+        <>
+          <div
+            className="thinkflow-onlyoffice-modal-overlay"
+            onClick={() => {
+              setOnlyOfficeModalOpen(false);
+              setOnlyOfficeSessionId('');
+            }}
+          />
+          <section className="thinkflow-onlyoffice-modal" role="dialog" aria-modal="true" aria-label="在线编辑 PPTX">
+            <div className="thinkflow-onlyoffice-modal-header">
+              <div>
+                <span className="thinkflow-output-workspace-kicker">在线编辑</span>
+                <h3>{activeOutput.title || '在线编辑 PPTX'}</h3>
+              </div>
+              <button
+                type="button"
+                className="thinkflow-onlyoffice-modal-close"
+                onClick={() => {
+                  setOnlyOfficeModalOpen(false);
+                  setOnlyOfficeSessionId('');
+                }}
+              >
+                关闭
+              </button>
+            </div>
+            <div className="thinkflow-onlyoffice-modal-body">
+              {onlyOfficeError ? <div className="thinkflow-onlyoffice-error">{onlyOfficeError}</div> : null}
+              <iframe
+                key={onlyOfficeSessionId}
+                ref={onlyOfficeFrameRef}
+                title="在线编辑 PPTX"
+                className="thinkflow-onlyoffice-editor"
+                src={`/online-editor-frame.html?v=${ONLINE_EDITOR_FRAME_VERSION}&session=${encodeURIComponent(onlyOfficeSessionId)}`}
+                onLoad={postOnlyOfficeFrameConfig}
+              />
+            </div>
+          </section>
         </>
       ) : null}
 

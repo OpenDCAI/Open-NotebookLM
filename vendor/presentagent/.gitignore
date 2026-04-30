@@ -1,0 +1,13 @@
+.ace-tool/
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+outputs/
+models/
+local_muxi_legacy/
+*.pdf
+*.pptx
+*.zip
+*.tar.gz
+debug_llm_response.*

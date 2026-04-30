@@ -3,13 +3,15 @@ import { Eye, FolderOpen, Loader2, Package, Plus, RefreshCw, Trash2, Upload } fr
 
 import type { KnowledgeFile } from '../types';
 
-type OutputType = 'ppt' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
+type OutputType = 'ppt' | 'editable_ppt' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
 
 type SidebarOutput = {
   id: string;
   title: string;
   target_type: OutputType;
   outline?: Array<unknown>;
+  page_count?: number;
+  result?: Record<string, any>;
   updated_at: string;
 };
 
@@ -34,6 +36,23 @@ type Props = {
   onUpload: React.ChangeEventHandler<HTMLInputElement>;
   onAddSource: () => void;
 };
+
+function getOutputItemCount(output: SidebarOutput): number {
+  if (output.target_type === 'editable_ppt') {
+    const slideCount = output.result?.slide_count;
+    if (typeof slideCount === 'number' && slideCount > 0) {
+      return slideCount;
+    }
+    const slideIrs = output.result?.slide_irs;
+    if (Array.isArray(slideIrs) && slideIrs.length > 0) {
+      return slideIrs.length;
+    }
+  }
+  if (typeof output.page_count === 'number' && output.page_count > 0) {
+    return output.page_count;
+  }
+  return output.outline?.length || 0;
+}
 
 function statusLabel(file: KnowledgeFile) {
   if (file.vectorStatus === 'embedded' || file.vectorReady || file.isEmbedded) {
@@ -251,7 +270,7 @@ export function ThinkFlowLeftSidebar({
             >
               <div className="thinkflow-output-card-thumb">
                 <div className="thinkflow-output-card-emoji">{getOutputEmoji(output.target_type)}</div>
-                <div className="thinkflow-output-card-badge">{output.outline?.length || 0} 项</div>
+                <div className="thinkflow-output-card-badge">{getOutputItemCount(output)} 项</div>
               </div>
               <div className="thinkflow-output-card-info">
                 <div className="thinkflow-output-card-title">{output.title}</div>

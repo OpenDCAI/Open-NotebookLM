@@ -26,7 +26,7 @@ if _supabase_url and _supabase_anon:
 else:
     log.info(f"Supabase not configured: URL={'set' if _supabase_url else 'unset'}, ANON_KEY={'set' if _supabase_anon else 'unset'}")
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
@@ -95,8 +95,8 @@ def create_app() -> FastAPI:
     outputs_dir = project_root / "outputs"
     outputs_dir.mkdir(parents=True, exist_ok=True)
 
-    @app.get("/outputs/{path:path}")
-    async def serve_outputs(path: str):
+    @app.api_route("/outputs/{path:path}", methods=["GET", "HEAD"])
+    async def serve_outputs(path: str, request: Request):
         path_decoded = unquote(path)
         outputs_resolved = outputs_dir.resolve()
         for candidate in (path_decoded, path):
@@ -105,7 +105,7 @@ def create_app() -> FastAPI:
                 if not str(file_path).startswith(str(outputs_resolved)):
                     continue
                 if file_path.is_file():
-                    resp = FileResponse(path=str(file_path), filename=file_path.name)
+                    resp = FileResponse(path=str(file_path), filename=file_path.name, method=request.method)
                     if file_path.suffix.lower() == ".pdf":
                         resp.headers["Content-Disposition"] = "inline"
                     return resp

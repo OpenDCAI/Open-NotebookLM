@@ -4837,3 +4837,207 @@
    ═══════════════════════════════════════════ */
 
 /* (source-reembed-btn removed — now uses thinkflow-file-action-icon + Upload icon) */
+
+.thinkflow-editable-ppt-workspace {
+  gap: 14px;
+}
+
+.thinkflow-editable-ppt-toolbar {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(120px, 1fr)) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.thinkflow-editable-ppt-control {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.thinkflow-editable-ppt-control span {
+  font-size: 12px;
+  color: var(--tf-muted);
+}
+
+.thinkflow-editable-ppt-control select,
+.thinkflow-editable-ppt-control input {
+  width: 100%;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: #fff;
+  color: var(--tf-text);
+}
+
+.thinkflow-editable-ppt-main {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(260px, 0.9fr);
+  gap: 12px;
+}
+
+.thinkflow-editable-ppt-panel,
+.thinkflow-editable-ppt-slide-card {
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 14px;
+}
+
+.thinkflow-editable-ppt-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.thinkflow-editable-ppt-panel-head h4 {
+  margin: 2px 0 0;
+  font-size: 16px;
+}
+
+.thinkflow-editable-ppt-form,
+.thinkflow-editable-ppt-links,
+.thinkflow-editable-ppt-slide-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.thinkflow-editable-ppt-links {
+  align-items: flex-start;
+}
+
+.thinkflow-onlyoffice-open-btn {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  font: inherit;
+  cursor: pointer;
+}
+
+.thinkflow-onlyoffice-open-btn:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.thinkflow-editable-ppt-slides {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+  gap: 12px;
+}
+
+.thinkflow-onlyoffice-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 120;
+  background: rgba(15, 23, 42, 0.46);
+  backdrop-filter: blur(5px);
+}
+
+.thinkflow-onlyoffice-modal {
+  position: fixed;
+  z-index: 121;
+  left: 50%;
+  top: 50%;
+  width: min(1320px, calc(100vw - 56px));
+  height: min(860px, calc(100vh - 56px));
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.34);
+  border-radius: 18px;
+  background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+  box-shadow: 0 28px 80px rgba(15, 23, 42, 0.34);
+}
+
+.thinkflow-onlyoffice-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 18px;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.22);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.thinkflow-onlyoffice-modal-header h3 {
+  margin: 3px 0 0;
+  font-size: 17px;
+  color: #0f172a;
+}
+
+.thinkflow-onlyoffice-modal-close {
+  border: 1px solid rgba(148, 163, 184, 0.42);
+  border-radius: 999px;
+  background: #ffffff;
+  color: #334155;
+  cursor: pointer;
+  font: inherit;
+  padding: 7px 14px;
+}
+
+.thinkflow-onlyoffice-modal-close:hover {
+  border-color: rgba(37, 99, 235, 0.38);
+  color: #1d4ed8;
+}
+
+.thinkflow-onlyoffice-modal-body {
+  flex: 1;
+  min-height: 0;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.thinkflow-onlyoffice-error {
+  flex: 0 0 auto;
+  max-height: 96px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  border: 1px solid rgba(239, 68, 68, 0.26);
+  border-radius: 8px;
+  background: #fff7f7;
+  color: #991b1b;
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 8px 10px;
+}
+
+.thinkflow-onlyoffice-editor {
+  display: block;
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 520px;
+  overflow: hidden;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 12px;
+  background: #ffffff;
+}
+
+@media (max-width: 980px) {
+  .thinkflow-editable-ppt-toolbar,
+  .thinkflow-editable-ppt-main {
+    grid-template-columns: 1fr;
+  }
+
+  .thinkflow-onlyoffice-modal {
+    width: calc(100vw - 18px);
+    height: calc(100vh - 18px);
+    border-radius: 12px;
+  }
+
+  .thinkflow-onlyoffice-modal-header {
+    padding: 12px;
+  }
+
+  .thinkflow-onlyoffice-modal-body {
+    padding: 8px;
+  }
+}

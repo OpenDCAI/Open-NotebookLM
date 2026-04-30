@@ -113,7 +113,7 @@ export type ThinkFlowWorkspaceItem = {
   updated_at: string;
 };
 
-export type OutputType = 'ppt' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
+export type OutputType = 'ppt' | 'editable_ppt' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
 
 export type PptPageReview = {
   page_index: number;

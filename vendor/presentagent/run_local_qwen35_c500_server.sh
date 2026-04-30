@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT="${LOCAL_QWEN35_C500_PROJECT_ROOT:-${SCRIPT_DIR}}"
+VENV="${LOCAL_QWEN35_C500_VENV:-${ROOT}/.venv}"
+
+export LOCAL_QWEN35_C500_HOST="${LOCAL_QWEN35_C500_HOST:-127.0.0.1}"
+export LOCAL_QWEN35_C500_PORT="${LOCAL_QWEN35_C500_PORT:-18081}"
+export LOCAL_QWEN35_C500_PROJECT_ROOT="${LOCAL_QWEN35_C500_PROJECT_ROOT:-${ROOT}}"
+export LOCAL_QWEN35_C500_MODEL_NAME="${LOCAL_QWEN35_C500_MODEL_NAME:-Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled}"
+export LOCAL_QWEN35_C500_MODEL_DIR="${LOCAL_QWEN35_C500_MODEL_DIR:-${ROOT}/models/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled}"
+export LOCAL_QWEN35_C500_VISIBLE_GPUS="${LOCAL_QWEN35_C500_VISIBLE_GPUS:-0,1,2,3}"
+export LOCAL_QWEN35_C500_GPU_INDEX="${LOCAL_QWEN35_C500_GPU_INDEX:-0}"
+export LOCAL_QWEN35_C500_MAX_NEW_TOKENS="${LOCAL_QWEN35_C500_MAX_NEW_TOKENS:-0}"
+export LOCAL_QWEN35_C500_GPU_MEMORY_GIB="${LOCAL_QWEN35_C500_GPU_MEMORY_GIB:-20}"
+export LOCAL_QWEN35_C500_CPU_MEMORY_GIB="${LOCAL_QWEN35_C500_CPU_MEMORY_GIB:-160}"
+export LOCAL_QWEN35_C500_PREFER_GPU_ONLY="${LOCAL_QWEN35_C500_PREFER_GPU_ONLY:-0}"
+export LOCAL_QWEN35_C500_REASONING_MODE="${LOCAL_QWEN35_C500_REASONING_MODE:-disabled}"
+export LOCAL_QWEN35_C500_RETURN_FINAL_ONLY="${LOCAL_QWEN35_C500_RETURN_FINAL_ONLY:-1}"
+export HF_HUB_OFFLINE="${HF_HUB_OFFLINE:-1}"
+export TRANSFORMERS_OFFLINE="${TRANSFORMERS_OFFLINE:-1}"
+export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True}"
+
+if [ -z "${CUDA_VISIBLE_DEVICES:-}" ]; then
+  export CUDA_VISIBLE_DEVICES="${LOCAL_QWEN35_C500_VISIBLE_GPUS}"
+fi
+
+if [ ! -f "${LOCAL_QWEN35_C500_MODEL_DIR}/config.json" ]; then
+  cat >&2 <<EOF
+Local Qwen model files are missing.
+
+Download Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled to:
+  ${ROOT}/models/Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled
+
+Or set LOCAL_QWEN35_C500_MODEL_DIR to an existing local model directory.
+The directory must contain config.json and the tokenizer/model weight files.
+EOF
+  exit 2
+fi
+
+exec "${VENV}/bin/python" "${ROOT}/local_qwen35_c500_server.py"

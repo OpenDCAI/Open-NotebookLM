@@ -4,16 +4,23 @@ import json
 import logging
 import re
 import shutil
+import base64
+import hashlib
+import hmac
+import urllib.parse
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 from fastapi import HTTPException
+from fastapi.responses import FileResponse
 import httpx
 
 from fastapi_app.config import settings
 from fastapi_app.notebook_paths import get_notebook_paths
+from fastapi_app.services.editable_ppt_service import EditablePPTService
 from fastapi_app.source_manager import SourceManager
 from fastapi_app.utils import _from_outputs_url, _to_outputs_url
 
@@ -21,7 +28,7 @@ log = logging.getLogger(__name__)
 
 
 class OutputV2Service:
-    SUPPORTED_TYPES = {"ppt", "report", "mindmap", "podcast", "flashcard", "quiz"}
+    SUPPORTED_TYPES = {"ppt", "editable_ppt", "report", "mindmap", "podcast", "flashcard", "quiz"}
     PPT_STAGE_OUTLINE = "outline_ready"
     PPT_STAGE_PAGES = "pages_ready"
     PPT_STAGE_GENERATED = "generated"
@@ -820,6 +827,8 @@ class OutputV2Service:
     def _hydrate_ppt_item_from_disk(
         self, item: Dict[str, Any], base_dir: Optional[Path] = None
     ) -> tuple[Dict[str, Any], bool]:
+        if item.get("target_type") == "editable_ppt":
+            return self._hydrate_editable_ppt_item_from_disk(item)
         if item.get("target_type") != "ppt":
             return item, False
 
@@ -880,6 +889,60 @@ class OutputV2Service:
                         changed = True
 
         return item, changed
+
+    def _hydrate_editable_ppt_item_from_disk(self, item: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+        result = item.get("result")
+        if not isinstance(result, dict):
+            return item, False
+        output_dir_raw = str(item.get("result_path") or "").strip()
+        output_dir = Path(output_dir_raw) if output_dir_raw else None
+        if output_dir is None or not output_dir.exists():
+            return item, False
+
+        pptx_path = output_dir / "editable.pptx"
+        if not pptx_path.exists():
+            try:
+                resolved = self._resolve_editable_pptx_path(item)
+            except HTTPException:
+                resolved = pptx_path
+            if resolved.exists():
+                output_dir = resolved.parent
+                pptx_path = resolved
+        if not pptx_path.exists():
+            return item, False
+
+        needs_ir = not result.get("deck_ir_path") or not result.get("deck_ir") or int(result.get("slide_count") or 0) == 0
+        needs_slides = not result.get("slide_irs") or not result.get("slide_ir_paths")
+        if not needs_ir and not needs_slides:
+            return item, False
+
+        run_root = output_dir / "editable_ppt_run"
+        try:
+            discovered = EditablePPTService().discover_artifacts(output_dir=output_dir, run_root=run_root)
+        except Exception as exc:
+            log.warning(
+                "[outputs_v2] editable PPT artifact hydration failed output_id=%s error=%s",
+                item.get("id"),
+                exc,
+            )
+            return item, False
+
+        next_result = dict(result)
+        for key, value in discovered.items():
+            if key in {"editable_ppt_options", "log_path", "log_url"}:
+                continue
+            if key == "slide_count" and int(next_result.get(key) or 0) == 0:
+                pass
+            elif next_result.get(key) not in (None, "", [], {}):
+                continue
+            if value not in (None, "", [], {}):
+                next_result[key] = value
+        next_result["download_url"] = next_result.get("pptx_url") or next_result.get("download_url") or ""
+
+        if next_result == result:
+            return item, False
+        item["result"] = next_result
+        return item, True
 
     def _read_json_file(self, path: Path) -> Dict[str, Any]:
         try:
@@ -1641,7 +1704,7 @@ class OutputV2Service:
         if target_type not in self.SUPPORTED_TYPES:
             raise HTTPException(status_code=400, detail="Unsupported output type")
 
-        if target_type != "ppt" and not document_id:
+        if target_type not in {"ppt", "editable_ppt"} and not document_id:
             raise HTTPException(status_code=400, detail="document_id is required")
 
         document = self._maybe_load_document(
@@ -1704,6 +1767,28 @@ class OutputV2Service:
             stage = self.PPT_STAGE_OUTLINE
             result_payload: Dict[str, Any] = {}
             result_path = str(ppt_payload["result_path"])
+        elif target_type == "editable_ppt":
+            outline = []
+            stage = "ready"
+            result_payload = {
+                "mode_defaults": {
+                    "react_enabled": True,
+                    "react_iterations": 3,
+                    "model_profile": "general",
+                    "coder_mode": "library",
+                    "language": "chinese",
+                    "complexity": "balanced",
+                    "target_slides": normalized_page_count,
+                },
+                "editable_ppt_options": {
+                    "model_profile": "general",
+                    "coder_mode": "library",
+                    "language": "chinese",
+                    "complexity": "balanced",
+                    "target_slides": normalized_page_count,
+                },
+            }
+            result_path = str(output_dir)
         else:
             outline = self._fallback_outline(
                 target_type=target_type,
@@ -1813,6 +1898,334 @@ class OutputV2Service:
         manifest[index] = item
         self._write_manifest(manifest_path, manifest)
         return item
+
+    def save_editable_ppt_ir(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        output_id: str,
+        deck_ir: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
+        manifest = self._read_manifest(manifest_path)
+        index, item = self._find_output(manifest, output_id)
+        if item.get("target_type") != "editable_ppt":
+            raise HTTPException(status_code=400, detail="Only editable_ppt outputs support IR editing")
+        if not isinstance(deck_ir, dict):
+            raise HTTPException(status_code=400, detail="deck_ir must be an object")
+
+        result = dict(item.get("result") or {})
+        result["editable_ir"] = deck_ir
+        item["result"] = result
+        item["updated_at"] = self._now()
+        manifest[index] = item
+        self._write_manifest(manifest_path, manifest)
+        self._write_json(
+            self._item_dir(notebook_id, notebook_title, user_id, output_id) / "editable_ir.json",
+            deck_ir,
+        )
+        return item
+
+    def get_onlyoffice_config(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        output_id: str,
+        request_base_url: str,
+        browser_base_url: str = "",
+        editor_session_id: str = "",
+    ) -> Dict[str, Any]:
+        document_server_url = str(settings.ONLYOFFICE_DOCUMENT_SERVER_URL or "").strip().rstrip("/")
+        if not document_server_url:
+            return {"enabled": False, "reason": "ONLYOFFICE_DOCUMENT_SERVER_URL is not configured"}
+
+        item = self.get_output(
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            user_id=user_id,
+            output_id=output_id,
+        )
+        if item.get("target_type") != "editable_ppt":
+            raise HTTPException(status_code=400, detail="Only editable_ppt outputs support ONLYOFFICE editing")
+
+        pptx_path = self._resolve_editable_pptx_path(item)
+        if not pptx_path.exists():
+            raise HTTPException(status_code=404, detail="Editable PPTX not found")
+
+        callback_base_url = str(settings.ONLYOFFICE_THINKFLOW_PUBLIC_URL or request_base_url or "").strip().rstrip("/")
+        document_base_url = str(
+            browser_base_url
+            or settings.ONLYOFFICE_DOCUMENT_DOWNLOAD_BASE_URL
+            or callback_base_url
+            or ""
+        ).strip().rstrip("/")
+        if not callback_base_url or not document_base_url:
+            raise HTTPException(status_code=500, detail="ThinkFlow public URL is required for ONLYOFFICE")
+
+        editor_session_id = str(editor_session_id or "").strip()
+        query = urllib.parse.urlencode(
+            {
+                "notebook_id": notebook_id,
+                "notebook_title": notebook_title,
+                "user_id": user_id,
+                "document_base_url": document_base_url,
+                "editor_session_id": editor_session_id,
+            }
+        )
+        document_key = self._onlyoffice_document_key(
+            pptx_path,
+            output_id=output_id,
+            item=item,
+            document_base_url=document_base_url,
+            editor_session_id=editor_session_id,
+        )
+        document_url = self._onlyoffice_document_download_url(
+            output_id=output_id,
+            document_key=document_key,
+            base_url=document_base_url,
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            user_id=user_id,
+            editor_session_id=editor_session_id,
+        )
+
+        config = {
+            "documentType": "slide",
+            "type": "desktop",
+            "width": "100%",
+            "height": "100%",
+            "document": {
+                "fileType": "pptx",
+                "key": document_key,
+                "title": f"{item.get('title') or 'editable'}.pptx",
+                "url": document_url,
+                "permissions": {
+                    "edit": True,
+                    "download": True,
+                    "print": True,
+                },
+            },
+            "editorConfig": {
+                "mode": "edit",
+                "lang": "zh-CN",
+                "callbackUrl": f"{callback_base_url}/api/v1/kb/outputs/{output_id}/onlyoffice/callback?{query}",
+                "user": {
+                    "id": user_id or "local",
+                    "name": user_id or "local",
+                },
+                "customization": {
+                    "forcesave": True,
+                    "autosave": True,
+                },
+            },
+        }
+        token = self._onlyoffice_jwt(config)
+        if token:
+            config["token"] = token
+        return {
+            "enabled": True,
+            "document_server_url": document_server_url,
+            "script_url": f"{document_server_url}/web-apps/apps/api/documents/api.js",
+            "config": config,
+        }
+
+    def get_onlyoffice_document_response(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        output_id: str,
+        document_key: str,
+        document_base_url: str = "",
+        editor_session_id: str = "",
+        method: str = "GET",
+    ) -> FileResponse:
+        item = self.get_output(
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            user_id=user_id,
+            output_id=output_id,
+        )
+        if item.get("target_type") != "editable_ppt":
+            raise HTTPException(status_code=400, detail="Only editable_ppt outputs support ONLYOFFICE editing")
+        pptx_path = self._resolve_editable_pptx_path(item)
+        if not pptx_path.exists():
+            raise HTTPException(status_code=404, detail="Editable PPTX not found")
+        expected_key = self._onlyoffice_document_key(
+            pptx_path,
+            output_id=output_id,
+            item=item,
+            document_base_url=str(
+                document_base_url
+                or settings.ONLYOFFICE_DOCUMENT_DOWNLOAD_BASE_URL
+                or ""
+            ).strip().rstrip("/"),
+            editor_session_id=str(editor_session_id or "").strip(),
+        )
+        if document_key != expected_key:
+            raise HTTPException(status_code=404, detail="Editable PPTX version not found")
+        return FileResponse(path=str(pptx_path), filename=pptx_path.name, method=method)
+
+    def handle_onlyoffice_callback(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        output_id: str,
+        payload: Dict[str, Any],
+        document_base_url: str = "",
+        editor_session_id: str = "",
+    ) -> Dict[str, int]:
+        status = int(payload.get("status") or 0)
+        if status not in {2, 3, 6, 7}:
+            return {"error": 0}
+        download_url = str(payload.get("url") or "").strip()
+        if not download_url:
+            return {"error": 1}
+
+        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
+        manifest = self._read_manifest(manifest_path)
+        index, item = self._find_output(manifest, output_id)
+        if item.get("target_type") != "editable_ppt":
+            return {"error": 1}
+
+        pptx_path = self._resolve_editable_pptx_path(item)
+        expected_key = self._onlyoffice_document_key(
+            pptx_path,
+            output_id=output_id,
+            item=item,
+            document_base_url=str(document_base_url or "").strip().rstrip("/"),
+            editor_session_id=str(editor_session_id or "").strip(),
+        )
+        if str(payload.get("key") or "") != expected_key:
+            return {"error": 1}
+
+        pptx_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_path = pptx_path.with_suffix(".onlyoffice.tmp")
+        try:
+            with urllib.request.urlopen(download_url, timeout=60) as response:
+                tmp_path.write_bytes(response.read())
+            tmp_path.replace(pptx_path)
+        except Exception as exc:
+            log.warning("[outputs_v2] ONLYOFFICE save failed output_id=%s error=%s", output_id, exc)
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return {"error": 1}
+
+        result = dict(item.get("result") or {})
+        result["pptx_path"] = str(pptx_path)
+        result["pptx_url"] = _to_outputs_url(str(pptx_path))
+        result["download_url"] = result["pptx_url"]
+        result["onlyoffice_saved_at"] = self._now()
+        item["result"] = result
+        item["updated_at"] = self._now()
+        manifest[index] = item
+        self._write_manifest(manifest_path, manifest)
+        return {"error": 0}
+
+    def _resolve_editable_pptx_path(self, item: Dict[str, Any]) -> Path:
+        result = item.get("result") or {}
+        for key in ("pptx_path", "pptx_url", "download_url"):
+            value = str(result.get(key) or "").strip()
+            if not value:
+                continue
+            candidate = Path(_from_outputs_url(value))
+            if candidate.suffix.lower() == ".pptx":
+                return candidate
+        result_path = Path(str(item.get("result_path") or ""))
+        if result_path:
+            return result_path / "editable.pptx"
+        raise HTTPException(status_code=404, detail="Editable PPTX not found")
+
+    def _onlyoffice_document_url(self, item: Dict[str, Any], pptx_path: Path, public_base_url: str) -> str:
+        result = item.get("result") or {}
+        for key in ("pptx_url", "download_url"):
+            value = str(result.get(key) or "").strip()
+            if not value:
+                continue
+            if value.startswith(("http://", "https://")):
+                parsed = urllib.parse.urlparse(value)
+                if parsed.path.startswith("/outputs/"):
+                    return f"{public_base_url}{parsed.path}"
+                return value
+            if value.startswith("/outputs/"):
+                return f"{public_base_url}{value}"
+        return _to_outputs_url(str(pptx_path), base_url=public_base_url)
+
+    def _onlyoffice_document_download_url(
+        self,
+        *,
+        output_id: str,
+        document_key: str,
+        base_url: str,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        editor_session_id: str = "",
+    ) -> str:
+        query_items = {
+            "notebook_id": notebook_id,
+            "notebook_title": notebook_title,
+            "user_id": user_id,
+            "document_base_url": base_url,
+        }
+        if editor_session_id:
+            query_items["editor_session_id"] = editor_session_id
+        query = urllib.parse.urlencode(query_items)
+        return (
+            f"{base_url}/api/v1/kb/outputs/{output_id}/onlyoffice/download/"
+            f"{document_key}.pptx?{query}"
+        )
+
+    def _onlyoffice_document_key(
+        self,
+        pptx_path: Path,
+        *,
+        output_id: str,
+        item: Dict[str, Any],
+        document_base_url: str = "",
+        editor_session_id: str = "",
+    ) -> str:
+        stat = pptx_path.stat()
+        raw = (
+            "thinkflow-onlyoffice-v6:"
+            f"{output_id}:"
+            f"{item.get('updated_at') or ''}:"
+            f"{document_base_url}:"
+            f"{editor_session_id}:"
+            f"{pptx_path.resolve()}:{stat.st_mtime_ns}:{stat.st_size}"
+        )
+        return hashlib.sha1(raw.encode("utf-8")).hexdigest()
+
+    def _onlyoffice_cache_busted_url(self, url: str, document_key: str) -> str:
+        parsed = urllib.parse.urlparse(url)
+        query = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+        query.append(("oo_key", document_key[:12]))
+        return urllib.parse.urlunparse(
+            parsed._replace(query=urllib.parse.urlencode(query))
+        )
+
+    def _onlyoffice_jwt(self, payload: Dict[str, Any]) -> str:
+        secret = str(settings.ONLYOFFICE_JWT_SECRET or "").strip()
+        if not secret:
+            return ""
+        header = {"alg": "HS256", "typ": "JWT"}
+
+        def encode(data: Dict[str, Any]) -> bytes:
+            raw = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+            return base64.urlsafe_b64encode(raw).rstrip(b"=")
+
+        signing_input = encode(header) + b"." + encode(payload)
+        signature = hmac.new(secret.encode("utf-8"), signing_input, hashlib.sha256).digest()
+        return (signing_input + b"." + base64.urlsafe_b64encode(signature).rstrip(b"=")).decode("ascii")
 
     async def refine_outline(
         self,
@@ -2098,6 +2511,7 @@ class OutputV2Service:
         api_url: Optional[str],
         api_key: Optional[str],
         model: Optional[str],
+        editable_ppt_options: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
         manifest = self._read_manifest(manifest_path)
@@ -2144,6 +2558,19 @@ class OutputV2Service:
             )
             item["pipeline_stage"] = self.PPT_STAGE_PAGES
             item["status"] = self.PPT_STAGE_PAGES
+        elif item["target_type"] == "editable_ppt":
+            result = EditablePPTService().run_from_output(
+                item=item,
+                document=document,
+                guidance_text=guidance_text,
+                output_dir=output_dir,
+                api_url=api_url,
+                api_key=api_key,
+                model=model,
+                options=editable_ppt_options,
+            )
+            item["pipeline_stage"] = "generated"
+            item["status"] = "generated"
         elif item["target_type"] == "report":
             result = await self._generate_report(output_dir=output_dir, item=item, document=document, guidance_text=guidance_text)
             item["status"] = "generated"

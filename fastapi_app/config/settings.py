@@ -98,6 +98,27 @@ class AppSettings(BaseSettings):
     LLM_API_KEY: str = ""
     LLM_MODEL: str = "gemini-2.5-flash"
 
+    # Editable PPT / vendored PresentAgent
+    # Empty PRESENT_AGENT_ROOT means use <project_root>/vendor/presentagent.
+    PRESENT_AGENT_ROOT: str = ""
+    PRESENT_AGENT_PYTHON: str = "python"
+    PRESENT_AGENT_LLM_API_KEY: str = ""
+    PRESENT_AGENT_LLM_API_BASE: str = "http://123.129.219.111:3000/v1"
+    PRESENT_AGENT_LLM_MODEL: str = "claude-sonnet-4-6"
+    PRESENT_AGENT_VLM_API_KEY: str = ""
+    PRESENT_AGENT_VLM_API_BASE: str = "http://123.129.219.111:3000/v1"
+    PRESENT_AGENT_VLM_MODEL: str = "qwen3-vl-32b-instruct"
+    PRESENT_AGENT_IMAGE_API_KEY: str = ""
+    PRESENT_AGENT_IMAGE_API_BASE: str = "http://123.129.219.111:3000/v1"
+    PRESENT_AGENT_IMAGE_MODEL: str = "gemini-3.1-flash-image-preview"
+    PRESENT_AGENT_LOCAL_LLM_API_BASE: str = "http://127.0.0.1:18081/v1"
+    PRESENT_AGENT_LOCAL_LLM_MODEL: str = "Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled"
+    THINKFLOW_EDITABLE_PPT_TIMEOUT_SECONDS: int = 7200
+    ONLYOFFICE_DOCUMENT_SERVER_URL: str = ""
+    ONLYOFFICE_THINKFLOW_PUBLIC_URL: str = ""
+    ONLYOFFICE_DOCUMENT_DOWNLOAD_BASE_URL: str = ""
+    ONLYOFFICE_JWT_SECRET: str = ""
+
     # Legacy: Local service switches (backward compatibility)
     USE_LOCAL_TTS: int = 0
     TTS_ENGINE: str = "qwen"

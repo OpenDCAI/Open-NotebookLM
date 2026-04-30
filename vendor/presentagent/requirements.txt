@@ -1,0 +1,31 @@
+# Core Presentation Generation
+python-pptx>=0.6.23
+Pillow>=10.0.0
+pdf2image>=1.16.3
+
+# LLM and AI APIs
+openai>=1.30.0
+fastapi>=0.110.0
+uvicorn>=0.29.0
+transformers>=4.50.0
+accelerate>=1.0.0
+sentencepiece>=0.2.0
+
+# PDF Parsing (MinerU)
+magic-pdf[full]>=0.7.0
+
+# HTTP and Networking
+requests>=2.32.0
+httpx>=0.27.0
+urllib3>=2.2.0,<3
+charset-normalizer>=3.3.0,<4
+
+# Data Validation
+pydantic>=2.7.0
+
+# Utilities
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+
+# Testing
+pytest>=8.0.0

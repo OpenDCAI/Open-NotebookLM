@@ -40,6 +40,12 @@ EXCLUDED_PREFIXES = (
 )
 
 
+def _is_onlyoffice_public_endpoint(path: str, method: str) -> bool:
+    if method == "POST" and path.endswith("/onlyoffice/callback"):
+        return True
+    return method in {"GET", "HEAD"} and "/onlyoffice/download/" in path and path.endswith(".pptx")
+
+
 class APIKeyMiddleware(BaseHTTPMiddleware):
     """
     Middleware that verifies API key for /api/* routes.
@@ -65,8 +71,12 @@ class APIKeyMiddleware(BaseHTTPMiddleware):
 
         # Only check API key for /api/* and /paper2video/* routes
         if path.startswith("/api/") or path.startswith("/paper2video/"):
+            if _is_onlyoffice_public_endpoint(path, request.method):
+                return await call_next(request)
+
             api_key = request.headers.get("X-API-Key")
-            # EventSource 无法带自定义头，progress SSE 允许通过 query 传 key
+            # EventSource / third-party callbacks cannot set custom headers,
+            # so progress SSE allows passing the internal key in query.
             if not api_key and request.method == "GET" and "/paper2rebuttal/progress/" in path:
                 api_key = request.query_params.get("x_api_key") or request.query_params.get("X-API-Key")
 

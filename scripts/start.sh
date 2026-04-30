@@ -11,6 +11,7 @@ cd "$PROJECT_ROOT"
 # ── Python 解析 ───────────────────────────────────────────────────────────────
 resolve_python() {
     local candidates=(
+        "/mnt/paper2any/dingcheng/conda-envs/thinkflow/bin/python"
         "/mnt/paper2any/conda-envs/envs/thinkflow/bin/python"
         "${CONDA_PREFIX:-}/bin/python"
         "$(command -v python3 2>/dev/null || true)"
@@ -26,7 +27,7 @@ PYTHON_BIN="$(resolve_python)"
 NPM_BIN="$(command -v npm 2>/dev/null)" || { echo "错误: 找不到 npm"; exit 1; }
 
 # ── 清理旧进程 ────────────────────────────────────────────────────────────────
-BACKEND_PORT=18213
+BACKEND_PORT=8213
 FRONTEND_PORT=13001
 
 kill_port() {

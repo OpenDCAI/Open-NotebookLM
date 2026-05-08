@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildOutlineChatMessages } from '../usePptOutlineManager';
+import { buildOutlineChatMessages, getAppliedPptOutline } from '../usePptOutlineManager';
 
 describe('buildOutlineChatMessages', () => {
   it('shows style-only candidate diffs without outline page changes', () => {
@@ -64,5 +64,42 @@ describe('buildOutlineChatMessages', () => {
     expect(assistant.meta?.outlineDiff.totalCount).toBe(0);
     expect(assistant.meta?.styleDiff.totalCount).toBeGreaterThan(0);
     expect(assistant.meta?.styleDiff.entries[0].label).toBe('风格类型');
+  });
+});
+
+describe('getAppliedPptOutline', () => {
+  it('keeps the editable PPT outline on the applied version while a candidate draft exists', () => {
+    const outline = [
+      {
+        id: 'slide_1',
+        pageNum: 1,
+        title: '正式标题',
+        key_points: ['正式要点'],
+      },
+    ];
+    const draft = [
+      {
+        id: 'slide_1',
+        pageNum: 1,
+        title: '候选标题',
+        key_points: ['候选要点'],
+      },
+    ];
+
+    const applied = getAppliedPptOutline({
+      id: 'out_ppt_1',
+      document_id: 'doc_ppt_1',
+      title: 'PPT 产出文档',
+      target_type: 'ppt',
+      status: 'outline_ready',
+      outline,
+      outline_chat_draft_outline: draft,
+      outline_chat_has_pending_changes: true,
+      created_at: '2026-04-29T00:00:00+08:00',
+      updated_at: '2026-04-29T00:00:00+08:00',
+    });
+
+    expect(applied).toEqual(outline);
+    expect(applied).not.toEqual(draft);
   });
 });

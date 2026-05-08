@@ -108,6 +108,9 @@ export type OutlineSection = {
   asset_ref?: string | null;
   ppt_img_path?: string;
   generated_img_path?: string;
+  generation_failed?: boolean;
+  generation_error?: string;
+  mode?: string;
 };
 
 export type PptOutputInfo = {

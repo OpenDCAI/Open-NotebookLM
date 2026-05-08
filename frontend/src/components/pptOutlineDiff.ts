@@ -120,25 +120,50 @@ function buildPointsDiff(beforePoints: string[], afterPoints: string[]): string 
   return '要点内容已调整';
 }
 
+function formatValueChange(label: string, beforeValue: string, afterValue: string): string {
+  const beforeText = beforeValue || '空';
+  const afterText = afterValue || '空';
+  return `${label}：${beforeText} -> ${afterText}`;
+}
+
+function buildPointDetailLines(beforePoints: string[], afterPoints: string[]): string[] {
+  const beforeSet = new Set(beforePoints);
+  const afterSet = new Set(afterPoints);
+  const removed = beforePoints.filter((point) => !afterSet.has(point));
+  const added = afterPoints.filter((point) => !beforeSet.has(point));
+  const lines: string[] = [];
+  if (removed.length > 0) {
+    lines.push(`移除要点：${removed.join('、')}`);
+  }
+  if (added.length > 0) {
+    lines.push(`新增要点：${added.join('、')}`);
+  }
+  if (lines.length > 0) return lines;
+  if (beforePoints.length !== afterPoints.length) {
+    return [buildPointsDiff(beforePoints, afterPoints)];
+  }
+  return beforePoints.map((point, index) => formatValueChange(`要点 ${index + 1}`, point, afterPoints[index] || ''));
+}
+
 function buildModifiedEntry(beforeItem: NormalizedOutlineItem, afterItem: NormalizedOutlineItem): PptOutlineDiffEntry | null {
   const changedFields: PptOutlineDiffField[] = [];
   const detailLines: string[] = [];
 
   if (beforeItem.title !== afterItem.title) {
     changedFields.push('title');
-    detailLines.push(`标题：${beforeItem.title} -> ${afterItem.title}`);
+    detailLines.push(formatValueChange('标题', beforeItem.title, afterItem.title));
   }
   if (beforeItem.layoutDescription !== afterItem.layoutDescription) {
     changedFields.push('layout');
-    detailLines.push('布局描述已调整');
+    detailLines.push(formatValueChange('布局', beforeItem.layoutDescription, afterItem.layoutDescription));
   }
   if (JSON.stringify(beforeItem.keyPoints) !== JSON.stringify(afterItem.keyPoints)) {
     changedFields.push('points');
-    detailLines.push(buildPointsDiff(beforeItem.keyPoints, afterItem.keyPoints));
+    detailLines.push(...buildPointDetailLines(beforeItem.keyPoints, afterItem.keyPoints));
   }
   if (beforeItem.assetRef !== afterItem.assetRef) {
     changedFields.push('asset');
-    detailLines.push('素材引用已调整');
+    detailLines.push(formatValueChange('素材引用', beforeItem.assetRef, afterItem.assetRef));
   }
   if (beforeItem.pageNum !== afterItem.pageNum || beforeItem.index !== afterItem.index) {
     changedFields.push('position');

@@ -65,6 +65,7 @@ import type { NotebookContext } from './TableAnalysisPanel';
 import { usePptPageReviewManager } from './usePptPageReviewManager';
 import { useConversationSourceRefs, type ConversationSourceRef } from './useConversationSourceRefs';
 import { filterMaterialListDocuments, findPptOutputDocumentId, resolvePptDocSlideIndex } from './pptOutputDocuments';
+import { buildPptOutputDocumentContent } from './pptOutputDocumentContent';
 import {
   usePptOutlineManager,
   normalizePptStage,
@@ -210,6 +211,9 @@ type OutlineSection = {
   asset_ref?: string | null;
   ppt_img_path?: string;
   generated_img_path?: string;
+  generation_failed?: boolean;
+  generation_error?: string;
+  mode?: string;
 };
 
 type PptOutputInfo = {
@@ -2926,68 +2930,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     return parseJson<{ document: ThinkFlowDocument }>(response);
   };
 
-  const buildPptOutputDocumentContent = (output: ThinkFlowOutput): string => {
-    const outline = Array.isArray(output.outline_chat_draft_outline) && output.outline_chat_draft_outline.length > 0
-      ? output.outline_chat_draft_outline
-      : output.outline || [];
-    const outputInfo = output.outline_chat_draft_output_info || output.output_info || {};
-    const styleInfo = output.outline_chat_draft_style_info || output.style_info || {};
-    const sourceNames = (outputInfo.source_names || output.source_names || []).filter(Boolean);
-    const boundTitles = (outputInfo.bound_document_titles || output.bound_document_titles || []).filter(Boolean);
-    const guidanceText = String(output.guidance_snapshot_text || '').trim();
-    const supplementPrompt = Array.isArray(styleInfo.supplement_prompt)
-      ? styleInfo.supplement_prompt.filter(Boolean)
-      : [];
-    const lines = [
-      `# ${outputInfo.title || output.title || 'PPT 产出文档'}`,
-      '',
-      '## 产出信息',
-      '',
-      `- 产出类型：PPT`,
-      `- 产出标题：${outputInfo.title || output.title || 'PPT 产出文档'}`,
-      `- 目标页数：${outputInfo.page_count || output.page_count || outline.length || 10} 页`,
-      outputInfo.audience ? `- 面向对象：${outputInfo.audience}` : '- 面向对象：未指定',
-      sourceNames.length > 0 ? `- 来源文件：${sourceNames.join('、')}` : '- 来源文件：未选择',
-      boundTitles.length > 0 ? `- 参考文档：${boundTitles.join('、')}` : '- 参考文档：未选择',
-      `- 生成状态：${outputInfo.stage_label || '大纲讨论中'}`,
-      '',
-      '## 风格信息',
-      '',
-      `- 风格类型：${styleInfo.label || styleInfo.preset || '自定义'}`,
-      `- 表达语气：${styleInfo.tone || '清晰、准确、贴合用户补充要求'}`,
-      `- 视觉倾向：${styleInfo.visual_style || '结构清楚，视觉表达服务内容重点'}`,
-      styleInfo.audience_assumption ? `- 受众假设：${styleInfo.audience_assumption}` : '- 受众假设：根据产出信息和用户补充要求确定',
-      '- 补充提示词：',
-      ...(supplementPrompt.length > 0
-        ? supplementPrompt.map((item) => `  - ${item}`)
-        : [guidanceText ? `  - ${guidanceText}` : '  - 无']),
-      '',
-      '## PPT 大纲',
-      '',
-    ];
-    if (outline.length === 0) {
-      lines.push('[待补充]');
-      return lines.join('\n');
-    }
-    outline.forEach((slide, index) => {
-      const pageNum = slide.pageNum || index + 1;
-      lines.push(`### 第 ${pageNum} 页：${slide.title || `页面 ${pageNum}`}`);
-      if (slide.layout_description || slide.summary) {
-        lines.push('', '**布局说明**', '', slide.layout_description || slide.summary || '');
-      }
-      const points = slide.key_points || slide.bullets || [];
-      if (points.length > 0) {
-        lines.push('', '**页面要点**', '');
-        points.forEach((point) => lines.push(`- ${point}`));
-      }
-      if (slide.asset_ref) {
-        lines.push('', '**素材建议**', '', `\`${slide.asset_ref}\``);
-      }
-      lines.push('', '---', '');
-    });
-    return lines.join('\n').trim();
-  };
-
   const syncPptOutputDocumentOnce = async (output: ThinkFlowOutput) => {
     if (!output?.id || output.target_type !== 'ppt') return;
     const content = buildPptOutputDocumentContent(output);
@@ -3776,10 +3718,12 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       const selectedSlide = activePptSlide?.slide;
       const selectedIndex = activePptSlide?.index ?? 0;
       const selectedImage = activePptCurrentPreview;
+      const selectedSlideFailed = Boolean(selectedSlide?.generation_failed || (selectedSlide?.mode || '').includes('failed'));
+      const hasPreviewImages = previewImages.some(Boolean);
       const canDownloadPpt = activePptStage === 'generated';
       return (
         <div className="thinkflow-output-preview thinkflow-ppt-viewer">
-          {previewImages.length > 0 && selectedSlide ? (
+          {hasPreviewImages && selectedSlide ? (
             <>
               <div className="thinkflow-ppt-viewer-stage">
                 <div className="thinkflow-ppt-viewer-toolbar">
@@ -3842,30 +3786,46 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   </div>
                 ) : null}
                 <div className="thinkflow-ppt-viewer-caption">
-                  <p>{selectedSlide.layout_description || '当前页暂时没有布局描述。'}</p>
+                  <p>
+                    {selectedSlideFailed
+                      ? `当前页生成失败：${selectedSlide.generation_error || '请重新生成该页或整套页面。'}`
+                      : selectedSlide.layout_description || '当前页暂时没有布局描述。'}
+                  </p>
                 </div>
               </div>
               <div className="thinkflow-ppt-filmstrip">
                 {previewImages.map((image, index) => {
                   const review = activePptPageReviews.find((item) => item.page_index === index);
+                  const slide = (activeOutput.outline || [])[index];
+                  const slideFailed = Boolean(slide?.generation_failed || (slide?.mode || '').includes('failed'));
                   return (
-                    <button
+                      <button
                       key={`${image}_${index}`}
                       type="button"
                       className={`thinkflow-ppt-filmstrip-card ${selectedIndex === index ? 'is-active' : ''}`}
                       onClick={() => setActivePptSlideIndex(index)}
-                    >
-                      <div className="thinkflow-ppt-filmstrip-thumb">
-                        <img src={withAssetVersion(image, `${activeOutput.updated_at}_${index}`)} alt={`PPT 第 ${index + 1} 页`} />
-                      </div>
-                      <div className="thinkflow-ppt-filmstrip-meta">
-                        <span>第 {index + 1} 页</span>
-                        {review?.confirmed ? <strong>已确认</strong> : <em>待核对</em>}
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+                      >
+                        <div className="thinkflow-ppt-filmstrip-thumb">
+                          {image ? (
+                            <img src={withAssetVersion(image, `${activeOutput.updated_at}_${index}`)} alt={`PPT 第 ${index + 1} 页`} />
+                          ) : (
+                            <div className="thinkflow-empty thinkflow-ppt-filmstrip-empty">待生成</div>
+                          )}
+                        </div>
+                        <div className="thinkflow-ppt-filmstrip-meta">
+                          <span>第 {index + 1} 页</span>
+                          {slideFailed ? (
+                            <strong>生成失败</strong>
+                          ) : review?.confirmed ? (
+                            <strong>已确认</strong>
+                          ) : (
+                            <em>待核对</em>
+                          )}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
             </>
           ) : canDownloadPpt && result.ppt_pdf_path ? (
             <div className="thinkflow-pdf-embed-shell">
@@ -4641,6 +4601,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
 
         <ThinkFlowCenterPanel
           activeOutput={activeOutput}
+          activePptSlideIndex={activePptSlideIndex}
           boundDocIds={boundDocIds}
           chatTitle={isPptOutputConversationMode ? '📋 PPT 产出文档讨论' : undefined}
           chatInput={chatInput}
@@ -4690,6 +4651,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             userId: effectiveUser?.id || 'local',
             userEmail: effectiveUser?.email || '',
           }}
+          onSetActivePptSlideIndex={setActivePptSlideIndex}
         />
 
         {rightPanelOpen ? (

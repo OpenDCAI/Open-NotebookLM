@@ -152,6 +152,29 @@ def test_sync_outline_state_migrates_global_rules_into_style_info() -> None:
     assert output["outline_chat_draft_global_directives"] == []
 
 
+def test_ppt_outline_normalization_preserves_page_generation_failure_state() -> None:
+    service = OutputV2Service()
+
+    outline = service._normalize_ppt_outline(
+        [
+            {
+                "id": "slide_1",
+                "title": "失败页",
+                "generated_img_path": "/outputs/page_000.png",
+                "generation_failed": True,
+                "generation_error": "api failed",
+                "mode": "origin_gen_failed",
+                "page_idx": 0,
+            }
+        ]
+    )
+
+    assert outline[0]["generation_failed"] is True
+    assert outline[0]["generation_error"] == "api failed"
+    assert outline[0]["mode"] == "origin_gen_failed"
+    assert outline[0]["page_idx"] == 0
+
+
 def test_apply_outline_chat_promotes_style_info_draft(tmp_path: Path, monkeypatch: Any) -> None:
     item = _base_ppt_output()
     item["output_info"] = {"type": "ppt", "title": "测试 PPT", "page_count": 1}

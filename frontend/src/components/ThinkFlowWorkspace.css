@@ -570,6 +570,115 @@
   max-width: min(92%, 480px);
 }
 
+.thinkflow-ppt-left-outline {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 16px;
+  background: linear-gradient(180deg, rgba(249, 251, 255, 0.96), rgba(255, 255, 255, 0.96));
+}
+
+.thinkflow-ppt-left-outline-head {
+  padding: 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(216, 226, 240, 0.94);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 12px 28px rgba(31, 43, 66, 0.06);
+  margin-bottom: 12px;
+}
+
+.thinkflow-ppt-left-outline-head h3 {
+  margin: 6px 0;
+  font-size: 18px;
+  line-height: 1.35;
+  color: var(--tf-text);
+}
+
+.thinkflow-ppt-left-outline-head p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--tf-subtle);
+}
+
+.thinkflow-ppt-left-outline-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid rgba(226, 231, 238, 0.9);
+  font-size: 12px;
+  color: var(--tf-muted);
+}
+
+.thinkflow-ppt-left-outline-meta strong {
+  color: var(--tf-text);
+}
+
+.thinkflow-ppt-left-outline-list {
+  display: grid;
+  gap: 10px;
+}
+
+.thinkflow-ppt-left-outline-card {
+  width: 100%;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(226, 231, 238, 0.96);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 10px 24px rgba(22, 32, 51, 0.04);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, background 0.18s ease, transform 0.18s ease;
+}
+
+.thinkflow-ppt-left-outline-card:hover,
+.thinkflow-ppt-left-outline-card.is-active {
+  border-color: rgba(71, 118, 255, 0.48);
+  background: rgba(246, 249, 255, 0.98);
+  box-shadow: 0 16px 34px rgba(40, 76, 170, 0.14);
+  transform: translateY(-1px);
+}
+
+.thinkflow-ppt-left-outline-card-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.thinkflow-ppt-left-outline-card-top span:last-child {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--tf-muted);
+}
+
+.thinkflow-ppt-left-outline-card h4 {
+  margin: 10px 0 6px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--tf-text);
+}
+
+.thinkflow-ppt-left-outline-card p {
+  margin: 0 0 10px;
+  font-size: 12px;
+  line-height: 1.65;
+  color: var(--tf-subtle);
+}
+
+.thinkflow-ppt-left-outline-card ul {
+  margin: 0;
+  padding-left: 18px;
+  display: grid;
+  gap: 6px;
+  font-size: 12px;
+  line-height: 1.58;
+  color: var(--tf-subtle);
+}
+
 /* Non-PPT output: chat compressed on the left, output panel slides in from right */
 .thinkflow-center-panel.is-output-immersive {
   border-right: 1px solid rgba(229, 228, 225, 0.86);

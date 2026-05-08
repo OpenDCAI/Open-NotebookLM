@@ -221,6 +221,49 @@ def _build_text_fallback_pdf(page_items: List[Any], output_pdf_path: Path) -> st
     return str(output_pdf_path)
 
 
+def _build_text_fallback_slide_image(item: Any, output_image_path: Path, idx: int) -> str:
+    """Render one failed slide as a lightweight text image so page positions stay stable."""
+    doc = fitz.open()
+    page = doc.new_page(width=1280, height=720)
+    page.draw_rect(page.rect, color=(0.97, 0.98, 0.99), fill=(0.97, 0.98, 0.99))
+    page.draw_rect(fitz.Rect(64, 118, 300, 124), color=(0.23, 0.51, 0.96), fill=(0.23, 0.51, 0.96))
+
+    fontfile = _get_cjk_font_path()
+    fontname = "notocjk" if fontfile else "helv"
+    insert_kwargs = {"fontname": fontname}
+    if fontfile:
+        insert_kwargs["fontfile"] = fontfile
+
+    page.insert_textbox(
+        fitz.Rect(64, 44, 1216, 104),
+        f"{_coerce_slide_title(item, idx)}",
+        fontsize=26,
+        color=(0.06, 0.09, 0.16),
+        **insert_kwargs,
+    )
+    page.insert_textbox(
+        fitz.Rect(64, 130, 1216, 170),
+        "本页图片生成失败，已保留页位。请重新生成整套页面，或在页面审阅中按提示重做当前页。",
+        fontsize=16,
+        color=(0.71, 0.29, 0.06),
+        **insert_kwargs,
+    )
+    body_text = "\n".join(f"- {bullet}" for bullet in _coerce_slide_bullets(item))
+    page.insert_textbox(
+        fitz.Rect(80, 190, 1200, 600),
+        body_text,
+        fontsize=18,
+        color=(0.12, 0.16, 0.23),
+        **insert_kwargs,
+    )
+
+    output_image_path.parent.mkdir(parents=True, exist_ok=True)
+    pixmap = page.get_pixmap(alpha=False)
+    pixmap.save(str(output_image_path))
+    doc.close()
+    return str(output_image_path.resolve())
+
+
 def _export_text_fallback_assets(page_items: List[Any], result_root: Path) -> Dict[str, str]:
     pdf_path = result_root / "paper2ppt_fallback.pdf"
     pptx_path = result_root / "paper2ppt_fallback.pptx"
@@ -522,6 +565,12 @@ def create_paper2ppt_parallel_consistent_graph() -> GenericGraphBuilder:  # noqa
             log.warning("Pagecontent is empty, nothing to generate.")
             return state
 
+        def _has_valid_preview(result: Dict[str, Any] | None) -> bool:
+            if not isinstance(result, dict):
+                return False
+            preview_path = str(result.get("generated_img_path") or result.get("ppt_img_path") or "").strip()
+            return bool(preview_path and os.path.exists(_abs_path(preview_path)))
+
         # 检查是否有用户传入的参考图
         user_ref_img = getattr(state.request, "ref_img", None)
         if user_ref_img:
@@ -790,7 +839,29 @@ def create_paper2ppt_parallel_consistent_graph() -> GenericGraphBuilder:  # noqa
                         }
                     else:
                         results_map[real_idx] = res
-        
+
+        # 额外补一轮：对仍然失败的页面再次重试，避免偶发失败直接吞掉页位
+        missing_indexes = [idx for idx in range(len(page_items)) if not _has_valid_preview(results_map.get(idx))]
+        if missing_indexes:
+            log.warning(f"[paper2ppt_consistent] Retrying missing pages once more: {missing_indexes}")
+            retry_tasks = [
+                _process_single_page(
+                    idx,
+                    page_items[idx],
+                    ref_img_path=(user_ref_img if user_ref_img else anchor_img_path) if idx != 0 else None,
+                )
+                for idx in missing_indexes
+            ]
+            retry_results = await asyncio.gather(*retry_tasks, return_exceptions=True)
+            for idx, res in zip(missing_indexes, retry_results):
+                if isinstance(res, Exception):
+                    log.error(f"[paper2ppt_consistent] Retry page {idx} exception: {res}")
+                    continue
+                if _has_valid_preview(res):
+                    results_map[idx] = res
+                else:
+                    results_map[idx] = res
+
         # 3. Assemble final list
         new_pagecontent = []
         state.generated_pages = []
@@ -803,13 +874,25 @@ def create_paper2ppt_parallel_consistent_graph() -> GenericGraphBuilder:  # noqa
                 final_item = dict(orig_item)
             else:
                 final_item = {"raw_content": str(orig_item)}
-            
+
             # Update with result
             # remove temp keys if needed, or just overwrite
             final_item.update(res)
-            
+
+            if not _has_valid_preview(final_item):
+                fallback_image_path = _build_text_fallback_slide_image(
+                    final_item,
+                    img_dir / f"page_{idx:03d}.png",
+                    idx,
+                )
+                final_item["generated_img_path"] = fallback_image_path
+                final_item["mode"] = str(final_item.get("mode") or "generation_failed")
+                final_item["generation_failed"] = True
+                final_item["generation_error"] = str(final_item.get("error") or "slide generation failed")
+                final_item["error"] = str(final_item.get("error") or "slide generation failed")
+
             new_pagecontent.append(final_item)
-            gen_path = final_item.get("generated_img_path")
+            gen_path = str(final_item.get("generated_img_path") or "").strip()
             state.generated_pages.append(gen_path if gen_path else "")
 
         state.pagecontent = new_pagecontent

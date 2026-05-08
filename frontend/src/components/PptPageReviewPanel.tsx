@@ -18,6 +18,9 @@ type OutlineSection = {
   asset_ref?: string | null;
   ppt_img_path?: string;
   generated_img_path?: string;
+  generation_failed?: boolean;
+  generation_error?: string;
+  mode?: string;
 };
 
 type PptPageReview = {
@@ -138,7 +141,8 @@ export function PptPageReviewPanel({
   onGenerate,
   allConfirmed,
 }: PptPageReviewPanelProps) {
-  const hasDraftPages = activePptPreviewImages.length > 0;
+  const hasDraftPages = activePptPreviewImages.some(Boolean);
+  const currentSlideFailed = Boolean(activePptSlide?.slide.generation_failed || (activePptSlide?.slide.mode || '').includes('failed'));
   const totalSlides = (activeOutput.outline || []).length || activeOutput.page_count || 0;
   const currentPageNumber = activePptSlide?.slide.pageNum || (activePptSlide?.index ?? 0) + 1;
 
@@ -245,7 +249,7 @@ export function PptPageReviewPanel({
                   type="button"
                   className="thinkflow-generate-btn"
                   onClick={() => void onConfirmActivePptPage()}
-                  disabled={!activePptCurrentPreview || pptPageBusyAction !== '' || generatingOutput}
+                  disabled={!activePptCurrentPreview || currentSlideFailed || pptPageBusyAction !== '' || generatingOutput}
                 >
                   <CheckCircle2 size={14} />
                   {pptPageBusyAction === 'confirm'
@@ -258,6 +262,7 @@ export function PptPageReviewPanel({
               <div className="thinkflow-ppt-inline-feedback">
                 {pptPageBusyAction === 'regenerate' ? '正在调用后端重做当前页，请稍候...' : null}
                 {pptPageBusyAction === 'select_version' ? '正在切换历史版本，请稍候...' : null}
+                {currentSlideFailed ? '当前页上一次生成失败，先重新生成该页或整套页面，再确认。' : null}
                 {!pptPageBusyAction && activePptPageVersions.length > 0 ? `当前页已有 ${activePptPageVersions.length} 个历史版本，可在预览图下方直接切换。` : null}
               </div>
               {activePptCurrentReview?.confirmed ? (
@@ -269,23 +274,7 @@ export function PptPageReviewPanel({
       ) : (
         <div className="thinkflow-ppt-draft-empty">
           <div className="thinkflow-empty">
-            这一步还没有页面草稿。先生成一版整套页图，再逐页查看、改单页、确认通过。
-          </div>
-          <div className="thinkflow-ppt-outline-summary-list">
-            {(activeOutput.outline || []).map((item, index) => (
-              <article key={item.id || `${activeOutput.id}_${index}`} className="thinkflow-ppt-outline-summary-card">
-                <span className="thinkflow-ppt-outline-summary-index">第 {index + 1} 页</span>
-                <h4>{item.title || `页面 ${index + 1}`}</h4>
-                {item.layout_description ? <p>{item.layout_description}</p> : null}
-                {(item.key_points || item.bullets || []).length > 0 ? (
-                  <ul>
-                    {(item.key_points || item.bullets || []).slice(0, 4).map((point, pointIndex) => (
-                      <li key={`${item.id || index}_${pointIndex}`}>{point}</li>
-                    ))}
-                  </ul>
-                ) : null}
-              </article>
-            ))}
+            这一步还没有页面草稿。左侧是刚刚确认的 PPT 大纲，先生成一版整套页图，再逐页查看、改单页、确认通过。
           </div>
         </div>
       )}

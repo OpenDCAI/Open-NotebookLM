@@ -40,6 +40,9 @@ type OutlineSection = {
   asset_ref?: string | null;
   ppt_img_path?: string;
   generated_img_path?: string;
+  generation_failed?: boolean;
+  generation_error?: string;
+  mode?: string;
 };
 
 type PptOutputInfo = {
@@ -256,16 +259,39 @@ export function getPptStageLabel(stage: PptPipelineStage) {
   }
 }
 
+export type ExistingOutputOpenPlan = {
+  isPptOutput: boolean;
+  isPptOutlineChatStage: boolean;
+  workspaceMode: WorkspaceMode;
+  rightMode: 'doc' | 'outline';
+  shouldEnterOutputWorkspace: boolean;
+  shouldSyncPptOutputDocument: boolean;
+  shouldLoadSourceDocument: boolean;
+};
+
+export function getExistingOutputOpenPlan(output: Pick<ThinkFlowOutput, 'target_type' | 'pipeline_stage' | 'status'>): ExistingOutputOpenPlan {
+  const isPptOutput = output.target_type === 'ppt';
+  const isPptOutlineChatStage = isPptOutput && normalizePptStage(output as ThinkFlowOutput) === 'outline_ready';
+  return {
+    isPptOutput,
+    isPptOutlineChatStage,
+    workspaceMode: isPptOutlineChatStage ? 'normal' : isPptOutput ? 'output_focus' : 'output_immersive',
+    rightMode: isPptOutlineChatStage ? 'doc' : 'outline',
+    shouldEnterOutputWorkspace: !isPptOutlineChatStage,
+    shouldSyncPptOutputDocument: isPptOutlineChatStage,
+    shouldLoadSourceDocument: !isPptOutput,
+  };
+}
+
 export function getPptPreviewImages(output: ThinkFlowOutput | null): string[] {
   if (!output) return [];
-  const outlineImages = (output.outline || [])
-    .map((item) => item.generated_img_path || item.ppt_img_path || '')
-    .filter(Boolean);
-  if (outlineImages.length > 0) return outlineImages;
+  const outline = output.outline || [];
+  if (outline.length > 0) {
+    return outline.map((item) => item.generated_img_path || item.ppt_img_path || '');
+  }
   const resultPagecontent = Array.isArray(output.result?.pagecontent) ? output.result?.pagecontent : [];
   return resultPagecontent
-    .map((item: any) => item?.generated_img_path || item?.ppt_img_path || '')
-    .filter(Boolean);
+    .map((item: any) => item?.generated_img_path || item?.ppt_img_path || '');
 }
 
 export function buildOutlineSummaryFallback(outline: OutlineSection[]) {
@@ -333,6 +359,11 @@ export function getVisiblePptOutline(output: ThinkFlowOutput | null): OutlineSec
   if (Array.isArray(activeSession?.draft_outline) && activeSession!.draft_outline!.length > 0) {
     return activeSession!.draft_outline!;
   }
+  if (Array.isArray(output?.outline)) return output!.outline!;
+  return [];
+}
+
+export function getAppliedPptOutline(output: ThinkFlowOutput | null): OutlineSection[] {
   if (Array.isArray(output?.outline)) return output!.outline!;
   return [];
 }
@@ -648,7 +679,7 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     [activeOutputId, outputs],
   );
   const activePptStage = useMemo(() => normalizePptStage(activeOutput), [activeOutput]);
-  const activePptOutline = useMemo(() => getVisiblePptOutline(activeOutput), [activeOutput]);
+  const activePptOutline = useMemo(() => getAppliedPptOutline(activeOutput), [activeOutput]);
   const activePptDraftPending = useMemo(() => hasPendingOutlineDraft(activeOutput), [activeOutput]);
   const activeOutlineChatSession = useMemo(() => getActiveOutlineChatSession(activeOutput), [activeOutput]);
   const archivedOutlineChatSessions = useMemo(() => getArchivedOutlineChatSessions(activeOutput), [activeOutput]);
@@ -976,10 +1007,10 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
     setPptOutlinePendingMessages([]);
     setActivePptSlideIndex(0);
     setActiveOutputId(output.id);
-    const isPptDraftStage = output.target_type === 'ppt' && normalizePptStage(output) === 'outline_ready';
-    if (isPptDraftStage) {
-      setWorkspaceMode('normal');
-      setRightMode('doc');
+    const openPlan = getExistingOutputOpenPlan(output);
+    if (openPlan.isPptOutlineChatStage) {
+      setWorkspaceMode(openPlan.workspaceMode);
+      setRightMode(openPlan.rightMode);
       setRightPanelOpen(true);
     } else {
       setLeftTab('outputs');
@@ -1012,12 +1043,13 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
         },
       };
     });
-    if (isPptDraftStage) {
+    if (openPlan.shouldSyncPptOutputDocument) {
       await syncPptOutputDocument?.(output);
-    } else {
-      enterOutputWorkspace(output.target_type === 'ppt' ? 'output_focus' : 'output_immersive');
     }
-    if (output.document_id) {
+    if (openPlan.shouldEnterOutputWorkspace) {
+      enterOutputWorkspace(openPlan.workspaceMode);
+    }
+    if (openPlan.shouldLoadSourceDocument && output.document_id) {
       try {
         await loadDocumentDetail(output.document_id);
       } catch {}
@@ -1062,9 +1094,6 @@ export function usePptOutlineManager(deps: UsePptOutlineManagerDeps) {
       const nextOutput = data.output;
       const appliedSlideIndex = data.applied_slide_index;
       setOutputs((previous) => previous.map((item) => (item.id === nextOutput.id ? nextOutput : item)));
-      if (nextOutput.target_type === 'ppt') {
-        await syncPptOutputDocument?.(nextOutput);
-      }
       setPptOutlinePendingMessages([]);
 
       // Auto-navigate to affected slide

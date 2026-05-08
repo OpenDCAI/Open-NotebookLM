@@ -94,7 +94,7 @@ export function PptOutlinePanel({
           <h4>{getPptStageLabel(activePptStage)}</h4>
           <p>
             {activePptDraftPending
-              ? '当前正在预览一版候选修改。它还没有覆盖正式产出文档，只有点击"应用候选修改"后才会真正生效。'
+              ? '当前有一版候选修改等待确认。右侧仍显示正式产出文档，只有点击"应用候选修改"后才会真正生效。'
               : '这一步先确认产出信息、风格信息和整套页级大纲。中间对话会先生成候选修改，应用后再决定是否进入逐页生成。'}
           </p>
         </div>
@@ -151,8 +151,8 @@ export function PptOutlinePanel({
             <div className="thinkflow-ppt-slide-editor">
               <div className="thinkflow-ppt-slide-editor-head">
                 <div>
-                  <span className="thinkflow-output-workspace-kicker">{activePptDraftPending ? '候选大纲预览' : '单页编辑'}</span>
-                  <h4>{activePptDraftPending ? `正在预览第 ${selectedSlide.pageNum || selectedSlideIndex + 1} 页候选内容` : `正在编辑第 ${selectedSlide.pageNum || selectedSlideIndex + 1} 页`}</h4>
+                  <span className="thinkflow-output-workspace-kicker">{activePptDraftPending ? '正式大纲' : '单页编辑'}</span>
+                  <h4>{activePptDraftPending ? `候选未应用，当前仍是第 ${selectedSlide.pageNum || selectedSlideIndex + 1} 页正式内容` : `正在编辑第 ${selectedSlide.pageNum || selectedSlideIndex + 1} 页`}</h4>
                 </div>
               </div>
               <input
@@ -195,7 +195,7 @@ export function PptOutlinePanel({
                 placeholder="可选：来源素材引用（asset_ref）"
                 disabled={activePptDraftPending}
               />
-              {activePptDraftPending ? <div className="thinkflow-doc-check-tip">当前页面展示的是候选修改。若认可这版内容，请在对话区点击"应用候选修改"。</div> : null}
+              {activePptDraftPending ? <div className="thinkflow-doc-check-tip">候选修改只在对话区展示差异。若认可这版内容，请在对话区点击"应用候选修改"。</div> : null}
             </div>
           </div>
         ) : null}

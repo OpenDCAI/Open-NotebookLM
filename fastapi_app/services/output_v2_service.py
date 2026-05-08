@@ -843,6 +843,9 @@ class OutputV2Service:
         ):
             if item.get(key):
                 normalized[key] = item.get(key)
+        for key in ("generation_failed", "generation_error", "error", "mode", "page_idx"):
+            if key in item:
+                normalized[key] = item.get(key)
         return normalized
 
     def _normalize_ppt_outline(self, outline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:

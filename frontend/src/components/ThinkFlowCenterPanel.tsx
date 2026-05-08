@@ -5,6 +5,7 @@ import type {
   ThinkFlowDocument,
   ThinkFlowMessage,
   ThinkFlowOutput,
+  OutlineSection,
   WorkspaceMode,
   ChatMode,
 } from './thinkflow-types';
@@ -15,6 +16,7 @@ type ThinkFlowCenterPanelProps = {
   workspaceMode: WorkspaceMode;
   rightPanelOpen: boolean;
   activeOutput: ThinkFlowOutput | null;
+  activePptSlideIndex?: number;
   chatTitle?: string;
   chatPlaceholder?: string;
   isOutlineChatMode?: boolean;
@@ -41,6 +43,7 @@ type ThinkFlowCenterPanelProps = {
   toggleBoundDoc: (docId: string) => void;
   openRightPanelForDocument: () => void;
   openRightPanelForActiveOutput: () => void;
+  onSetActivePptSlideIndex?: (index: number) => void;
   onNewConversation: () => void;
   // ─── 表格分析模式 ────────────────────────────────────────────────────────
   chatMode: ChatMode;
@@ -55,6 +58,7 @@ export function ThinkFlowCenterPanel({
   workspaceMode,
   rightPanelOpen,
   activeOutput,
+  activePptSlideIndex,
   chatTitle,
   chatPlaceholder,
   isOutlineChatMode = false,
@@ -81,6 +85,7 @@ export function ThinkFlowCenterPanel({
   toggleBoundDoc,
   openRightPanelForDocument,
   openRightPanelForActiveOutput,
+  onSetActivePptSlideIndex,
   onNewConversation,
   chatMode,
   onChatModeChange,
@@ -98,6 +103,70 @@ export function ThinkFlowCenterPanel({
     }
     return `${doc.title} / 全文`;
   };
+
+  const isPptWorkbenchOutline = workspaceMode === 'output_focus' && activeOutput?.target_type === 'ppt';
+
+  const renderPptWorkbenchOutline = () => {
+    const outline = (activeOutput?.outline || []) as OutlineSection[];
+    return (
+      <div className="thinkflow-ppt-left-outline">
+        <div className="thinkflow-ppt-left-outline-head">
+          <span className="thinkflow-output-workspace-kicker">PPT 大纲</span>
+          <h3>{activeOutput?.title || '当前 PPT'}</h3>
+          <p>这里展示刚刚确认的大纲。右侧工作台保持原布局，用于逐页生成、核对和确认。</p>
+          <div className="thinkflow-ppt-left-outline-meta">
+            <strong>{outline.length} 页</strong>
+            <span>来自本轮 PPT 对话</span>
+          </div>
+        </div>
+        <div className="thinkflow-ppt-left-outline-list">
+          {outline.length > 0 ? outline.map((item, index) => {
+            const points = item.key_points || item.bullets || [];
+            const isActive = typeof activePptSlideIndex === 'number' && activePptSlideIndex === index;
+            return (
+              <button
+                key={item.id || `${activeOutput?.id || 'ppt'}_${index}`}
+                type="button"
+                className={`thinkflow-ppt-left-outline-card ${isActive ? 'is-active' : ''}`}
+                onClick={() => onSetActivePptSlideIndex?.(index)}
+              >
+                <div className="thinkflow-ppt-left-outline-card-top">
+                  <span className="thinkflow-ppt-outline-summary-index">第 {item.pageNum || index + 1} 页</span>
+                  <span>{isActive ? '当前页' : '查看'}</span>
+                </div>
+                <h4>{item.title || `页面 ${index + 1}`}</h4>
+                {item.layout_description ? <p>{item.layout_description}</p> : null}
+                {points.length > 0 ? (
+                  <ul>
+                    {points.slice(0, 4).map((point, pointIndex) => (
+                      <li key={`${item.id || index}_${pointIndex}`}>{point}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="thinkflow-empty">这页还没有要点。</div>
+                )}
+              </button>
+            );
+          }) : (
+            <div className="thinkflow-empty">暂无可展示的大纲内容。</div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  if (isPptWorkbenchOutline) {
+    return (
+      <main className={`thinkflow-center-panel ${workspaceMode === 'output_focus' ? 'is-output-focus' : ''}`}>
+        <div className="thinkflow-chat-header-bar">
+          <div className="thinkflow-chat-header-left">
+            <span>📋 PPT 大纲</span>
+          </div>
+        </div>
+        {renderPptWorkbenchOutline()}
+      </main>
+    );
+  }
 
   return (
     <main className={`thinkflow-center-panel ${workspaceMode === 'output_immersive' ? 'is-output-immersive' : ''} ${workspaceMode === 'output_focus' ? 'is-output-focus' : ''}`}>

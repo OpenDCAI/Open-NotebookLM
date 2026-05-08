@@ -119,6 +119,10 @@ export function usePptPageReviewManager(deps: PptPageReviewManagerDeps) {
       ''
     );
   }, [activePptPreviewImages, activePptSlide]);
+  const activePptCurrentFailed = useMemo(() => {
+    if (!activePptSlide) return false;
+    return Boolean(activePptSlide.slide.generation_failed || (activePptSlide.slide.mode || '').includes('failed'));
+  }, [activePptSlide]);
 
   useEffect(() => {
     if (!pptPageStatus) return;
@@ -223,6 +227,10 @@ export function usePptPageReviewManager(deps: PptPageReviewManagerDeps) {
 
   const confirmActivePptPage = async () => {
     if (!activeOutput || activeOutput.target_type !== 'ppt' || !activePptSlide) return;
+    if (activePptCurrentFailed) {
+      setGlobalError('当前页上一次生成失败，请先重新生成该页或整套页面。');
+      return;
+    }
     if (!activePptCurrentPreview) {
       setGlobalError('当前页还没有生成结果，无法确认。');
       return;

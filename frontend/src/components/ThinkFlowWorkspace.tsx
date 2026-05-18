@@ -1,7 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
 import {
   ArrowRight,
   BarChart3,
@@ -17,6 +15,7 @@ import {
   LayoutGrid,
   Mic2,
   PanelRightOpen,
+  Play,
   Plus,
   RefreshCw,
   Save,
@@ -24,6 +23,7 @@ import {
   Sparkles,
   Trash2,
   Upload,
+  Video,
   X,
 } from 'lucide-react';
 
@@ -34,54 +34,15 @@ import { ThinkFlowAddSourceModal } from './ThinkFlowAddSourceModal';
 import { ThinkFlowCenterPanel } from './ThinkFlowCenterPanel';
 import { ThinkFlowFlashcardStudy } from './ThinkFlowFlashcardStudy';
 import { ThinkFlowLeftSidebar } from './ThinkFlowLeftSidebar';
-import { ThinkFlowMindmapPreview } from './ThinkFlowMindmapPreview';
+import { MermaidPreview } from './MermaidPreview';
 import { ThinkFlowOutputContextModal } from './ThinkFlowOutputContextModal';
 import { ThinkFlowQuizStudy } from './ThinkFlowQuizStudy';
 import { ThinkFlowTopBar } from './ThinkFlowTopBar';
 import { ThinkFlowRightPanel } from './ThinkFlowRightPanel';
-import { PptOutlinePanel, PptLockedOutlinePreview } from './PptOutlinePanel';
-import { PptPageReviewPanel, PptGeneratedResultPanel } from './PptPageReviewPanel';
-import {
-  diffPptOutline,
-  getPptOutlineDiffKindLabel,
-} from './pptOutlineDiff';
-import {
-  buildPushSourceSummary,
-  canUsePushTransform,
-  coercePushTransform,
-  detectMarkdownModuleHeadingLevel,
-  formatThinkFlowDateTime,
-  formatThinkFlowTime,
-  getDefaultPushTarget,
-  normalizeFocusState,
-  parseMarkdownSections,
-  type StructuredPushTargetType,
-  type StructuredPushTransform,
-  type ThinkFlowFocusState,
-} from './thinkflow-document-utils';
 import type { ChatMode } from './thinkflow-types';
-import { splitSummaryCards } from './summaryCards';
 import type { NotebookContext } from './TableAnalysisPanel';
-import { usePptPageReviewManager } from './usePptPageReviewManager';
-import { useConversationSourceRefs, type ConversationSourceRef } from './useConversationSourceRefs';
-import { filterMaterialListDocuments, findPptOutputDocumentId, resolvePptDocSlideIndex } from './pptOutputDocuments';
-import { buildPptOutputDocumentContent } from './pptOutputDocumentContent';
-import {
-  usePptOutlineManager,
-  normalizePptStage,
-  getPptStageLabel,
-  getPptPreviewImages,
-  buildOutlineSummaryFallback,
-  getOutlineChatSessions,
-  getActiveOutlineChatSession,
-  getArchivedOutlineChatSessions,
-  getVisiblePptOutline,
-  hasPendingOutlineDraft,
-  buildOutlineChatMessages,
-} from './usePptOutlineManager';
 
 import './ThinkFlowWorkspace.css';
-import 'katex/dist/katex.min.css';
 
 const DEFAULT_USER = { id: 'local', email: '' };
 const PANEL_GUIDE_STORAGE_KEY = 'thinkflow_panel_guides_v1';
@@ -94,7 +55,7 @@ type Notebook = {
 
 type ThinkFlowMessage = {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant';
   content: string;
   time: string;
   pushed?: boolean;
@@ -103,24 +64,6 @@ type ThinkFlowMessage = {
   sourceMapping?: Record<string, string>;
   sourcePreviewMapping?: Record<string, string>;
   sourceReferenceMapping?: Record<string, CitationReference>;
-  meta?: Record<string, any>;
-};
-
-type OutlineDirective = {
-  id: string;
-  scope?: 'global' | 'slide';
-  type?: string;
-  label: string;
-  instruction?: string;
-  action?: 'set' | 'remove';
-  value?: string;
-  page_num?: number | null;
-};
-
-type OutlineIntentSummary = {
-  mode?: 'global' | 'slide' | 'mixed' | 'none';
-  global_directives?: OutlineDirective[];
-  slide_targets?: { page_num: number; instruction: string }[];
 };
 
 type CitationReference = {
@@ -136,11 +79,6 @@ type ThinkFlowDocument = {
   content?: string;
   created_at: string;
   updated_at: string;
-  document_type?: 'summary_doc' | 'output_doc';
-  focus_state?: ThinkFlowFocusState;
-  stash_items?: DocumentStashItem[];
-  change_logs?: DocumentChangeLog[];
-  metadata?: Record<string, any>;
   version_count?: number;
   status_tokens?: Record<string, number>;
   push_traces?: DocumentPushTrace[];
@@ -161,8 +99,6 @@ type DocumentSourceRef = {
 type DocumentPushTrace = {
   id: string;
   mode?: string;
-  transform?: StructuredPushTransform;
-  target?: Record<string, any>;
   title?: string;
   prompt?: string;
   created_at: string;
@@ -172,24 +108,6 @@ type DocumentPushTrace = {
   text_preview?: string;
   block_text?: string;
   source_refs?: DocumentSourceRef[];
-};
-
-type DocumentStashItem = {
-  id: string;
-  content: string;
-  source_refs?: DocumentSourceRef[];
-  created_at: string;
-  updated_at?: string;
-};
-
-type DocumentChangeLog = {
-  id: string;
-  timestamp: string;
-  doc_id: string;
-  type: string;
-  summary: string;
-  related_conv?: string | null;
-  metadata?: Record<string, any>;
 };
 
 type ThinkFlowVersion = {
@@ -211,94 +129,56 @@ type OutlineSection = {
   asset_ref?: string | null;
   ppt_img_path?: string;
   generated_img_path?: string;
-  generation_failed?: boolean;
-  generation_error?: string;
-  mode?: string;
-};
-
-type PptOutputInfo = {
-  type?: string;
-  title?: string;
-  page_count?: number;
-  audience?: string;
-  source_names?: string[];
-  bound_document_titles?: string[];
-  stage_label?: string;
-};
-
-type PptStyleInfo = {
-  preset?: string;
-  label?: string;
-  tone?: string;
-  visual_style?: string;
-  audience_assumption?: string;
-  supplement_prompt?: string[];
+  script_text?: string;
 };
 
 type WorkspaceItemType = 'summary' | 'guidance';
 type PanelGuideKey = 'summary' | 'doc' | 'guidance';
 type WorkspaceMode = 'normal' | 'output_focus' | 'output_immersive';
-type PptPipelineStage = 'outline_ready' | 'pages_ready' | 'generated';
+type PptPipelineStage = 'outline_ready' | 'pages_ready' | 'generated' | 'pending';
 
 type ConversationHistoryMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   created_at?: string;
-  fileAnalyses?: any[];
-  sourceMapping?: Record<string, string>;
-  sourcePreviewMapping?: Record<string, string>;
-  sourceReferenceMapping?: Record<string, CitationReference>;
-};
-
-type ConversationMessageDraft = {
-  role: 'user' | 'assistant';
-  content: string;
-  fileAnalyses?: any[];
-  sourceMapping?: Record<string, string>;
-  sourcePreviewMapping?: Record<string, string>;
-  sourceReferenceMapping?: Record<string, CitationReference>;
-};
-
-type OutlineChatSession = {
-  id: string;
-  status?: 'active' | 'applied' | 'archived';
-  messages?: ConversationHistoryMessage[];
-  draft_outline?: OutlineSection[];
-  draft_output_info?: PptOutputInfo;
-  draft_style_info?: PptStyleInfo;
-  draft_global_directives?: OutlineDirective[];
-  intent_summary?: OutlineIntentSummary;
-  summary?: string;
-  has_pending_changes?: boolean;
-  change_summary?: string;
-  created_at?: string;
-  updated_at?: string;
-  applied_at?: string;
-};
-
-type ConversationListItem = {
-  id: string;
-  title: string;
-  notebook_id?: string;
-  created_at?: string;
-  updated_at?: string;
 };
 
 type ThinkFlowWorkspaceItem = {
   id: string;
   type: WorkspaceItemType;
-  summary_kind?: 'item' | 'all';
   title: string;
   content?: string;
   source_refs?: DocumentSourceRef[];
-  source_summary_item_ids?: string[];
   capture_count?: number;
   created_at: string;
   updated_at: string;
 };
 
-type OutputType = 'ppt' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
+type OutputType = 'ppt' | 'video' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
+
+type Paper2VideoConfig = {
+  language: string;
+  avatar_mode: 'none' | 'system' | 'custom';
+  avatar_id: string;
+  avatar_upload_token?: string;
+};
+
+type Paper2VideoPresetItem = {
+  id: string;
+  label: string;
+  preview_url?: string;
+  tts_model?: string;
+};
+
+type Paper2VideoOptionsPayload = {
+  avatars: Paper2VideoPresetItem[];
+  voices: Paper2VideoPresetItem[];
+  tts_models: string[];
+  languages: Array<{ id: string; label: string }>;
+  defaults: Paper2VideoConfig;
+  cosyvoice_voice_list_url: string;
+};
 
 type ThinkFlowOutput = {
   id: string;
@@ -310,7 +190,6 @@ type ThinkFlowOutput = {
   prompt?: string;
   page_count?: number;
   outline?: OutlineSection[];
-  outline_global_directives?: OutlineDirective[];
   result?: Record<string, any>;
   guidance_item_ids?: string[];
   guidance_snapshot_text?: string;
@@ -320,16 +199,8 @@ type ThinkFlowOutput = {
   bound_document_titles?: string[];
   result_path?: string;
   enable_images?: boolean;
-  outline_chat_history?: ConversationHistoryMessage[];
-  outline_chat_sessions?: OutlineChatSession[];
-  outline_chat_active_session_id?: string;
-  outline_chat_draft_outline?: OutlineSection[];
-  outline_chat_draft_output_info?: PptOutputInfo;
-  outline_chat_draft_style_info?: PptStyleInfo;
-  outline_chat_draft_global_directives?: OutlineDirective[];
-  outline_chat_has_pending_changes?: boolean;
-  output_info?: PptOutputInfo;
-  style_info?: PptStyleInfo;
+  language?: string;
+  paper2video_config?: Paper2VideoConfig;
   page_reviews?: PptPageReview[];
   page_versions?: PptPageVersion[];
   created_at: string;
@@ -406,6 +277,7 @@ type OutputContextState = {
 };
 
 type PptSourceLockIntent = {
+  storyboardTarget: 'ppt' | 'video';
   outputDocumentId: string;
   outputDocumentTitle: string;
   outputTitle: string;
@@ -417,10 +289,15 @@ type PptSourceLockIntent = {
   sourceNames: string[];
   loading?: boolean;
   errorMessage?: string;
+  videoConfig?: Paper2VideoConfig;
+  paper2videoOptions?: Paper2VideoOptionsPayload | null;
+  customAvatarFile?: File | null;
+  customAvatarPreviewUrl?: string;
+  submitting?: boolean;
 };
 
 type DirectOutputIntent = {
-  targetType: Exclude<OutputType, 'ppt'>;
+  targetType: Exclude<OutputType, 'ppt' | 'video'>;
   outputDocumentId: string;
   outputDocumentTitle: string;
   outputTitle: string;
@@ -455,10 +332,6 @@ type PushPopoverState = {
   y: number;
   preset: PushPreset;
   destinationType: PushDestinationType;
-  targetType: StructuredPushTargetType;
-  targetSectionId: string;
-  newSectionTitle: string;
-  transform: StructuredPushTransform;
   targetDocId: string;
   targetItemId: string;
   newTitle: string;
@@ -467,6 +340,14 @@ type PushPopoverState = {
   prompt: string;
   sourceContent: string;
   sourceEntries: PushSourceEntry[];
+};
+
+type SelectionToolbarState = {
+  show: boolean;
+  x: number;
+  y: number;
+  messageId: string;
+  content: string;
 };
 
 type ParsedWorkspaceSection = {
@@ -483,12 +364,17 @@ const outputButtons: Array<{
   icon: React.ReactNode;
 }> = [
   { type: 'ppt', label: 'PPT', icon: <LayoutGrid size={14} /> },
+  { type: 'video', label: '视频', icon: <Video size={14} /> },
   { type: 'report', label: '报告', icon: <FileText size={14} /> },
   { type: 'mindmap', label: '导图', icon: <Brain size={14} /> },
   { type: 'podcast', label: '播客', icon: <Mic2 size={14} /> },
   { type: 'flashcard', label: '卡片', icon: <BookOpen size={14} /> },
   { type: 'quiz', label: '测验', icon: <BarChart3 size={14} /> },
 ];
+
+function isStoryboardOutputType(type: OutputType | string | undefined | null): type is 'ppt' | 'video' {
+  return type === 'ppt' || type === 'video';
+}
 
 function getNotebookTitle(notebook: Notebook): string {
   return notebook?.title || notebook?.name || '未命名笔记本';
@@ -529,6 +415,8 @@ function outputEmoji(type: OutputType) {
   switch (type) {
     case 'ppt':
       return '📊';
+    case 'video':
+      return '🎬';
     case 'report':
       return '📝';
     case 'mindmap':
@@ -548,18 +436,95 @@ function outputLabel(type: OutputType) {
   return outputButtons.find((item) => item.type === type)?.label || type;
 }
 
-function buildConversationHistoryPayload(messages: ThinkFlowMessage[]): ConversationHistoryMessage[] {
-  return messages
-    .filter((item) => item.id !== 'welcome')
-    .filter((item) => item.role === 'user' || item.role === 'assistant')
-    .slice(-12)
-    .map((item, index) => ({
-      id: item.id || `conversation_${index}`,
-      role: item.role === 'user' ? 'user' : 'assistant',
-      content: String(item.content || '').trim(),
-      created_at: undefined,
-    }))
-    .filter((item) => item.content);
+function buildDefaultVideoConfig(options?: Paper2VideoOptionsPayload | null): Paper2VideoConfig {
+  const defaults = options?.defaults;
+  return {
+    language: defaults?.language || 'zh',
+    avatar_mode: defaults?.avatar_mode || 'none',
+    avatar_id: defaults?.avatar_id || options?.avatars?.[0]?.id || 'avatar1',
+    avatar_upload_token: '',
+  };
+}
+
+async function fetchPaper2videoPresetBlobUrl(previewUrl: string): Promise<string> {
+  const response = await apiFetch(previewUrl);
+  if (!response.ok) {
+    throw new Error('试听资源加载失败');
+  }
+  return URL.createObjectURL(await response.blob());
+}
+
+async function loadPaper2videoPresetPreviewUrls(options: Paper2VideoOptionsPayload): Promise<Record<string, string>> {
+  const urls: Record<string, string> = {};
+  const tasks: Array<Promise<void>> = [];
+  const queue = options.avatars.map((avatar) => ({
+    kind: 'avatar' as const,
+    id: avatar.id,
+    preview_url: avatar.preview_url,
+  }));
+  for (const item of queue) {
+    if (!item.preview_url) continue;
+    tasks.push(
+      (async () => {
+        try {
+          urls[`${item.kind}:${item.id}`] = await fetchPaper2videoPresetBlobUrl(item.preview_url!);
+        } catch {
+          /* ignore preview failures */
+        }
+      })(),
+    );
+  }
+  await Promise.all(tasks);
+  return urls;
+}
+
+function paper2videoPayloadFromConfig(config: Paper2VideoConfig) {
+  return {
+    language: config.language,
+    avatar_mode: config.avatar_mode,
+    avatar_id: config.avatar_mode === 'system' ? config.avatar_id : undefined,
+    avatar_upload_token: config.avatar_mode === 'custom' ? config.avatar_upload_token || undefined : undefined,
+  };
+}
+
+function normalizePptStage(output: ThinkFlowOutput | null): PptPipelineStage {
+  if (!output) return 'outline_ready';
+  if (output.target_type === 'video' && (output.pipeline_stage === 'pending' || output.status === 'pending')) {
+    return 'outline_ready';
+  }
+  if (output.pipeline_stage === 'pending' || output.status === 'pending') return 'pending';
+  if (output.pipeline_stage === 'generated' || output.status === 'generated') return 'generated';
+  if (output.pipeline_stage === 'pages_ready') return 'pages_ready';
+  return 'outline_ready';
+}
+
+function getStoryboardStageLabel(targetType: OutputType, stage: PptPipelineStage) {
+  const isVideo = targetType === 'video';
+  if (stage === 'pending') {
+    return isVideo ? '视频（旧版排队）' : '等待中';
+  }
+  switch (stage) {
+    case 'outline_ready':
+      return isVideo ? '分镜与来源' : '大纲确认';
+    case 'pages_ready':
+      return isVideo ? '口播稿与分镜确认' : '逐页生成确认';
+    case 'generated':
+      return '生成结果';
+    default:
+      return isVideo ? '视频' : 'PPT';
+  }
+}
+
+function getPptPreviewImages(output: ThinkFlowOutput | null): string[] {
+  if (!output) return [];
+  const outlineImages = (output.outline || [])
+    .map((item) => item.generated_img_path || item.ppt_img_path || '')
+    .filter(Boolean);
+  if (outlineImages.length > 0) return outlineImages;
+  const resultPagecontent = Array.isArray(output.result?.pagecontent) ? output.result?.pagecontent : [];
+  return resultPagecontent
+    .map((item: any) => item?.generated_img_path || item?.ppt_img_path || '')
+    .filter(Boolean);
 }
 
 function workspaceItemLabel(type: WorkspaceItemType) {
@@ -684,9 +649,9 @@ function getCitationMeta(message: ThinkFlowMessage, sourceNumber: string) {
   return { reference, title, preview };
 }
 
-function splitTextWithCitations(text: string): Array<{ type: 'text' | 'citation'; value: string[] }> {
-  const pattern = /\[((?:\d{1,3}\s*[,，]\s*)*\d{1,3})\]/g;
-  const parts: Array<{ type: 'text' | 'citation'; value: string[] }> = [];
+function splitTextWithCitations(text: string): Array<{ type: 'text' | 'citation'; value: string }> {
+  const pattern = /\[(\d{1,3})\]/g;
+  const parts: Array<{ type: 'text' | 'citation'; value: string }> = [];
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -694,13 +659,7 @@ function splitTextWithCitations(text: string): Array<{ type: 'text' | 'citation'
     if (match.index > lastIndex) {
       parts.push({ type: 'text', value: text.slice(lastIndex, match.index) });
     }
-    parts.push({
-      type: 'citation',
-      value: match[1]
-        .split(/[,，]/)
-        .map((item) => item.trim())
-        .filter(Boolean),
-    });
+    parts.push({ type: 'citation', value: match[1] });
     lastIndex = match.index + match[0].length;
   }
 
@@ -744,11 +703,14 @@ function splitTextWithStatusTokens(text: string): Array<{ type: 'text' | 'status
   return parts.length > 0 ? parts : [{ type: 'text', value: text }];
 }
 
-function buildDocumentSections(content: string, traces: DocumentPushTrace[], headingLevel = 2) {
+function buildDocumentSections(content: string, traces: DocumentPushTrace[]) {
   const lines = String(content || '').split('\n');
-  const parsedSections = parseMarkdownSections(content, headingLevel);
+  const headingStarts: number[] = [];
+  lines.forEach((line, index) => {
+    if (/^##\s+/.test(line.trim())) headingStarts.push(index);
+  });
 
-  if (parsedSections.length === 0) {
+  if (headingStarts.length === 0) {
     const trimmed = content.trim();
     return trimmed
       ? [
@@ -765,14 +727,13 @@ function buildDocumentSections(content: string, traces: DocumentPushTrace[], hea
 
   const sections: Array<{
     id: string;
-    heading?: string;
     content: string;
     lineStart: number;
     lineEnd: number;
     traces: DocumentPushTrace[];
   }> = [];
 
-  const firstHeading = parsedSections[0].lineStart - 1;
+  const firstHeading = headingStarts[0];
   if (firstHeading > 0) {
     const preamble = lines.slice(0, firstHeading).join('\n').trim();
     if (preamble) {
@@ -786,55 +747,22 @@ function buildDocumentSections(content: string, traces: DocumentPushTrace[], hea
     }
   }
 
-  parsedSections.forEach((section) => {
+  headingStarts.forEach((start, index) => {
+    const nextStart = headingStarts[index + 1] ?? lines.length;
+    const chunk = lines.slice(start, nextStart).join('\n').trim();
+    if (!chunk) return;
+    const lineStart = start + 1;
+    const lineEnd = nextStart;
     sections.push({
-      id: section.id,
-      heading: section.heading,
-      content: section.content,
-      lineStart: section.lineStart,
-      lineEnd: section.lineEnd,
-      traces: traces.filter((trace) => trace.line_start <= section.lineEnd && trace.line_end >= section.lineStart),
+      id: `section_${lineStart}`,
+      content: chunk,
+      lineStart,
+      lineEnd,
+      traces: traces.filter((trace) => trace.line_start <= lineEnd && trace.line_end >= lineStart),
     });
   });
 
   return sections;
-}
-
-type PptOutlineDocCard = {
-  pageNum: number;
-  title: string;
-  body: string;
-};
-
-function parsePptOutlineDocCards(markdown: string): { intro: string; cards: PptOutlineDocCard[] } {
-  const lines = String(markdown || '').split(/\r?\n/u);
-  const cards: PptOutlineDocCard[] = [];
-  const introLines: string[] = [];
-  let current: PptOutlineDocCard | null = null;
-  const headingPattern = /^###\s*第\s*(\d+)\s*页[：:]\s*(.+)$/u;
-
-  for (const line of lines) {
-    if (/^##\s+PPT\s*大纲\s*$/u.test(line.trim())) {
-      continue;
-    }
-    const match = line.match(headingPattern);
-    if (match) {
-      if (current) cards.push({ ...current, body: current.body.trim() });
-      current = {
-        pageNum: Number(match[1]),
-        title: match[2].trim() || `页面 ${match[1]}`,
-        body: '',
-      };
-      continue;
-    }
-    if (current) {
-      current.body = `${current.body}${current.body ? '\n' : ''}${line}`;
-    } else {
-      introLines.push(line);
-    }
-  }
-  if (current) cards.push({ ...current, body: current.body.trim() });
-  return { intro: introLines.join('\n').trim(), cards };
 }
 
 const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: () => void }) => {
@@ -862,12 +790,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
 
   const [documents, setDocuments] = useState<ThinkFlowDocument[]>([]);
   const [activeDocumentId, setActiveDocumentId] = useState('');
-  const [conversationActiveDocumentId, setConversationActiveDocumentId] = useState('');
   const [documentTitle, setDocumentTitle] = useState('');
   const [documentContent, setDocumentContent] = useState('');
-  const [documentFocusState, setDocumentFocusState] = useState<ThinkFlowFocusState>(() => normalizeFocusState());
-  const [documentStashItems, setDocumentStashItems] = useState<DocumentStashItem[]>([]);
-  const [documentChangeLogs, setDocumentChangeLogs] = useState<DocumentChangeLog[]>([]);
   const [documentSaving, setDocumentSaving] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [showVersionPanel, setShowVersionPanel] = useState(false);
@@ -881,7 +805,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const [guidanceContent, setGuidanceContent] = useState('');
   const [summaryEditMode, setSummaryEditMode] = useState(false);
   const [workspaceSaving, setWorkspaceSaving] = useState<WorkspaceItemType | null>(null);
-  const [rebuildingAllSummary, setRebuildingAllSummary] = useState(false);
   const [selectedGuidanceIds, setSelectedGuidanceIds] = useState<string[]>([]);
   const [panelGuideVisibility, setPanelGuideVisibility] = useState<Record<PanelGuideKey, boolean>>(() => {
     if (typeof window === 'undefined') {
@@ -901,33 +824,43 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }
   });
 
-  const welcomeMessages = useMemo<ThinkFlowMessage[]>(
-    () => [
-      {
-        id: 'welcome',
-        role: 'assistant',
-        content: '请先围绕左侧已选素材提问。对话是主线，你可以按需把某个回答、某组问答或多轮内容沉淀成摘要、整理进文档，或者加入产出指导。',
-        time: formatThinkFlowTime(new Date()),
-      },
-    ],
-    [],
-  );
-  const [chatMessages, setChatMessages] = useState<ThinkFlowMessage[]>(welcomeMessages);
+  const [outputs, setOutputs] = useState<ThinkFlowOutput[]>([]);
+  const [activeOutputId, setActiveOutputId] = useState('');
+  const [outlineSaving, setOutlineSaving] = useState(false);
+  const [generatingOutline, setGeneratingOutline] = useState<OutputType | null>(null);
+  const [generatingOutput, setGeneratingOutput] = useState(false);
+  const [pptOutlineFeedback, setPptOutlineFeedback] = useState('');
+  const [pptRefiningOutline, setPptRefiningOutline] = useState(false);
+  const [activePptSlideIndex, setActivePptSlideIndex] = useState<number>(0);
+  const [pptOutlineReadonlyOpen, setPptOutlineReadonlyOpen] = useState(false);
+  /** 视频成片阶段：主预览区在「成片」与「分镜图」之间切换 */
+  const [videoPreviewTab, setVideoPreviewTab] = useState<'final' | 'slides'>('final');
+  const [pptPagePrompt, setPptPagePrompt] = useState('');
+  const [pptPageBusyAction, setPptPageBusyAction] = useState<'regenerate' | 'confirm' | 'select_version' | ''>('');
+  const [pptPageStatus, setPptPageStatus] = useState('');
+  const [outputContexts, setOutputContexts] = useState<Record<string, OutputContextState>>({});
+  const [pptSourceLockIntent, setPptSourceLockIntent] = useState<PptSourceLockIntent | null>(null);
+  const [paper2videoPresetPreviewUrls, setPaper2videoPresetPreviewUrls] = useState<Record<string, string>>({});
+  const [directOutputIntent, setDirectOutputIntent] = useState<DirectOutputIntent | null>(null);
+
+  const [chatMessages, setChatMessages] = useState<ThinkFlowMessage[]>([
+    {
+      id: 'welcome',
+      role: 'assistant',
+      content: '请先围绕左侧已选素材提问。对话是主线，你可以按需把某个回答、某组问答或多轮内容沉淀成摘要、整理进文档，或者加入产出指导。',
+      time: new Date().toLocaleTimeString(),
+    },
+  ]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [boundDocIds, setBoundDocIds] = useState<string[]>([]);
-  const {
-    conversationSourceRefs,
-    setConversationSourceRefs,
-    clearConversationSourceRefs,
-  } = useConversationSourceRefs();
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
   const [multiSelectPrompt, setMultiSelectPrompt] = useState('');
   const [globalError, setGlobalErrorRaw] = useState('');
   const [captureFeedback, setCaptureFeedback] = useState('');
 
   // ── Toast system ──────────────────────────────────────────────────────────
-  type ToastKind = 'error' | 'success' | 'info' | 'warning';
+  type ToastKind = 'error' | 'success' | 'info';
   const [toasts, setToasts] = useState<Array<{ id: number; kind: ToastKind; message: string }>>([]);
   const toastIdRef = useRef(0);
 
@@ -943,33 +876,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     if (msg) pushToast(msg, 'error', 5000);
   }, [pushToast]);
   // ─────────────────────────────────────────────────────────────────────────
-
-  // ─── Refs for late-defined deps passed to usePptOutlineManager ───────────
-  const enterOutputWorkspaceRef = useRef<(mode?: WorkspaceMode) => void>(() => {});
-  const buildOutputContextSnapshotRef = useRef<(params: {
-    outputId: string;
-    targetType: OutputType;
-    documentId?: string;
-    guidanceItemIds?: string[];
-    selectedSourceIds?: string[];
-    boundDocumentIds?: string[];
-  }) => OutputContextSnapshot>(() => ({} as OutputContextSnapshot));
-  const ensureDocumentContentRef = useRef<(documentId: string) => Promise<ThinkFlowDocument | null>>(async () => null);
-  const loadDocumentDetailRef = useRef<(documentId: string) => Promise<ThinkFlowDocument>>(async () => ({} as ThinkFlowDocument));
-  const pptOutputDocumentIdsRef = useRef<Record<string, string>>({});
-  const pptOutputDocumentSyncLocksRef = useRef<Record<string, Promise<void>>>({});
-  const syncPptOutputDocumentRef = useRef<(output: ThinkFlowOutput) => Promise<void>>(async () => {});
-  // ─────────────────────────────────────────────────────────────────────────
-
   const [pushSubmitting, setPushSubmitting] = useState(false);
   const [pushStatusText, setPushStatusText] = useState('');
   const [pushError, setPushError] = useState('');
   const [conversationId, setConversationId] = useState('');
-  const [conversationList, setConversationList] = useState<ConversationListItem[]>([]);
-  const [conversationListLoading, setConversationListLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
-  const [historyConversations, setHistoryConversations] = useState<ConversationListItem[]>([]);
+  const [historyMessages, setHistoryMessages] = useState<ConversationHistoryMessage[]>([]);
 
   const [sourcePreviewOpen, setSourcePreviewOpen] = useState(false);
   const [sourcePreviewFile, setSourcePreviewFile] = useState<KnowledgeFile | null>(null);
@@ -982,10 +895,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     y: 0,
     preset: 'default',
     destinationType: 'summary',
-    targetType: 'document_end',
-    targetSectionId: '',
-    newSectionTitle: '',
-    transform: 'ai_append',
     targetDocId: '',
     targetItemId: '',
     newTitle: '',
@@ -994,6 +903,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     prompt: '',
     sourceContent: '',
     sourceEntries: [],
+  });
+  const [selectionToolbar, setSelectionToolbar] = useState<SelectionToolbarState>({
+    show: false,
+    x: 0,
+    y: 0,
+    messageId: '',
+    content: '',
   });
   const [highlightedTraceId, setHighlightedTraceId] = useState('');
   const [focusedMessageId, setFocusedMessageId] = useState('');
@@ -1017,18 +933,10 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     () => documents.find((item) => item.id === activeDocumentId) || null,
     [activeDocumentId, documents],
   );
-  const conversationActiveDocument = useMemo(
-    () => documents.find((item) => item.id === conversationActiveDocumentId) || null,
-    [conversationActiveDocumentId, documents],
-  );
 
   const summaryItems = useMemo(
     () => workspaceItems.filter((item) => item.type === 'summary'),
     [workspaceItems],
-  );
-  const { itemSummaries: itemSummaryItems, allSummary } = useMemo(
-    () => splitSummaryCards(summaryItems),
-    [summaryItems],
   );
 
   const guidanceItems = useMemo(
@@ -1046,6 +954,59 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     [activeGuidanceId, guidanceItems],
   );
 
+  const activeOutput = useMemo(
+    () => outputs.find((item) => item.id === activeOutputId) || null,
+    [activeOutputId, outputs],
+  );
+  const activePptStage = useMemo(() => normalizePptStage(activeOutput), [activeOutput]);
+  const activePptPreviewImages = useMemo(() => getPptPreviewImages(activeOutput), [activeOutput]);
+  const activePptSlide = useMemo(() => {
+    if (!activeOutput || !isStoryboardOutputType(activeOutput.target_type)) return null;
+    const slides = activeOutput.outline || [];
+    if (slides.length === 0) return null;
+    const safeIndex = Math.min(Math.max(activePptSlideIndex, 0), slides.length - 1);
+    return { slide: slides[safeIndex], index: safeIndex };
+  }, [activeOutput, activePptSlideIndex]);
+  const activePptPageReviews = useMemo<PptPageReview[]>(() => {
+    if (!activeOutput || !isStoryboardOutputType(activeOutput.target_type)) return [];
+    const existing = Array.isArray(activeOutput.page_reviews) ? activeOutput.page_reviews : [];
+    if (existing.length > 0) return existing;
+    return (activeOutput.outline || []).map((item, index) => ({
+      page_index: index,
+      page_num: item.pageNum || index + 1,
+      confirmed: false,
+    }));
+  }, [activeOutput]);
+  const activePptConfirmedCount = useMemo(
+    () => activePptPageReviews.filter((item) => item.confirmed).length,
+    [activePptPageReviews],
+  );
+  const activePptCurrentReview = useMemo(() => {
+    if (!activePptSlide) return null;
+    return activePptPageReviews.find((item) => item.page_index === activePptSlide.index) || null;
+  }, [activePptPageReviews, activePptSlide]);
+  const activePptPageVersions = useMemo<PptPageVersion[]>(() => {
+    if (!activeOutput || !isStoryboardOutputType(activeOutput.target_type) || !activePptSlide) return [];
+    const versions = Array.isArray(activeOutput.page_versions) ? activeOutput.page_versions : [];
+    return versions
+      .filter((item) => item.page_index === activePptSlide.index)
+      .sort((left, right) => {
+        if (Boolean(left.selected) !== Boolean(right.selected)) {
+          return left.selected ? -1 : 1;
+        }
+        return new Date(right.created_at).getTime() - new Date(left.created_at).getTime();
+      });
+  }, [activeOutput, activePptSlide]);
+  const activePptCurrentPreview = useMemo(() => {
+    if (!activePptSlide) return '';
+    return (
+      activePptSlide.slide.generated_img_path ||
+      activePptSlide.slide.ppt_img_path ||
+      activePptPreviewImages[activePptSlide.index] ||
+      ''
+    );
+  }, [activePptPreviewImages, activePptSlide]);
+
   const withAssetVersion = (url: string, seed?: string) => {
     const cleanUrl = String(url || '').trim();
     if (!cleanUrl) return '';
@@ -1053,172 +1014,74 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     return `${cleanUrl}${separator}v=${encodeURIComponent(seed || activeOutput?.updated_at || '')}`;
   };
 
+  useEffect(() => {
+    if (activeOutput?.target_type === 'video' && activeOutput?.result?.video_mp4_path) {
+      setVideoPreviewTab('final');
+    }
+  }, [activeOutput?.id, activeOutput?.result?.video_mp4_path, activeOutput?.target_type]);
+
+  const renderVideoMp4Player = (mp4Path: string) => {
+    const src = withAssetVersion(mp4Path, activeOutput?.updated_at || activeOutput?.id);
+    if (!src) return null;
+    return (
+      <div className="thinkflow-video-player-wrap">
+        <video
+          key={src}
+          className="thinkflow-video-player"
+          controls
+          playsInline
+          preload="metadata"
+          src={src}
+        >
+          您的浏览器不支持视频播放，请使用下方按钮下载 MP4。
+        </video>
+      </div>
+    );
+  };
+
+  const renderVideoMp4Actions = (mp4Path: string, size: 'lg' | 'sm' = 'lg') => {
+    const href = withAssetVersion(mp4Path, activeOutput?.updated_at || activeOutput?.id);
+    if (!href) return null;
+    return (
+      <div className={`thinkflow-video-actions ${size === 'sm' ? 'is-compact' : ''}`}>
+        <a href={href} download className="thinkflow-video-btn thinkflow-video-btn-primary">
+          <Download size={size === 'lg' ? 18 : 15} />
+          下载 MP4
+        </a>
+        <a href={href} target="_blank" rel="noreferrer" className="thinkflow-video-btn thinkflow-video-btn-secondary">
+          <ExternalLink size={size === 'lg' ? 16 : 14} />
+          新标签页打开
+        </a>
+      </div>
+    );
+  };
+
   const documentSections = useMemo(
-    () => buildDocumentSections(
-      documentContent,
-      activeDocument?.push_traces || [],
-      activeDocument?.document_type === 'output_doc' ? detectMarkdownModuleHeadingLevel(documentContent) : 2,
-    ),
-    [activeDocument?.document_type, activeDocument?.push_traces, documentContent],
+    () => buildDocumentSections(documentContent, activeDocument?.push_traces || []),
+    [activeDocument?.push_traces, documentContent],
   );
 
   const selectedFilePaths = useMemo(() => {
-    const materialRefs = conversationSourceRefs.filter((ref) => ref.type === 'material');
-    return materialRefs
-      .map((ref) => ref.path || resolveFileUrl(files.find((file) => file.id === ref.id) || {}))
-      .filter(Boolean);
-  }, [conversationSourceRefs, files]);
+    const chosen = files.filter((file) => selectedIds.has(file.id)).map((file) => resolveFileUrl(file));
+    if (chosen.length > 0) return chosen.filter(Boolean);
+    return files.map((file) => resolveFileUrl(file)).filter(Boolean);
+  }, [files, selectedIds]);
   const selectedSourceNames = useMemo(() => {
-    const names = conversationSourceRefs
-      .filter((ref) => ref.type === 'material')
-      .map((ref) => ref.title || files.find((file) => file.id === ref.id)?.name || '未命名来源');
-    return names;
-  }, [conversationSourceRefs, files]);
+    const chosen = files.filter((file) => selectedIds.has(file.id)).map((file) => file.name || '未命名来源');
+    if (chosen.length > 0) return chosen;
+    return files.map((file) => file.name || '未命名来源');
+  }, [files, selectedIds]);
 
-  const selectedSourceIds = useMemo(
-    () => conversationSourceRefs.filter((ref) => ref.type === 'material').map((ref) => ref.id).sort(),
-    [conversationSourceRefs],
+  const selectedSourceIds = useMemo(() => Array.from(selectedIds).sort(), [selectedIds]);
+  const activeOutputContext = useMemo(
+    () => {
+      if (!activeOutputId) return null;
+      const output = outputs.find((item) => item.id === activeOutputId) || null;
+      if (!output || isStoryboardOutputType(output.target_type)) return null;
+      return outputContexts[activeOutputId] || null;
+    },
+    [activeOutputId, outputContexts, outputs],
   );
-
-  // ─── PPT Outline Manager Hook ─────────────────────────────────────────────
-  const {
-    outputs,
-    setOutputs,
-    activeOutputId,
-    setActiveOutputId,
-    outlineSaving,
-    setOutlineSaving,
-    generatingOutline,
-    setGeneratingOutline,
-    generatingOutput,
-    setGeneratingOutput,
-    activePptSlideIndex,
-    setActivePptSlideIndex,
-    pptOutlineReadonlyOpen,
-    setPptOutlineReadonlyOpen,
-    pptOutlinePendingMessages,
-    setPptOutlinePendingMessages,
-    pptOutputCreationPending,
-    outputContexts,
-    setOutputContexts,
-    pptSourceLockIntent,
-    setPptSourceLockIntent,
-    directOutputIntent,
-    setDirectOutputIntent,
-    activeOutput,
-    activePptStage,
-    activePptOutline,
-    activePptDraftPending,
-    activeOutlineChatSession,
-    archivedOutlineChatSessions,
-    activePptPreviewImages,
-    activePptSlide,
-    isPptOutlineChatStage,
-    pptOutlineChatMessages,
-    activeOutputContext,
-    refreshOutputs,
-    handleOutputWorkspaceScroll,
-    resolveOutputCreationInputs,
-    openPptSourceLockIntent,
-    confirmPptSourceLockIntent,
-    openDirectOutputIntent,
-    confirmDirectOutputIntent,
-    openExistingOutput,
-    handlePptOutlineChatMessage,
-    applyPptOutlineDraft,
-    discardPptOutlineDraft,
-    createOutline,
-    saveOutline,
-    confirmPptOutline,
-    generateOutputById,
-  } = usePptOutlineManager({
-    notebook,
-    notebookTitle,
-    effectiveUser,
-    pushToast,
-    setGlobalError,
-    setChatInput,
-    setChatLoading,
-    selectedGuidanceIds,
-    guidanceItems,
-    documents,
-    files,
-    selectedSourceIds,
-    boundDocIds,
-    activeDocumentId,
-    documentTitle,
-    documentContent,
-    activeDocument,
-    notebookQuery,
-    selectedSourceNames,
-    setLeftTab,
-    setRightMode,
-    setRightPanelOpen,
-    setWorkspaceMode,
-    enterOutputWorkspace: (mode) => enterOutputWorkspaceRef.current(mode),
-    syncPptOutputDocument: (output) => syncPptOutputDocumentRef.current(output),
-    buildOutputContextSnapshot: (params) => buildOutputContextSnapshotRef.current(params),
-    ensureDocumentContent: (id) => ensureDocumentContentRef.current(id),
-    setIsOutputHeaderCollapsed,
-    loadDocumentDetail: (id) => loadDocumentDetailRef.current(id),
-  });
-  // ─────────────────────────────────────────────────────────────────────────
-
-  // ─── PPT Page Review Manager Hook ────────────────────────────────────────
-  const {
-    pptPagePrompt,
-    setPptPagePrompt,
-    pptPageBusyAction,
-    pptPageStatus,
-    activePptPageReviews,
-    activePptConfirmedCount,
-    activePptCurrentReview,
-    activePptPageVersions,
-    activePptCurrentPreview,
-    regenerateActivePptPage,
-    selectActivePptPageVersion,
-    confirmActivePptPage,
-    revertToOutlineStage,
-    pageReviewFilter,
-    setPageReviewFilter,
-    pageReviewChatContext,
-  } = usePptPageReviewManager({
-    activeOutput,
-    activePptSlideIndex,
-    activePptSlide,
-    activePptOutline,
-    activePptPreviewImages,
-    setOutputs,
-    setActivePptSlideIndex,
-    pushToast,
-    setGlobalError,
-    refreshOutputs,
-    notebook,
-    notebookTitle,
-    effectiveUser,
-    generatingOutput,
-  });
-  // ─────────────────────────────────────────────────────────────────────────
-
-  const materialListDocuments = useMemo(
-    () => filterMaterialListDocuments(documents, outputs),
-    [documents, outputs],
-  );
-
-  const isPptOutputConversationMode = Boolean(pptOutputCreationPending) || isPptOutlineChatStage;
-  const visibleChatMessages = useMemo(() => {
-    if (pptOutputCreationPending) {
-      return [
-        {
-          id: 'ppt_output_creation_pending',
-          role: 'assistant' as const,
-          content: '正在根据已确认的来源生成 PPT 产出文档和初始大纲...',
-          time: pptOutputCreationPending.startedAt,
-        },
-      ];
-    }
-    return isPptOutlineChatStage ? [...pptOutlineChatMessages, ...pptOutlinePendingMessages] : chatMessages;
-  }, [chatMessages, isPptOutlineChatStage, pptOutputCreationPending, pptOutlineChatMessages, pptOutlinePendingMessages]);
 
   const buildOutputContextSnapshot = ({
     outputId,
@@ -1265,10 +1128,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       capturedAt: new Date().toISOString(),
     };
   };
-  buildOutputContextSnapshotRef.current = buildOutputContextSnapshot;
 
   const ensureOutputContext = (output: ThinkFlowOutput) => {
-    if (!output?.id || output.target_type === 'ppt') return;
+    if (!output?.id || isStoryboardOutputType(output.target_type)) return;
     setOutputContexts((previous) => {
       if (previous[output.id]) return previous;
       const sourceIdsFromOutput = files
@@ -1317,7 +1179,10 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         vectorError: file.vector_error,
       }));
       setFiles(nextFiles);
-      setSelectedIds((previous) => new Set([...previous].filter((id) => nextFiles.some((file) => file.id === id))));
+      setSelectedIds((previous) => {
+        if (previous.size > 0) return previous;
+        return new Set(nextFiles.slice(0, 3).map((file) => file.id));
+      });
     } catch (error: any) {
       setGlobalError(error?.message || '加载素材失败');
     } finally {
@@ -1334,26 +1199,18 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     const versionData = await parseJson<{ versions: ThinkFlowVersion[] }>(versionResponse);
     setDocumentTitle(detailData.document.title || '');
     setDocumentContent(detailData.document.content || '');
-    setDocumentFocusState(normalizeFocusState(detailData.document.focus_state));
-    setDocumentStashItems(detailData.document.stash_items || []);
-    setDocumentChangeLogs(detailData.document.change_logs || []);
     setVersions(versionData.versions || []);
       setDocuments((previous) =>
       previous.map((item) => (item.id === documentId ? { ...item, ...detailData.document } : item)),
     );
     return detailData.document;
   };
-  loadDocumentDetailRef.current = loadDocumentDetail;
 
-  const fetchDocumentSummaries = async (): Promise<ThinkFlowDocument[]> => {
-    const response = await apiFetch(`/api/v1/kb/documents?${notebookQuery}`);
-    const data = await parseJson<{ documents: ThinkFlowDocument[] }>(response);
-    return data.documents || [];
-  };
-
-  const refreshDocuments = async (preferredId?: string): Promise<ThinkFlowDocument[]> => {
+  const refreshDocuments = async (preferredId?: string) => {
     try {
-      const items = await fetchDocumentSummaries();
+      const response = await apiFetch(`/api/v1/kb/documents?${notebookQuery}`);
+      const data = await parseJson<{ documents: ThinkFlowDocument[] }>(response);
+      const items = data.documents || [];
       setDocuments(items);
       const targetId = preferredId || (activeDocumentId && items.some((item) => item.id === activeDocumentId) ? activeDocumentId : '') || '';
       if (targetId) {
@@ -1363,26 +1220,22 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         setActiveDocumentId('');
         setDocumentTitle('');
         setDocumentContent('');
-        setDocumentFocusState(normalizeFocusState());
-        setDocumentStashItems([]);
-        setDocumentChangeLogs([]);
         setVersions([]);
         setEditMode(false);
         setShowVersionPanel(false);
       }
-      const visibleItems = filterMaterialListDocuments(items, outputs);
-      setBoundDocIds((previous) => previous.filter((id) => visibleItems.some((item) => item.id === id)));
-      setConversationActiveDocumentId((previous) => (previous && items.some((item) => item.id === previous) ? previous : targetId || ''));
+      setBoundDocIds((previous) => previous.filter((id) => items.some((item) => item.id === id)));
       setPushPopover((previous) => ({
         ...previous,
-        targetDocId: previous.targetDocId && visibleItems.some((item) => item.id === previous.targetDocId)
-          ? previous.targetDocId
-          : targetId || visibleItems[0]?.id || '',
+        targetDocId:
+          previous.targetDocId === '__new__'
+            ? '__new__'
+            : previous.targetDocId && items.some((item) => item.id === previous.targetDocId)
+              ? previous.targetDocId
+              : items[0]?.id || '__new__',
       }));
-      return items;
     } catch (error: any) {
       setGlobalError(error?.message || '加载文档失败');
-      return [];
     }
   };
 
@@ -1410,15 +1263,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       const data = await parseJson<{ items: ThinkFlowWorkspaceItem[] }>(response);
       const items = data.items || [];
       setWorkspaceItems(items);
-      const loadedSummaryItems = items.filter((item) => item.type === 'summary');
-      const loadedAllSummary = loadedSummaryItems.find((item) => item.summary_kind === 'all') || null;
 
       const nextSummaryId =
         preferredId && items.some((item) => item.id === preferredId && item.type === 'summary')
           ? preferredId
           : activeSummaryId && items.some((item) => item.id === activeSummaryId && item.type === 'summary')
             ? activeSummaryId
-            : loadedAllSummary?.id || loadedSummaryItems[0]?.id || '';
+            : items.find((item) => item.type === 'summary')?.id || '';
 
       const nextGuidanceId =
         preferredId && items.some((item) => item.id === preferredId && item.type === 'guidance')
@@ -1463,9 +1314,28 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }
   };
 
+  const refreshOutputs = async (preferredId?: string) => {
+    try {
+      const response = await apiFetch(`/api/v1/kb/outputs?${notebookQuery}`);
+      const data = await parseJson<{ outputs: ThinkFlowOutput[] }>(response);
+      const items = data.outputs || [];
+      setOutputs(items);
+      const targetId = preferredId || activeOutputId;
+      if (targetId && items.some((item) => item.id === targetId)) {
+        setActiveOutputId(targetId);
+      } else if (items[0]) {
+        setActiveOutputId(items[0].id);
+      } else {
+        setActiveOutputId('');
+      }
+    } catch (error: any) {
+      setGlobalError(error?.message || '加载产出失败');
+    }
+  };
+
   // ─── 表格分析：选中 dataset 文件时自动注册 datasource + 开启会话 ────────────
   useEffect(() => {
-    if (!activeDataset || dataSessionId) return;
+    if (!activeDataset) return;
     // 已注册过则跳过，ref 防重，不触发重渲染
     if (registeredDatasourceIds.current[activeDataset.id] !== undefined) {
       // 仅重新开启会话（同一文件重新选中时）
@@ -1532,52 +1402,14 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     };
     void initDataset();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeDataset, dataSessionId]);
+  }, [activeDataset]);
 
   useEffect(() => {
     void (async () => {
       setGlobalError('');
-      setConversationId('');
-      setChatMessages(welcomeMessages);
-      setConversationList([]);
-      clearConversationSourceRefs();
-      setSelectedIds(new Set());
-      setBoundDocIds([]);
-      setDocuments([]);
-      setActiveDocumentId('');
-      setConversationActiveDocumentId('');
-      setDocumentTitle('');
-      setDocumentContent('');
-      setDocumentFocusState(normalizeFocusState());
-      setDocumentStashItems([]);
-      setDocumentChangeLogs([]);
-      setVersions([]);
-      setWorkspaceItems([]);
-      setActiveSummaryId('');
-      setActiveGuidanceId('');
-      setSummaryTitle('');
-      setSummaryContent('');
-      setGuidanceTitle('');
-      setGuidanceContent('');
-      setPushPopover((previous) => ({
-        ...previous,
-        show: false,
-        targetDocId: '',
-        targetSectionId: '',
-        targetItemId: '',
-      }));
-      const [conversations] = await Promise.all([
-        refreshConversationList(),
-        refreshFiles(),
-        refreshOutputs(),
-      ]);
+      await Promise.all([refreshFiles(), refreshOutputs()]);
       await refreshWorkspaceItems();
       await refreshDocuments();
-      const latestConversation = (conversations || [])[0];
-      if (latestConversation?.id) {
-        setConversationId(latestConversation.id);
-        await loadConversationMessages(latestConversation.id);
-      }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [notebook.id]);
@@ -1605,6 +1437,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   }, [captureFeedback, pushToast]);
 
   useEffect(() => {
+    if (!pptPageStatus) return;
+    if (pptPageBusyAction) return;
+    const timer = window.setTimeout(() => setPptPageStatus(''), 2400);
+    return () => window.clearTimeout(timer);
+  }, [pptPageBusyAction, pptPageStatus]);
+
+  useEffect(() => {
     if (typeof window === 'undefined') return;
     window.localStorage.setItem(PANEL_GUIDE_STORAGE_KEY, JSON.stringify(panelGuideVisibility));
   }, [panelGuideVisibility]);
@@ -1615,15 +1454,23 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     ensureOutputContext(activeOutput);
   }, [activeOutput]);
 
+  const handleOutputWorkspaceScroll = useCallback((scrollTop: number) => {
+    setIsOutputHeaderCollapsed((previous) => {
+      if (!previous && scrollTop > 24) return true;
+      if (previous && scrollTop <= 4) return false;
+      return previous;
+    });
+  }, []);
+
   useEffect(() => {
-    if (!activeOutput || activeOutput.target_type !== 'ppt') return;
-    const slideCount = activePptOutline.length || 0;
+    if (!activeOutput || !isStoryboardOutputType(activeOutput.target_type)) return;
+    const slideCount = activeOutput.outline?.length || 0;
     if (slideCount === 0) {
       setActivePptSlideIndex(0);
       return;
     }
     setActivePptSlideIndex((previous) => Math.min(Math.max(previous, 0), slideCount - 1));
-  }, [activeOutput?.id, activeOutput?.target_type, activePptOutline]);
+  }, [activeOutput?.id, activeOutput?.outline, activeOutput?.target_type]);
 
   useEffect(() => {
     setPptPagePrompt('');
@@ -1634,17 +1481,20 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   }, [activeOutput?.id, activePptStage]);
 
   useEffect(() => {
-    if (isPptOutlineChatStage) return;
-    setPptOutlinePendingMessages([]);
-  }, [isPptOutlineChatStage]);
-
-  useEffect(() => {
     if (!highlightedTraceId || !docBodyRef.current) return;
     const target = docBodyRef.current.querySelector(`[data-trace-ids*="${highlightedTraceId}"]`);
     if (target instanceof HTMLElement) {
       target.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
     }
   }, [documentSections, highlightedTraceId]);
+
+  useEffect(() => {
+    const clearSelectionToolbar = () => {
+      setSelectionToolbar((previous) => (previous.show ? { ...previous, show: false } : previous));
+    };
+    document.addEventListener('selectionchange', clearSelectionToolbar);
+    return () => document.removeEventListener('selectionchange', clearSelectionToolbar);
+  }, []);
 
   const ensureDocumentContent = async (documentId: string): Promise<ThinkFlowDocument | null> => {
     const existing = documents.find((item) => item.id === documentId);
@@ -1655,179 +1505,31 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       return existing || null;
     }
   };
-  ensureDocumentContentRef.current = ensureDocumentContent;
-
-  const resetOutputWorkspaceForConversation = () => {
-    setPptSourceLockIntent(null);
-    setDirectOutputIntent(null);
-    setPptOutlinePendingMessages([]);
-    setActiveOutputId('');
-    setWorkspaceMode('normal');
-    setRightMode('doc');
-    setRightPanelOpen(true);
-  };
-
-  const persistConversationWorkspaceState = async ({
-    targetConversationId = conversationId,
-    sourceRefs = conversationSourceRefs,
-    activeDocId = conversationActiveDocumentId,
-  }: {
-    targetConversationId?: string;
-    sourceRefs?: ConversationSourceRef[];
-    activeDocId?: string;
-  }) => {
-    if (!targetConversationId) return null;
-    const response = await apiFetch(`/api/v1/kb/conversations/${targetConversationId}/workspace-state`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        notebook_id: notebook.id,
-        notebook_title: notebookTitle,
-        user_id: effectiveUser?.id || 'local',
-        email: effectiveUser?.email || '',
-        source_refs: sourceRefs,
-        active_document_id: activeDocId || '',
-      }),
-    });
-    const data = await parseJson<{ state: { source_refs?: ConversationSourceRef[]; active_document_id?: string } }>(response);
-    const refs = data.state.source_refs || [];
-    setConversationSourceRefs(refs);
-    setSelectedIds(new Set(refs.filter((ref) => ref.type === 'material').map((ref) => ref.id)));
-    setBoundDocIds(refs.filter((ref) => ref.type === 'document' || ref.type === 'output_document').map((ref) => ref.id));
-    setConversationActiveDocumentId(data.state.active_document_id || '');
-    return data.state;
-  };
-
-  const loadConversationWorkspaceState = async (targetConversationId: string) => {
-    if (!targetConversationId) return null;
-    try {
-      const response = await apiFetch(`/api/v1/kb/conversations/${targetConversationId}/workspace-state?${notebookQuery}`);
-      const data = await parseJson<{ state: { source_refs?: ConversationSourceRef[]; active_document_id?: string } }>(response);
-      const refs = data.state.source_refs || [];
-      const storedActiveId = String(data.state.active_document_id || '').trim();
-      const fallbackActiveId =
-        storedActiveId ||
-        activeDocumentId ||
-        documents[0]?.id ||
-        '';
-      setConversationSourceRefs(refs);
-      setConversationActiveDocumentId(fallbackActiveId);
-      setSelectedIds(new Set(refs.filter((ref) => ref.type === 'material').map((ref) => ref.id)));
-      setBoundDocIds(refs.filter((ref) => ref.type === 'document' || ref.type === 'output_document').map((ref) => ref.id));
-      if (!storedActiveId && fallbackActiveId) {
-        void persistConversationWorkspaceState({
-          targetConversationId,
-          sourceRefs: refs,
-          activeDocId: fallbackActiveId,
-        }).catch(() => {});
-      }
-      return { source_refs: refs, active_document_id: fallbackActiveId };
-    } catch (error: any) {
-      setConversationSourceRefs([]);
-      setBoundDocIds([]);
-      setConversationActiveDocumentId(activeDocumentId || documents[0]?.id || '');
-      setGlobalError(error?.message || '加载对话工作区状态失败');
-      return null;
-    }
-  };
-
-  const loadConversationMessages = async (targetConversationId: string) => {
-    resetOutputWorkspaceForConversation();
-    setConversationId(targetConversationId);
-    const response = await apiFetch(`/api/v1/kb/conversations/${targetConversationId}/messages`);
-    const data = await parseJson<{ messages?: ConversationHistoryMessage[] }>(response);
-    const rows = Array.isArray(data?.messages) ? data.messages : [];
-    setChatMessages(
-      rows.length > 0
-        ? rows.map((item, index) => ({
-            id: item.id || `history_${index}`,
-            role: item.role === 'assistant' ? 'assistant' : 'user',
-            content: item.content || '',
-            time: formatThinkFlowTime(item.created_at),
-            fileAnalyses: item.fileAnalyses,
-            sourceMapping: item.sourceMapping,
-            sourcePreviewMapping: item.sourcePreviewMapping,
-            sourceReferenceMapping: item.sourceReferenceMapping,
-          }))
-        : welcomeMessages,
-    );
-    await loadConversationWorkspaceState(targetConversationId);
-  };
-
-  const refreshConversationList = async () => {
-    setConversationListLoading(true);
-    try {
-      const params = new URLSearchParams({
-        email: effectiveUser?.email || effectiveUser?.id || 'local',
-        user_id: effectiveUser?.id || 'local',
-        notebook_id: notebook.id,
-      });
-      const response = await apiFetch(`/api/v1/kb/conversations?${params.toString()}`);
-      const data = await parseJson<{ conversations?: ConversationListItem[] }>(response);
-      const rows = Array.isArray(data?.conversations) ? data.conversations : [];
-      setConversationList(rows);
-      return rows;
-    } catch {
-      setConversationList([]);
-      return [] as ConversationListItem[];
-    } finally {
-      setConversationListLoading(false);
-    }
-  };
-
-  const createConversation = async () => {
-    const response = await apiFetch('/api/v1/kb/conversations', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        email: effectiveUser?.email || effectiveUser?.id || 'local',
-        user_id: effectiveUser?.id || 'local',
-        notebook_id: notebook.id,
-      }),
-    });
-    const data = await parseJson<{ conversation_id?: string; conversation?: ConversationListItem }>(response);
-    const nextId = String(data?.conversation_id || '').trim();
-    if (!nextId) {
-      throw new Error('创建新对话失败');
-    }
-    resetOutputWorkspaceForConversation();
-    await refreshConversationList();
-    setConversationId(nextId);
-    setChatMessages(welcomeMessages);
-    setChatInput('');
-    setSelectedMessageIds([]);
-    setMultiSelectPrompt('');
-    setBoundDocIds([]);
-    clearConversationSourceRefs();
-    const nextActiveDocId = activeDocumentId || documents[0]?.id || '';
-    setConversationActiveDocumentId(nextActiveDocId);
-    await persistConversationWorkspaceState({
-      targetConversationId: nextId,
-      sourceRefs: [],
-      activeDocId: nextActiveDocId,
-    });
-    return nextId;
-  };
 
   const ensureConversationId = async () => {
     if (conversationId) return conversationId;
     try {
-      return await createConversation();
+      const response = await apiFetch('/api/v1/kb/conversations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: effectiveUser?.email || effectiveUser?.id || 'local',
+          user_id: effectiveUser?.id || 'local',
+          notebook_id: notebook.id,
+        }),
+      });
+      const data = await parseJson<{ conversation_id?: string }>(response);
+      const nextId = String(data?.conversation_id || '').trim();
+      if (nextId) {
+        setConversationId(nextId);
+        return nextId;
+      }
     } catch {}
     return '';
   };
 
-  const appendConversationMessages = async (messages: ConversationMessageDraft[]) => {
-    const rows = messages
-      .map((item) => ({
-        role: item.role,
-        content: String(item.content || '').trim(),
-        fileAnalyses: item.fileAnalyses,
-        sourceMapping: item.sourceMapping,
-        sourcePreviewMapping: item.sourcePreviewMapping,
-        sourceReferenceMapping: item.sourceReferenceMapping,
-      }))
-      .filter((item) => item.content);
+  const appendConversationMessages = async (messages: Array<{ role: 'user' | 'assistant'; content: string }>) => {
+    const rows = messages.map((item) => ({ role: item.role, content: String(item.content || '').trim() })).filter((item) => item.content);
     if (rows.length === 0) return;
     const targetConversationId = await ensureConversationId();
     if (!targetConversationId) return;
@@ -1837,7 +1539,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ messages: rows }),
       });
-      await refreshConversationList();
     } catch {}
   };
 
@@ -1919,23 +1620,78 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   };
 
   const openHistoryPanel = async () => {
-    setLeftTab('conversations');
+    setHistoryOpen(true);
     setHistoryLoading(true);
     try {
-      const rows = await refreshConversationList();
-      setHistoryConversations(rows);
+      const targetConversationId = await ensureConversationId();
+      if (!targetConversationId) {
+        setHistoryMessages(
+          chatMessages
+            .filter((item) => item.id !== 'welcome' && item.content.trim())
+            .map((item) => ({
+              id: item.id,
+              role: item.role,
+              content: item.content,
+              created_at: item.time,
+            })),
+        );
+        return;
+      }
+      const response = await apiFetch(`/api/v1/kb/conversations/${targetConversationId}/messages`);
+      const data = await parseJson<{ messages?: ConversationHistoryMessage[] }>(response);
+      const rows = Array.isArray(data?.messages) ? data.messages : [];
+      if (rows.length > 0) {
+        setHistoryMessages(
+          rows.map((item, index) => ({
+            id: item.id || `history_${index}`,
+            role: item.role === 'assistant' ? 'assistant' : 'user',
+            content: item.content || '',
+            created_at: item.created_at,
+          })),
+        );
+      } else {
+        setHistoryMessages(
+          chatMessages
+            .filter((item) => item.id !== 'welcome' && item.content.trim())
+            .map((item) => ({
+              id: item.id,
+              role: item.role,
+              content: item.content,
+              created_at: item.time,
+            })),
+        );
+      }
     } catch (error: any) {
       setGlobalError(error?.message || '加载历史对话失败');
-      setHistoryConversations(conversationList);
+      setHistoryMessages(
+        chatMessages
+          .filter((item) => item.id !== 'welcome' && item.content.trim())
+          .map((item) => ({
+            id: item.id,
+            role: item.role,
+            content: item.content,
+            created_at: item.time,
+          })),
+      );
     } finally {
       setHistoryLoading(false);
     }
   };
 
   const handleNewConversation = () => {
-    void createConversation().catch((error: any) => {
-      setGlobalError(error?.message || '创建新对话失败');
-    });
+    setConversationId('');
+    setChatMessages([
+      {
+        id: 'welcome',
+        role: 'assistant',
+        content: '请先围绕左侧已选素材提问。对话是主线，你可以按需把某个回答、某组问答或多轮内容沉淀成摘要、整理进文档，或者加入产出指导。',
+        time: new Date().toLocaleTimeString(),
+      },
+    ]);
+    setChatInput('');
+    setSelectedMessageIds([]);
+    setMultiSelectPrompt('');
+    setBoundDocIds([]);
   };
 
   const enterOutputWorkspace = (mode: WorkspaceMode = 'output_focus') => {
@@ -1943,78 +1699,361 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     setRightMode('outline');
     setWorkspaceMode(mode);
   };
-  enterOutputWorkspaceRef.current = enterOutputWorkspace;
 
   const exitOutputWorkspace = () => {
-    resetOutputWorkspaceForConversation();
+    setPptSourceLockIntent(null);
+    setDirectOutputIntent(null);
+    setWorkspaceMode('normal');
+    setRightMode('doc');
+    setRightPanelOpen(true);
   };
 
-  const toggleSource = (fileId: string) => {
-    // 当选中 dataset（CSV/Excel）时，自动激活表格分析模式
-    const selected = files.find((f) => f.id === fileId);
-    if (!selected) return;
-    const nextRefs = conversationSourceRefs.some((ref) => ref.type === 'material' && ref.id === fileId)
-      ? conversationSourceRefs.filter((ref) => !(ref.type === 'material' && ref.id === fileId))
-      : [
-          ...conversationSourceRefs,
-          {
-            id: selected.id,
-            type: 'material' as const,
-            title: selected.name || '未命名素材',
-            path: resolveFileUrl(selected),
-          },
-        ];
-    setConversationSourceRefs(nextRefs);
-    setSelectedIds(new Set(nextRefs.filter((ref) => ref.type === 'material').map((ref) => ref.id)));
-    void persistConversationWorkspaceState({ sourceRefs: nextRefs }).catch((error: any) => {
-      setGlobalError(error?.message || '更新对话来源失败');
-    });
-    if (selected?.type === 'dataset') {
-      setActiveDataset(selected);
-      setChatMode('table-analysis');
-      if (selected.id !== activeDataset?.id) {
-        setDataSessionId(null); // 切到新的 dataset 时，重置并准备新会话
+  const resolveOutputCreationInputs = async (
+    targetType: OutputType,
+    options?: {
+      titleOverride?: string;
+      documentIdOverride?: string;
+      guidanceItemIdsOverride?: string[];
+      boundDocumentIdsOverride?: string[];
+      sourceIdsOverride?: string[];
+      sourcePathsOverride?: string[];
+      sourceNamesOverride?: string[];
+    },
+  ) => {
+    const overrideGuidanceIds = options?.guidanceItemIdsOverride;
+    const overrideBoundDocIds = options?.boundDocumentIdsOverride;
+    const overrideSourceIds = options?.sourceIdsOverride;
+    const overrideSourcePaths = options?.sourcePathsOverride;
+    const overrideSourceNames = options?.sourceNamesOverride;
+    const resolvedGuidanceIds = overrideGuidanceIds ? [...overrideGuidanceIds] : [...selectedGuidanceIds];
+    const resolvedBoundDocIds = overrideBoundDocIds ? [...overrideBoundDocIds] : [...boundDocIds];
+    const resolvedSourceIds =
+      overrideSourceIds && overrideSourceIds.length > 0
+        ? [...overrideSourceIds]
+        : selectedSourceIds.length > 0
+          ? [...selectedSourceIds]
+          : files.map((file) => file.id);
+    const resolvedSourceEntries =
+      resolvedSourceIds.length > 0
+        ? files.filter((file) => resolvedSourceIds.includes(file.id))
+        : files;
+    const resolvedSourcePaths =
+      overrideSourcePaths && overrideSourcePaths.length > 0
+        ? [...overrideSourcePaths]
+        : resolvedSourceEntries.map((file) => resolveFileUrl(file)).filter(Boolean);
+    const resolvedSourceNames =
+      overrideSourceNames && overrideSourceNames.length > 0
+        ? [...overrideSourceNames]
+        : resolvedSourceEntries.map((file) => file.name || '未命名来源');
+
+    let outputDocumentId =
+      options?.documentIdOverride ??
+      activeDocumentId ??
+      (isStoryboardOutputType(targetType) ? activeOutput?.document_id || '' : '');
+    let outputDocumentTitle = documentTitle || activeDocument?.title || '文档';
+    let outputDocumentContent = documentContent;
+    if (outputDocumentId && outputDocumentId !== activeDocumentId) {
+      const ensuredDocument = await ensureDocumentContent(outputDocumentId);
+      if (ensuredDocument) {
+        outputDocumentTitle = ensuredDocument.title || outputDocumentTitle;
+        outputDocumentContent = ensuredDocument.content || outputDocumentContent;
       }
+    }
+    if (isStoryboardOutputType(targetType) && (!outputDocumentTitle || outputDocumentTitle === '文档')) {
+      outputDocumentTitle = resolvedSourceNames[0] || notebookTitle || (targetType === 'video' ? '视频' : 'PPT');
+    }
+    if (!isStoryboardOutputType(targetType) && !String(outputDocumentContent || '').trim()) {
+      outputDocumentId = '';
+      outputDocumentTitle = resolvedSourceNames[0] || notebookTitle || outputLabel(targetType);
+      outputDocumentContent = '';
+    }
+    if (
+      resolvedSourcePaths.length === 0 &&
+      !String(outputDocumentContent || '').trim() &&
+      resolvedBoundDocIds.length === 0 &&
+      resolvedGuidanceIds.length === 0
+    ) {
+      throw new Error('请先选择至少一个来源，或选择一份梳理文档 / 参考文档 / 产出指导。');
+    }
+
+    const resolvedGuidanceTitles = guidanceItems
+      .filter((item) => resolvedGuidanceIds.includes(item.id))
+      .map((item) => item.title || '未命名产出指导');
+    const resolvedBoundDocTitles = documents
+      .filter((item) => resolvedBoundDocIds.includes(item.id))
+      .map((item) => item.title || '未命名参考文档');
+    const outputTitle =
+      options?.titleOverride ||
+      `${outputDocumentTitle || '文档'} · ${outputButtons.find((item) => item.type === targetType)?.label || targetType}`;
+
+    return {
+      outputDocumentId,
+      outputDocumentTitle,
+      outputDocumentContent,
+      resolvedGuidanceIds,
+      resolvedGuidanceTitles,
+      resolvedBoundDocIds,
+      resolvedBoundDocTitles,
+      resolvedSourceIds,
+      resolvedSourcePaths,
+      resolvedSourceNames,
+      outputTitle,
+    };
+  };
+
+  const openPptSourceLockIntent = async (storyboardTarget: 'ppt' | 'video' = 'ppt') => {
+    setGlobalError('');
+    setPptSourceLockIntent({
+      storyboardTarget,
+      outputDocumentId: '',
+      outputDocumentTitle: documentTitle || activeDocument?.title || '梳理文档',
+      outputTitle: `${documentTitle || activeDocument?.title || notebookTitle || '文档'} · ${outputLabel(storyboardTarget)}`,
+      guidanceItemIds: [],
+      guidanceTitles: [],
+      boundDocumentIds: [],
+      boundDocumentTitles: [],
+      sourcePaths: [],
+      sourceNames: [],
+      loading: true,
+      errorMessage: '',
+      videoConfig: buildDefaultVideoConfig(),
+      paper2videoOptions: null,
+      customAvatarFile: null,
+      customAvatarPreviewUrl: '',
+    });
+    try {
+      const resolved = await resolveOutputCreationInputs(storyboardTarget);
+      let paper2videoOptions: Paper2VideoOptionsPayload | null = null;
+      let videoConfig = buildDefaultVideoConfig();
+      if (storyboardTarget === 'video') {
+        const optionsResponse = await apiFetch('/api/v1/kb/outputs/paper2video/options');
+        const optionsData = await parseJson<Paper2VideoOptionsPayload & { success?: boolean }>(optionsResponse);
+        paper2videoOptions = optionsData;
+        videoConfig = buildDefaultVideoConfig(optionsData);
+        const previewUrls = await loadPaper2videoPresetPreviewUrls(optionsData);
+        setPaper2videoPresetPreviewUrls((previous) => {
+          Object.values(previous).forEach((url) => URL.revokeObjectURL(url));
+          return previewUrls;
+        });
+      }
+      setPptSourceLockIntent((current) =>
+        current
+          ? {
+              ...current,
+              outputDocumentId: resolved.outputDocumentId,
+              outputDocumentTitle: resolved.outputDocumentTitle,
+              outputTitle: resolved.outputTitle,
+              guidanceItemIds: resolved.resolvedGuidanceIds,
+              guidanceTitles: resolved.resolvedGuidanceTitles,
+              boundDocumentIds: resolved.resolvedBoundDocIds,
+              boundDocumentTitles: resolved.resolvedBoundDocTitles,
+              sourcePaths: resolved.resolvedSourcePaths,
+              sourceNames: resolved.resolvedSourceNames,
+              paper2videoOptions,
+              videoConfig,
+              loading: false,
+              errorMessage: '',
+            }
+          : current,
+      );
+    } catch (error: any) {
+      const message = error?.message || '无法确认本次来源';
+      setGlobalError(message);
+      setPptSourceLockIntent((current) =>
+        current
+          ? {
+              ...current,
+              loading: false,
+              errorMessage: message,
+            }
+          : current,
+      );
     }
   };
 
-  const setConversationActiveDocument = async (documentId: string) => {
-    const previousTitle = conversationActiveDocument?.title || '未设置';
-    const nextDoc = documents.find((item) => item.id === documentId);
-    if (!nextDoc) return;
-    setConversationActiveDocumentId(documentId);
-    await persistConversationWorkspaceState({ activeDocId: documentId });
-    setChatMessages((previous) => [
-      ...previous,
-      {
-        id: `system_active_doc_${Date.now()}`,
-        role: 'system',
-        content: `切换活跃文档：${previousTitle} → ${nextDoc.title || '未命名文档'}`,
-        time: formatThinkFlowTime(new Date()),
-        meta: { type: 'stage_change' },
-      },
-    ]);
+  const switchVideoLockToPptFlow = useCallback(() => {
+    setPptSourceLockIntent((current) => {
+      if (!current || current.storyboardTarget !== 'video') return current;
+      if (current.customAvatarPreviewUrl) {
+        URL.revokeObjectURL(current.customAvatarPreviewUrl);
+      }
+      const docTitle =
+        current.outputDocumentTitle ||
+        documentTitle ||
+        activeDocument?.title ||
+        notebookTitle ||
+        '文档';
+      return {
+        ...current,
+        storyboardTarget: 'ppt',
+        outputTitle: `${docTitle} · PPT`,
+        videoConfig: undefined,
+        paper2videoOptions: null,
+        customAvatarFile: null,
+        customAvatarPreviewUrl: '',
+      };
+    });
+  }, [activeDocument?.title, documentTitle, notebookTitle]);
+
+  const confirmPptSourceLockIntent = async () => {
+    if (
+      !pptSourceLockIntent ||
+      pptSourceLockIntent.loading ||
+      pptSourceLockIntent.submitting ||
+      pptSourceLockIntent.errorMessage
+    ) {
+      return;
+    }
+    const intent = pptSourceLockIntent;
+    setPptSourceLockIntent((current) => (current ? { ...current, submitting: true } : current));
+    try {
+      let videoConfig = intent.videoConfig;
+      if (intent.storyboardTarget === 'video' && videoConfig) {
+        if (videoConfig.avatar_mode === 'custom') {
+          if (!intent.customAvatarFile && !videoConfig.avatar_upload_token) {
+            throw new Error('请上传自定义数字人图片，或选择系统数字人 / 不使用数字人。');
+          }
+          if (intent.customAvatarFile) {
+            const formData = new FormData();
+            formData.append('file', intent.customAvatarFile);
+            const uploadResponse = await apiFetch(`/api/v1/kb/outputs/paper2video/upload-avatar?${notebookQuery}`, {
+              method: 'POST',
+              body: formData,
+            });
+            const uploadData = await parseJson<{ upload_token?: string }>(uploadResponse);
+            videoConfig = {
+              ...videoConfig,
+              avatar_upload_token: String(uploadData.upload_token || '').trim(),
+            };
+          }
+        }
+      }
+      setPptSourceLockIntent(null);
+      if (intent.customAvatarPreviewUrl) {
+        URL.revokeObjectURL(intent.customAvatarPreviewUrl);
+      }
+      await createOutline(intent.storyboardTarget, {
+        titleOverride: intent.outputTitle,
+        documentIdOverride: intent.outputDocumentId,
+        guidanceItemIdsOverride: intent.guidanceItemIds,
+        boundDocumentIdsOverride: intent.boundDocumentIds,
+        sourcePathsOverride: intent.sourcePaths,
+        sourceNamesOverride: intent.sourceNames,
+        videoConfig: intent.storyboardTarget === 'video' ? videoConfig : undefined,
+      });
+    } catch (error: any) {
+      setGlobalError(error?.message || '无法创建视频产出');
+      setPptSourceLockIntent((current) => (current ? { ...current, submitting: false } : current));
+    }
+  };
+
+  const openDirectOutputIntent = async (targetType: Exclude<OutputType, 'ppt' | 'video'>) => {
+    setGlobalError('');
+    setDirectOutputIntent({
+      targetType,
+      outputDocumentId: '',
+      outputDocumentTitle: documentTitle || activeDocument?.title || selectedSourceNames[0] || '基于当前来源直接生成',
+      outputTitle: `${documentTitle || activeDocument?.title || selectedSourceNames[0] || notebookTitle || '来源'} · ${outputLabel(targetType)}`,
+      guidanceItemIds: [],
+      guidanceTitles: [],
+      boundDocumentIds: [],
+      boundDocumentTitles: [],
+      sourceIds: [],
+      sourcePaths: [],
+      sourceNames: [],
+      loading: true,
+      errorMessage: '',
+    });
+    try {
+      const resolved = await resolveOutputCreationInputs(targetType);
+      setDirectOutputIntent((current) =>
+        current && current.targetType === targetType
+          ? {
+              ...current,
+              outputDocumentId: resolved.outputDocumentId,
+              outputDocumentTitle: resolved.outputDocumentTitle,
+              outputTitle: resolved.outputTitle,
+              guidanceItemIds: resolved.resolvedGuidanceIds,
+              guidanceTitles: resolved.resolvedGuidanceTitles,
+              boundDocumentIds: resolved.resolvedBoundDocIds,
+              boundDocumentTitles: resolved.resolvedBoundDocTitles,
+              sourceIds: resolved.resolvedSourceIds,
+              sourcePaths: resolved.resolvedSourcePaths,
+              sourceNames: resolved.resolvedSourceNames,
+              loading: false,
+              errorMessage: '',
+            }
+          : current,
+      );
+    } catch (error: any) {
+      const message = error?.message || '无法确认本次产出来源';
+      setGlobalError(message);
+      setDirectOutputIntent((current) =>
+        current && current.targetType === targetType
+          ? {
+              ...current,
+              loading: false,
+              errorMessage: message,
+            }
+          : current,
+      );
+    }
+  };
+
+  const confirmDirectOutputIntent = async () => {
+    if (!directOutputIntent || directOutputIntent.loading || directOutputIntent.errorMessage) return;
+    const intent = directOutputIntent;
+    setDirectOutputIntent(null);
+    await createOutline(intent.targetType, {
+      autoGenerate: true,
+      titleOverride: intent.outputTitle,
+      documentIdOverride: intent.outputDocumentId,
+      guidanceItemIdsOverride: intent.guidanceItemIds,
+      boundDocumentIdsOverride: intent.boundDocumentIds,
+      sourceIdsOverride: intent.sourceIds,
+      sourcePathsOverride: intent.sourcePaths,
+      sourceNamesOverride: intent.sourceNames,
+    });
+  };
+
+  const openExistingOutput = async (output: ThinkFlowOutput) => {
+    setPptSourceLockIntent(null);
+    setDirectOutputIntent(null);
+    setPptOutlineFeedback('');
+    setActivePptSlideIndex(0);
+    setActiveOutputId(output.id);
+    setLeftTab('outputs');
+    ensureOutputContext(output);
+    enterOutputWorkspace(isStoryboardOutputType(output.target_type) ? 'output_focus' : 'output_immersive');
+    if (output.document_id) {
+      setActiveDocumentId(output.document_id);
+      try {
+        await loadDocumentDetail(output.document_id);
+      } catch {}
+    }
+  };
+
+  const toggleSource = (fileId: string) => {
+    setSelectedIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(fileId)) next.delete(fileId);
+      else next.add(fileId);
+      return next;
+    });
+
+    // 当选中 dataset（CSV/Excel）时，自动激活表格分析模式
+    const selected = files.find((f) => f.id === fileId);
+    if (selected?.type === 'dataset') {
+      setActiveDataset(selected);
+      setChatMode('table-analysis');
+      setDataSessionId(null); // 重置，等待新会话
+    }
   };
 
   const toggleBoundDoc = (documentId: string) => {
-    const document = documents.find((item) => item.id === documentId);
-    if (!document) return;
-    const sourceType = document.document_type === 'output_doc' ? 'output_document' : 'document';
-    const exists = conversationSourceRefs.some((ref) => ref.id === documentId && (ref.type === 'document' || ref.type === 'output_document'));
-    const nextRefs = exists
-      ? conversationSourceRefs.filter((ref) => !(ref.id === documentId && (ref.type === 'document' || ref.type === 'output_document')))
-      : [
-          ...conversationSourceRefs,
-          {
-            id: document.id,
-            type: sourceType,
-            title: document.title || '未命名文档',
-          },
-        ];
-    setConversationSourceRefs(nextRefs);
-    setBoundDocIds(nextRefs.filter((ref) => ref.type === 'document' || ref.type === 'output_document').map((ref) => ref.id));
-    void persistConversationWorkspaceState({ sourceRefs: nextRefs }).catch((error: any) => {
-      setGlobalError(error?.message || '更新对话参考文档失败');
+    setBoundDocIds((previous) => {
+      if (previous.includes(documentId)) return previous.filter((id) => id !== documentId);
+      return [...previous, documentId];
     });
     setRightPanelOpen(true);
     setActiveDocumentId(documentId);
@@ -2062,28 +2101,18 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     splitTextWithCitations(text).map((part, index) => {
       if (part.type === 'text') return <React.Fragment key={`text_${index}`}>{part.value}</React.Fragment>;
 
+      const { reference, title, preview } = getCitationMeta(message, part.value);
+      const hasMeta = Boolean(title || preview);
       return (
-        <sup className="thinkflow-citation-group" key={`cite_group_${index}`}>
-          [
-          {part.value.map((sourceNumber, citationIndex) => {
-            const { reference, title, preview } = getCitationMeta(message, sourceNumber);
-            const hasMeta = Boolean(title || preview);
-            return (
-              <React.Fragment key={`cite_${sourceNumber}_${index}_${citationIndex}`}>
-                {citationIndex > 0 ? ', ' : ''}
-                <button
-                  type="button"
-                  className={`thinkflow-citation ${hasMeta ? 'has-tooltip' : ''}`}
-                  onClick={() => focusSourceByReference(reference, title)}
-                >
-                  {sourceNumber}
-                  {renderSourceTooltip(title, preview, reference)}
-                </button>
-              </React.Fragment>
-            );
-          })}
-          ]
-        </sup>
+        <button
+          key={`cite_${part.value}_${index}`}
+          type="button"
+          className={`thinkflow-citation ${hasMeta ? 'has-tooltip' : ''}`}
+          onClick={() => focusSourceByReference(reference, title)}
+        >
+          [{part.value}]
+          {renderSourceTooltip(title, preview, reference)}
+        </button>
       );
     });
 
@@ -2116,8 +2145,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     const element = node as React.ReactElement<{ children?: React.ReactNode }>;
     const typeName = typeof element.type === 'string' ? element.type : '';
     if (typeName === 'code' || typeName === 'pre') return element;
-    const className = typeof (element.props as any)?.className === 'string' ? (element.props as any).className : '';
-    if (className.includes('katex')) return element;
 
     return React.cloneElement(
       element,
@@ -2129,8 +2156,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const renderMessageMarkdown = (message: ThinkFlowMessage) => (
     <div className={`thinkflow-message-markdown ${message.role === 'assistant' ? 'is-assistant' : 'is-user'}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkMath]}
-        rehypePlugins={[rehypeKatex]}
         components={{
           h1: ({ children, ...props }: any) => <h1 {...props}>{injectCitationsIntoNode(children, message)}</h1>,
           h2: ({ children, ...props }: any) => <h2 {...props}>{injectCitationsIntoNode(children, message)}</h2>,
@@ -2154,119 +2179,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       >
         {message.content}
       </ReactMarkdown>
-      {message.meta?.type === 'ppt_outline_draft' ? (
-        <div className="thinkflow-inline-outline-card" data-testid="ppt-outline-inline-card">
-          <div className="thinkflow-inline-outline-card-head">
-            <div>
-              <span className="thinkflow-output-workspace-kicker">候选修改</span>
-              <h4>候选改动对比</h4>
-            </div>
-            <div className="thinkflow-inline-outline-card-actions">
-              <button type="button" className="thinkflow-generate-btn" onClick={() => void applyPptOutlineDraft()} disabled={outlineSaving}>
-                {outlineSaving ? '应用中...' : '应用候选修改'}
-              </button>
-            </div>
-          </div>
-          {message.meta.changeSummary ? (
-            <div className="thinkflow-inline-outline-card-summary">{message.meta.changeSummary}</div>
-          ) : null}
-          {(message.meta.intentSummary?.mode && message.meta.intentSummary.mode !== 'none') ? (
-            <div className="thinkflow-inline-outline-card-intent">
-              <strong>本轮意图：</strong>
-              <span>
-                {message.meta.intentSummary.mode === 'mixed'
-                  ? '风格信息 + 页级修改'
-                  : message.meta.intentSummary.mode === 'global'
-                    ? '风格信息'
-                    : '页级修改'}
-              </span>
-            </div>
-          ) : null}
-          {(message.meta.outlineDiff?.totalCount || 0) > 0 ? (
-            <div className="thinkflow-inline-outline-rule-list">
-              {message.meta.outlineDiff.modifiedCount > 0 ? (
-                <span className="thinkflow-inline-outline-chip">
-                  {`修改 ${message.meta.outlineDiff.modifiedCount} 页`}
-                </span>
-              ) : null}
-              {message.meta.outlineDiff.addedCount > 0 ? (
-                <span className="thinkflow-inline-outline-chip">
-                  {`新增 ${message.meta.outlineDiff.addedCount} 页`}
-                </span>
-              ) : null}
-              {message.meta.outlineDiff.removedCount > 0 ? (
-                <span className="thinkflow-inline-outline-chip">
-                  {`删除 ${message.meta.outlineDiff.removedCount} 页`}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
-          {(message.meta.styleDiff?.totalCount || 0) > 0 ? (
-            <div className="thinkflow-inline-outline-style-diff">
-              <div className="thinkflow-inline-outline-rule-title">风格信息改动</div>
-              {message.meta.styleDiff.entries.map((entry: any) => (
-                <div key={entry.field} className="thinkflow-inline-outline-style-row">
-                  <strong>{entry.label}</strong>
-                  <span className="thinkflow-inline-outline-style-before">{entry.before}</span>
-                  <span className="thinkflow-inline-outline-style-arrow">→</span>
-                  <span className="thinkflow-inline-outline-style-after">{entry.after}</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          {(message.meta.outlineDiff?.totalCount || 0) > 0 ? (
-            <div className="thinkflow-inline-outline-diff-list">
-              {message.meta.outlineDiff.entries.map((entry: any) => (
-                <article key={entry.key} className={`thinkflow-inline-outline-diff-item is-${entry.kind}`}>
-                  <div className="thinkflow-inline-outline-diff-item-head">
-                    <span>{getPptOutlineDiffKindLabel(entry.kind)}</span>
-                    <strong>第 {entry.pageNum} 页</strong>
-                    <span>{entry.title}</span>
-                  </div>
-                  {entry.detailLines?.length > 0 ? (
-                    <ul>
-                      {entry.detailLines.map((line: string) => (
-                        <li key={`${entry.key}_${line}`}>{line}</li>
-                      ))}
-                    </ul>
-                  ) : null}
-                </article>
-              ))}
-            </div>
-          ) : null}
-        </div>
-      ) : null}
     </div>
   );
-
-  const renderOutlineChatTopPanel = () => {
-    if (!isPptOutputConversationMode) return null;
-    return (
-      <div className="thinkflow-outline-chat-top-panel">
-        <div className="thinkflow-outline-chat-top-head">
-          <span className="thinkflow-output-workspace-kicker">PPT 产出文档</span>
-          <strong>
-            {pptOutputCreationPending
-              ? '正在生成右侧产出文档和初始大纲。完成后可继续对话调整。'
-              : '右侧是本轮 PPT 的“产出信息 + 风格信息 + 大纲”。聊清楚后点击确认，系统会直接进入工作台生图。'}
-          </strong>
-          {!pptOutputCreationPending ? (
-            <button
-              type="button"
-              className="thinkflow-generate-btn"
-              onClick={() => void confirmPptOutline()}
-              disabled={outlineSaving || generatingOutput}
-            >
-              {outlineSaving || generatingOutput ? '生成中...' : '确认并生成 PPT'}
-            </button>
-          ) : null}
-        </div>
-        <div className="thinkflow-inline-outline-rule-list">
-          <span className="thinkflow-inline-outline-empty">可以继续补充受众、风格、页数、重点取舍或单页修改要求。</span>
-        </div>
-      </div>
-    );
-  };
 
   const renderSourceReferences = (message: ThinkFlowMessage) => {
     const entries = Object.entries(message.sourceMapping || {}).sort((a, b) => Number(a[0]) - Number(b[0]));
@@ -2300,7 +2214,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     content,
     rect,
     sourceEntries,
-    preferredDestination = 'document',
+    preferredDestination = 'summary',
     prompt = '',
     preset = 'default',
   }: {
@@ -2329,27 +2243,18 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       viewportHeight - popoverHeight - margin,
     );
     setRightPanelOpen(true);
-    setRightMode('doc');
-    const defaultTargetType = getDefaultPushTarget(documentFocusState);
-    const defaultTargetDocId = conversationActiveDocumentId || activeDocumentId || documents[0]?.id || '';
-    if (preferredDestination === 'document' && !defaultTargetDocId) {
-      setGlobalError('请先在右侧选择或创建一份活跃文档，再推送到文档。');
-      return;
-    }
+    setRightMode(preferredDestination === 'document' ? 'doc' : preferredDestination);
+    setSelectionToolbar((previous) => ({ ...previous, show: false }));
     setPushPopover({
       show: true,
       x: nextX,
       y: nextY,
       preset,
       destinationType: preferredDestination,
-      targetType: defaultTargetType,
-      targetSectionId: documentFocusState.section_ids[0] || documentSections[0]?.id || '',
-      newSectionTitle: '',
-      transform: 'ai_append',
-      targetDocId: defaultTargetDocId,
+      targetDocId: activeDocumentId || documents[0]?.id || '__new__',
       targetItemId:
         preferredDestination === 'summary'
-          ? (activeSummary?.summary_kind === 'item' ? activeSummaryId : '') || itemSummaryItems[0]?.id || '__new__'
+          ? activeSummaryId || summaryItems[0]?.id || '__new__'
           : preferredDestination === 'guidance'
             ? activeGuidanceId || guidanceItems[0]?.id || '__new__'
             : '',
@@ -2378,7 +2283,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           kind: 'message',
         },
       ],
-      preferredDestination: 'document',
+      preferredDestination: 'summary',
       preset: 'default',
     });
   };
@@ -2430,9 +2335,84 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       content: parts.join('\n\n'),
       rect: event.currentTarget.getBoundingClientRect(),
       sourceEntries: qaEntries,
-      preferredDestination: 'document',
+      preferredDestination: 'guidance',
       prompt: '提炼这一轮问答的核心结论、关键依据与待确认点。',
       preset: 'qa',
+    });
+  };
+
+  const handleChatSelectionMouseUp = () => {
+    const selection = window.getSelection();
+    if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
+      setSelectionToolbar((previous) => ({ ...previous, show: false }));
+      return;
+    }
+
+    const selectedText = selection.toString().trim();
+    if (!selectedText) {
+      setSelectionToolbar((previous) => ({ ...previous, show: false }));
+      return;
+    }
+
+    const range = selection.getRangeAt(0);
+    const startElement = range.startContainer.parentElement;
+    const endElement = range.endContainer.parentElement;
+    const startMessage = startElement?.closest('[data-message-id]') as HTMLElement | null;
+    const endMessage = endElement?.closest('[data-message-id]') as HTMLElement | null;
+    if (!startMessage || !endMessage || startMessage.dataset.messageId !== endMessage.dataset.messageId) {
+      setSelectionToolbar((previous) => ({ ...previous, show: false }));
+      return;
+    }
+
+    const messageId = startMessage.dataset.messageId || '';
+    const rect = range.getBoundingClientRect();
+    if (!messageId || !rect.width) {
+      setSelectionToolbar((previous) => ({ ...previous, show: false }));
+      return;
+    }
+
+    setSelectionToolbar({
+      show: true,
+      x: rect.left + rect.width / 2,
+      y: Math.max(rect.top - 12, 80),
+      messageId,
+      content: selectedText,
+    });
+  };
+
+  const handleSelectionCopy = async () => {
+    if (!selectionToolbar.content) return;
+    try {
+      await navigator.clipboard.writeText(selectionToolbar.content);
+      window.getSelection()?.removeAllRanges();
+      setSelectionToolbar((previous) => ({ ...previous, show: false }));
+    } catch (error: any) {
+      setGlobalError(error?.message || '复制失败');
+    }
+  };
+
+  const handleSelectionPush = () => {
+    const message = chatMessages.find((item) => item.id === selectionToolbar.messageId);
+    if (!message || !selectionToolbar.content) return;
+    window.getSelection()?.removeAllRanges();
+    const rect = {
+      left: selectionToolbar.x,
+      right: selectionToolbar.x,
+      top: selectionToolbar.y,
+    } as Pick<DOMRect, 'left' | 'right' | 'top'>;
+    openPushPopoverForContent({
+      content: selectionToolbar.content,
+      rect,
+      sourceEntries: [
+        {
+          messageId: message.id,
+          role: message.role,
+          time: message.time,
+          selectionText: selectionToolbar.content,
+          kind: 'selection',
+        },
+      ],
+      preferredDestination: 'summary',
     });
   };
 
@@ -2457,7 +2437,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       content,
       rect,
       sourceEntries,
-      preferredDestination: 'document',
+      preferredDestination: 'summary',
       prompt: multiSelectPrompt,
       preset: 'default',
     });
@@ -2518,177 +2498,17 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     );
   };
 
-  const updateDisplayedDocumentFocus = async (nextFocus: ThinkFlowFocusState) => {
-    if (!activeDocumentId) return;
-    setDocumentFocusState(nextFocus);
-    try {
-      const response = await apiFetch(`/api/v1/kb/documents/${activeDocumentId}/focus`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          notebook_id: notebook.id,
-          notebook_title: notebookTitle,
-          user_id: effectiveUser?.id || 'local',
-          email: effectiveUser?.email || '',
-          focus_state: nextFocus,
-        }),
-      });
-      const data = await parseJson<{ focus_state: ThinkFlowFocusState }>(response);
-      setDocumentFocusState(normalizeFocusState(data.focus_state));
-      setDocuments((previous) =>
-        previous.map((item) => (item.id === activeDocumentId ? { ...item, focus_state: normalizeFocusState(data.focus_state) } : item)),
-      );
-    } catch (error: any) {
-      setGlobalError(error?.message || '更新文档焦点失败');
-      await loadDocumentDetail(activeDocumentId);
-    }
-  };
-
-  const toggleSectionFocus = (sectionId: string, heading?: string) => {
-    const current = normalizeFocusState(documentFocusState);
-    const isSelected = current.type === 'sections' && current.section_ids.includes(sectionId);
-    const nextIds = isSelected
-      ? current.section_ids.filter((id) => id !== sectionId)
-      : current.type === 'sections'
-        ? [...current.section_ids, sectionId]
-        : [sectionId];
-    const selectedHeadings = documentSections
-      .filter((section) => nextIds.includes(section.id))
-      .map((section) => section.heading || heading || '章节');
-    const focusLabel = activeDocument?.document_type === 'output_doc' ? '确认模块' : '焦点';
-    const description = nextIds.length === 0
-      ? `${focusLabel}：全文`
-      : `${focusLabel}：${selectedHeadings.map((item) => `§ ${item}`).join(' + ')}`;
-    void updateDisplayedDocumentFocus(
-      normalizeFocusState({
-        type: nextIds.length > 0 ? 'sections' : 'full',
-        section_ids: nextIds,
-        stash_item_ids: [],
-        description,
-      }),
-    );
-  };
-
-  const renderPptOutlineDocumentSection = (section: ReturnType<typeof buildDocumentSections>[number]) => {
-    const parsed = parsePptOutlineDocCards(section.content);
-    if (parsed.cards.length === 0) {
-      return (
-        <div className="thinkflow-doc-render">
-          <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-            {section.content}
-          </ReactMarkdown>
-        </div>
-      );
-    }
-    return (
-      <div className="thinkflow-ppt-doc-outline">
-        <div className="thinkflow-ppt-doc-outline-head">
-          <span>PPT 大纲</span>
-          <strong>{parsed.cards.length} 页</strong>
-        </div>
-        {parsed.intro ? (
-          <div className="thinkflow-doc-render">
-            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-              {parsed.intro}
-            </ReactMarkdown>
-          </div>
-        ) : null}
-        <div className="thinkflow-ppt-doc-slide-list">
-          {parsed.cards.map((card, cardIndex) => {
-            const slideIndex = resolvePptDocSlideIndex(cardIndex, activePptOutline.length);
-            const isActiveSlide = activeOutput?.target_type === 'ppt' && activePptOutline.length > 0 && activePptSlideIndex === slideIndex;
-            const selectSlide = () => {
-              if (activeOutput?.target_type !== 'ppt' || activePptOutline.length === 0) return;
-              setActivePptSlideIndex(slideIndex);
-            };
-            const handleSlideCardClick = (event: React.MouseEvent<HTMLElement>) => {
-              const target = event.target instanceof HTMLElement ? event.target : null;
-              if (target?.closest('a')) return;
-              event.stopPropagation();
-              selectSlide();
-            };
-            const handleSlideCardKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
-              if (event.key !== 'Enter' && event.key !== ' ') return;
-              event.preventDefault();
-              event.stopPropagation();
-              selectSlide();
-            };
-            return (
-              <article
-                key={`${section.id}_${card.pageNum}_${card.title}`}
-                className={`thinkflow-ppt-doc-slide-card ${isActiveSlide ? 'is-active' : ''}`}
-                role="button"
-                tabIndex={0}
-                aria-pressed={isActiveSlide}
-                onClick={handleSlideCardClick}
-                onKeyDown={handleSlideCardKeyDown}
-              >
-                <div className="thinkflow-ppt-doc-slide-card-head">
-                  <span>第 {card.pageNum} 页</span>
-                  <h4>{card.title}</h4>
-                  <em>{isActiveSlide ? '已选中' : '点击选择'}</em>
-                </div>
-                <div className="thinkflow-doc-render thinkflow-ppt-doc-slide-body">
-                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                    {card.body}
-                  </ReactMarkdown>
-                </div>
-              </article>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
-
   const renderDocumentSection = (section: ReturnType<typeof buildDocumentSections>[number]) => {
     const shouldHighlight = section.traces.some((trace) => trace.id === highlightedTraceId);
-    const isFocused = documentFocusState.type === 'sections' && documentFocusState.section_ids.includes(section.id);
-    const isOutputDocument = activeDocument?.document_type === 'output_doc';
-    const moduleActionLabel = isFocused ? '已确认并入此模块' : '确认下次并入修改此模块';
-    const activateDocumentSection = () => {
-      toggleSectionFocus(section.id, section.heading);
-    };
-    const handleDocumentSectionClick = (event: React.MouseEvent<HTMLElement>) => {
-      const target = event.target instanceof HTMLElement ? event.target : null;
-      if (target?.closest('button, a, input, textarea, select')) return;
-      activateDocumentSection();
-    };
-    const handleDocumentSectionKeyDown = (event: React.KeyboardEvent<HTMLElement>) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
-      event.preventDefault();
-      activateDocumentSection();
-    };
     return (
       <section
         key={section.id}
-        className={`thinkflow-doc-section ${isOutputDocument ? 'is-output-module' : ''} ${shouldHighlight ? 'is-highlighted' : ''} ${isFocused ? 'is-focused' : ''}`}
+        className={`thinkflow-doc-section ${shouldHighlight ? 'is-highlighted' : ''}`}
         data-section-id={section.id}
         data-trace-ids={section.traces.map((trace) => trace.id).join(',')}
-        role="button"
-        tabIndex={0}
-        onClick={handleDocumentSectionClick}
-        onKeyDown={handleDocumentSectionKeyDown}
       >
-        {isOutputDocument ? (
-          <button
-            type="button"
-            className="thinkflow-doc-module-confirm"
-            onClick={(event) => {
-              event.stopPropagation();
-              toggleSectionFocus(section.id, section.heading);
-            }}
-          >
-            {moduleActionLabel}
-          </button>
-        ) : null}
-        {isOutputDocument && /PPT\s*大纲/u.test(section.heading || '') ? (
-          renderPptOutlineDocumentSection(section)
-        ) : (
         <div className="thinkflow-doc-render">
           <ReactMarkdown
-            remarkPlugins={[remarkMath]}
-            rehypePlugins={[rehypeKatex]}
             components={{
               h1: ({ children, ...props }: any) => <h1 {...props}>{renderDocumentTextWithBadges(children)}</h1>,
               h2: ({ children, ...props }: any) => <h2 {...props}>{renderDocumentTextWithBadges(children)}</h2>,
@@ -2711,7 +2531,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             {section.content}
           </ReactMarkdown>
         </div>
-        )}
         {section.traces.length > 0 ? (
           <div className="thinkflow-doc-traces">
             <div className="thinkflow-doc-traces-label">关联对话</div>
@@ -2776,35 +2595,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }
   };
 
-  const rebuildAllSummary = async () => {
-    if (itemSummaryItems.length === 0) {
-      setGlobalError('请先从对话中生成 item summary。');
-      return;
-    }
-    setRebuildingAllSummary(true);
-    try {
-      const response = await apiFetch('/api/v1/kb/workspace-items/summary/all/rebuild', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          notebook_id: notebook.id,
-          notebook_title: notebookTitle,
-          user_id: effectiveUser?.id || 'local',
-          email: effectiveUser?.email || '',
-          title: 'All Summary',
-        }),
-      });
-      const data = await parseJson<{ item: ThinkFlowWorkspaceItem }>(response);
-      await refreshWorkspaceItems(data.item.id);
-      setRightMode('summary');
-      setCaptureFeedback('已根据所有 item summary 重新生成总 Summary');
-    } catch (error: any) {
-      setGlobalError(error?.message || '重算总 Summary 失败');
-    } finally {
-      setRebuildingAllSummary(false);
-    }
-  };
-
   const deleteWorkspaceItem = async (itemType: WorkspaceItemType, itemId: string) => {
     const label = workspaceItemLabel(itemType);
     if (!itemId) return;
@@ -2840,13 +2630,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     setMultiSelectPrompt('');
   };
 
-  const createDocument = async (
-    title?: string,
-    options?: { documentType?: 'summary_doc' | 'output_doc'; metadata?: Record<string, any>; content?: string },
-  ) => {
+  const createDocument = async (title?: string) => {
     try {
-      const isOutputDoc = options?.documentType === 'output_doc';
-      const nextTitle = (title || '').trim() || (isOutputDoc ? `PPT 产出文档 ${documents.length + 1}` : `梳理摘要 ${documents.length + 1}`);
+      const nextTitle = (title || '').trim() || `梳理摘要 ${documents.length + 1}`;
       const response = await apiFetch('/api/v1/kb/documents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2856,9 +2642,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           user_id: effectiveUser?.id || 'local',
           email: effectiveUser?.email || '',
           title: nextTitle,
-          content: options?.content ?? '',
-          document_type: options?.documentType || 'summary_doc',
-          metadata: options?.metadata || {},
+          content: '',
         }),
       });
       const data = await parseJson<{ document: ThinkFlowDocument }>(response);
@@ -2869,40 +2653,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     } catch (error: any) {
       setGlobalError(error?.message || '创建文档失败');
       return '';
-    }
-  };
-
-  const createOutputDocument = async (params?: {
-    title?: string;
-    sourceRefs?: Array<{ id: string; type: 'document' | 'output_document'; title: string; metadata?: Record<string, any> }>;
-  }) => {
-    const sourceRefs = [
-      ...(params?.sourceRefs || conversationSourceRefs),
-      ...(activeDocumentId
-      && !(params?.sourceRefs || []).some((ref) => ref.id === activeDocumentId)
-        ? [{
-            id: activeDocumentId,
-            type: activeDocument?.document_type === 'output_doc' ? 'output_document' : 'document',
-            title: activeDocument?.title || documentTitle || '当前文档',
-            metadata: { range: 'body' },
-          } as ConversationSourceRef]
-        : []),
-    ];
-    const id = await createDocument(params?.title || 'PPT 产出文档', {
-      documentType: 'output_doc',
-      metadata: {
-        output_type: 'ppt',
-        source_refs: sourceRefs,
-        audience: '',
-        style: '',
-        goal: '',
-      },
-      content: '# PPT 产出文档\n\n## 产出目标\n\n[待补充]\n\n## 大纲方向\n\n[待补充]',
-    });
-    if (id) {
-      await setConversationActiveDocument(id);
-      setRightMode('doc');
-      setCaptureFeedback('已创建 PPT 产出文档，可继续编辑后进入 PPT 工作台。');
     }
   };
 
@@ -2929,72 +2679,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     });
     return parseJson<{ document: ThinkFlowDocument }>(response);
   };
-
-  const syncPptOutputDocumentOnce = async (output: ThinkFlowOutput) => {
-    if (!output?.id || output.target_type !== 'ppt') return;
-    const content = buildPptOutputDocumentContent(output);
-    let existingId =
-      pptOutputDocumentIdsRef.current[output.id] ||
-      findPptOutputDocumentId(documents, output.id);
-    if (!existingId) {
-      const refreshedDocuments = await fetchDocumentSummaries();
-      setDocuments(refreshedDocuments);
-      existingId = findPptOutputDocumentId(refreshedDocuments, output.id);
-    }
-    if (existingId) {
-      await updateDocumentContent({
-        documentId: existingId,
-        title: output.title || 'PPT 产出文档',
-        content,
-      });
-      pptOutputDocumentIdsRef.current[output.id] = existingId;
-      setActiveDocumentId(existingId);
-      setRightMode('doc');
-      setRightPanelOpen(true);
-      await refreshDocuments(existingId);
-      return;
-    }
-    const documentId = await createDocument(output.title || 'PPT 产出文档', {
-      documentType: 'output_doc',
-      metadata: {
-        output_type: 'ppt',
-        related_output_id: output.id,
-        source_paths: output.source_paths || [],
-        source_names: output.source_names || [],
-        bound_document_ids: output.bound_document_ids || [],
-        guidance_item_ids: output.guidance_item_ids || [],
-      },
-      content,
-    });
-    if (!documentId) return;
-    pptOutputDocumentIdsRef.current[output.id] = documentId;
-    setActiveDocumentId(documentId);
-    setRightMode('doc');
-    setRightPanelOpen(true);
-    await loadDocumentDetail(documentId);
-  };
-
-  const syncPptOutputDocument = async (output: ThinkFlowOutput) => {
-    if (!output?.id || output.target_type !== 'ppt') return;
-    while (pptOutputDocumentSyncLocksRef.current[output.id]) {
-      try {
-        await pptOutputDocumentSyncLocksRef.current[output.id];
-      } catch {
-        // The next run below gets a fresh document list and can recover from a failed sync.
-      }
-    }
-
-    const currentSync = syncPptOutputDocumentOnce(output);
-    pptOutputDocumentSyncLocksRef.current[output.id] = currentSync;
-    try {
-      await currentSync;
-    } finally {
-      if (pptOutputDocumentSyncLocksRef.current[output.id] === currentSync) {
-        delete pptOutputDocumentSyncLocksRef.current[output.id];
-      }
-    }
-  };
-  syncPptOutputDocumentRef.current = syncPptOutputDocument;
 
   const saveDocument = async () => {
     if (!activeDocumentId) return;
@@ -3031,34 +2715,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }
   };
 
-  const ensurePushTargetDocument = async (documentId: string): Promise<ThinkFlowDocument | null> => {
-    if (!documentId || documentId === '__new__') return null;
-    const localDocument = documents.find((doc) => doc.id === documentId);
-    if (localDocument) return localDocument;
-    try {
-      const document = await loadDocumentDetail(documentId);
-      setDocuments((previous) => {
-        if (previous.some((item) => item.id === document.id)) return previous;
-        return [document, ...previous];
-      });
-      return document;
-    } catch (error: any) {
-      await refreshDocuments();
-      throw new Error(
-        `当前对话的活跃文档不在此笔记本中。当前笔记本：${notebookTitle} (${notebook.id})。请在右侧切换活跃文档后再推送。`,
-      );
-    }
-  };
-
   const executePush = async () => {
     if (pushSubmitting) return;
     const {
       preset,
       destinationType,
-      targetType,
-      targetSectionId,
-      newSectionTitle,
-      transform,
       targetDocId,
       targetItemId,
       newTitle,
@@ -3073,23 +2734,16 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }
     setPushError('');
     setPushSubmitting(true);
-    setPushStatusText(destinationType === 'document' ? '整理推送内容中...' : describePushAction(destinationType, mode));
+    setPushStatusText(describePushAction(destinationType, mode));
     try {
-      const requiresGeneratedTitle = destinationType !== 'document';
-      const resolvedTitle = requiresGeneratedTitle
-        ? await resolvePushTitle({
-          destinationType,
-          sourceContent,
-          prompt,
-          manualTitle: newTitle,
-        })
-        : (String(newTitle || '').trim() || inferDocumentTitle(sourceContent, prompt) || '对话沉淀');
-      setPushStatusText(destinationType === 'document' ? '写入文档中...' : describePushAction(destinationType, mode));
-      const selectedFiles = conversationSourceRefs
-        .filter((ref) => ref.type === 'material')
-        .map((ref) => files.find((file) => file.id === ref.id) || null)
-        .filter(Boolean)
-        .slice(0, 3) as KnowledgeFile[];
+      const resolvedTitle = await resolvePushTitle({
+        destinationType,
+        sourceContent,
+        prompt,
+        manualTitle: newTitle,
+      });
+      setPushStatusText(describePushAction(destinationType, mode));
+      const selectedFiles = files.filter((file) => selectedIds.has(file.id)).slice(0, 3);
       const sourceRefs = [
         ...sourceEntries.map((entry) => ({
           source_type: entry.kind,
@@ -3105,22 +2759,12 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       if (destinationType === 'document') {
         let docId = targetDocId;
         let docTitle = documents.find((doc) => doc.id === targetDocId)?.title || resolvedTitle;
-        if (!docId) {
-          throw new Error('请先在右侧选择或创建一份活跃文档，再推送到文档。');
+        if (docId === '__new__') {
+          const createdId = await createDocument(resolvedTitle);
+          if (!createdId) return;
+          docId = createdId;
+          docTitle = resolvedTitle;
         }
-        const verifiedDocument = await ensurePushTargetDocument(docId);
-        docTitle = verifiedDocument?.title || docTitle;
-        const normalizedTransform = coercePushTransform(targetType, transform);
-        const structuredTarget =
-          targetType === 'focus'
-            ? { type: 'focus' }
-            : targetType === 'section'
-              ? { type: 'section', section_id: targetSectionId }
-              : targetType === 'new_section'
-                ? { type: 'new_section', heading: newSectionTitle || resolvedTitle || '新增章节' }
-                : targetType === 'stash'
-                  ? { type: 'stash' }
-                  : { type: 'document_end' };
         const response = await apiFetch(`/api/v1/kb/documents/${docId}/push`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -3129,43 +2773,19 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             notebook_title: notebookTitle,
             user_id: effectiveUser?.id || 'local',
             email: effectiveUser?.email || '',
-            mode: normalizedTransform === 'raw_append' ? 'append' : normalizedTransform === 'ai_merge' ? 'merge' : 'organize',
+            mode,
             title: resolvedTitle || '对话沉淀',
             prompt,
             text_items: [sourceContent],
             source_refs: sourceRefs,
-            target: structuredTarget,
-            transform: normalizedTransform,
-            related_conv: conversationId || undefined,
           }),
         });
-        const data = await parseJson<{ document: ThinkFlowDocument; trace?: DocumentPushTrace; stash_item?: DocumentStashItem }>(response);
+        const data = await parseJson<{ document: ThinkFlowDocument; trace?: DocumentPushTrace }>(response);
         setActiveDocumentId(docId);
-        setConversationActiveDocumentId(docId);
         setRightPanelOpen(true);
         setRightMode('doc');
         if (data.trace?.id) setHighlightedTraceId(data.trace.id);
-        if (data.trace?.target?.section_id) {
-          setDocumentFocusState(
-            normalizeFocusState({
-              type: 'sections',
-              section_ids: [String(data.trace.target.section_id)],
-              stash_item_ids: [],
-              description: `焦点：${data.trace.target.heading || '推送目标章节'}`,
-            }),
-          );
-        } else if (data.trace?.target?.type === 'stash' && data.stash_item?.id) {
-          setDocumentFocusState(
-            normalizeFocusState({
-              type: 'stash_item',
-              section_ids: [],
-              stash_item_ids: [data.stash_item.id],
-              description: '焦点：暂存区第 1 条',
-            }),
-          );
-        }
         await refreshDocuments(docId);
-        void persistConversationWorkspaceState({ activeDocId: docId }).catch(() => {});
         setPushPopover((previous) => ({ ...previous, show: false }));
         setCaptureFeedback(`已整理进文档《${docTitle}》`);
       } else {
@@ -3205,6 +2825,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         setCaptureFeedback(`已沉淀到${destinationType === 'summary' ? '摘要' : '产出指导'}《${data.item.title}》`);
       }
 
+      setSelectionToolbar((previous) => ({ ...previous, show: false }));
       window.getSelection()?.removeAllRanges();
       setChatMessages((previous) =>
         previous.map((item) =>
@@ -3275,7 +2896,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }
   };
 
-  const handleNotebookChatMessage = async (query: string) => {
+  const handleSendMessage = async () => {
+    const query = chatInput.trim();
+    if (!query || chatLoading) return;
     setChatLoading(true);
     setGlobalError('');
 
@@ -3283,39 +2906,27 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       id: `user_${Date.now()}`,
       role: 'user',
       content: query,
-      time: formatThinkFlowTime(new Date()),
+      time: new Date().toLocaleTimeString(),
     };
     const assistantMessage: ThinkFlowMessage = {
       id: `assistant_${Date.now()}`,
       role: 'assistant',
       content: '',
-      time: formatThinkFlowTime(new Date()),
+      time: new Date().toLocaleTimeString(),
     };
 
     setChatMessages((previous) => [...previous, userMessage, assistantMessage]);
     setChatInput('');
 
     try {
-      const targetConversationId = await ensureConversationId();
-      const contextResponse = targetConversationId
-        ? await apiFetch(`/api/v1/kb/conversations/${targetConversationId}/chat-context`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              notebook_id: notebook.id,
-              notebook_title: notebookTitle,
-              user_id: effectiveUser?.id || 'local',
-              email: effectiveUser?.email || '',
-              user_message: query,
-              history: buildConversationHistoryPayload(chatMessages),
-            }),
-          })
-        : null;
-      const contextData = contextResponse
-        ? await parseJson<{ context?: { context_text?: string; rag_query?: string } }>(contextResponse)
-        : null;
-      const finalQuery = contextData?.context?.context_text || query;
-      const ragQuery = contextData?.context?.rag_query || query;
+      const boundDocs = await Promise.all(boundDocIds.map((id) => ensureDocumentContent(id)));
+      const validDocs = boundDocs.filter(Boolean) as ThinkFlowDocument[];
+      const docContext = validDocs
+        .map((doc) => `参考文档《${doc.title}》:\n${String(doc.content || '').slice(0, 2400)}`)
+        .join('\n\n');
+      const finalQuery = docContext
+        ? `${docContext}\n\n用户问题：${query}\n\n要求：优先围绕上述梳理文档与当前素材回答。`
+        : query;
 
       const response = await apiFetch('/api/v1/kb/chat/stream', {
         method: 'POST',
@@ -3323,10 +2934,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         body: JSON.stringify({
           files: selectedFilePaths,
           query: finalQuery,
-          rag_query: ragQuery,
           history: chatMessages
             .filter((item) => item.id !== 'welcome')
-            .filter((item) => item.role === 'user' || item.role === 'assistant')
             .map((item) => ({ role: item.role, content: item.content })),
           email: effectiveUser?.email || '',
           user_id: effectiveUser?.id || 'local',
@@ -3411,28 +3020,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       }
       await appendConversationMessages([
         { role: 'user', content: query },
-        {
-          role: 'assistant',
-          content: fullAnswer,
-          fileAnalyses,
-          sourceMapping,
-          sourcePreviewMapping,
-          sourceReferenceMapping,
-        },
+        { role: 'assistant', content: fullAnswer },
       ]);
-      if (targetConversationId) {
-        await apiFetch(`/api/v1/kb/conversations/${targetConversationId}/mark-sent`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            notebook_id: notebook.id,
-            notebook_title: notebookTitle,
-            user_id: effectiveUser?.id || 'local',
-            email: effectiveUser?.email || '',
-          }),
-        });
-        void loadConversationWorkspaceState(targetConversationId);
-      }
     } catch (error: any) {
       setGlobalError(error?.message || '发送消息失败');
       setChatMessages((previous) =>
@@ -3445,15 +3034,106 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }
   };
 
-  const handleSendMessage = async () => {
-    const query = chatInput.trim();
-    if (!query || chatLoading) return;
-    if (pptOutputCreationPending) return;
-    if (isPptOutlineChatStage) {
-      await handlePptOutlineChatMessage(query);
-      return;
+  const createOutline = async (
+    targetType: OutputType,
+    options?: {
+      autoGenerate?: boolean;
+      titleOverride?: string;
+      documentIdOverride?: string;
+      guidanceItemIdsOverride?: string[];
+      boundDocumentIdsOverride?: string[];
+      sourceIdsOverride?: string[];
+      sourcePathsOverride?: string[];
+      sourceNamesOverride?: string[];
+      videoConfig?: Paper2VideoConfig;
+    },
+  ) => {
+    setGlobalError('');
+    setGeneratingOutline(targetType);
+    setActiveOutputId('');
+    setPptOutlineFeedback('');
+    setActivePptSlideIndex(0);
+    setLeftTab('outputs');
+    setRightMode('outline');
+    enterOutputWorkspace(isStoryboardOutputType(targetType) ? 'output_focus' : 'output_immersive');
+    try {
+      const {
+        outputDocumentId,
+        resolvedGuidanceIds,
+        resolvedBoundDocIds,
+        resolvedSourceIds,
+        resolvedSourcePaths,
+        outputTitle,
+        resolvedSourceNames,
+      } = await resolveOutputCreationInputs(targetType, options);
+      const outlinePayload = {
+        notebook_id: notebook.id,
+        notebook_title: notebookTitle,
+        user_id: effectiveUser?.id || 'local',
+        email: effectiveUser?.email || '',
+        document_id: outputDocumentId,
+        target_type: targetType,
+        title: outputTitle,
+        prompt: '',
+        page_count: isStoryboardOutputType(targetType) ? 10 : 6,
+        guidance_item_ids: resolvedGuidanceIds,
+        source_paths: resolvedSourcePaths,
+        source_names: resolvedSourceNames,
+        bound_document_ids: resolvedBoundDocIds,
+        enable_images: isStoryboardOutputType(targetType) ? true : undefined,
+        ...(targetType === 'video' && options?.videoConfig
+          ? paper2videoPayloadFromConfig(options.videoConfig)
+          : {}),
+      };
+      console.info('[ThinkFlow] createOutline payload', outlinePayload);
+      const response = await apiFetch('/api/v1/kb/outputs/outline', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(outlinePayload),
+      });
+      const data = await parseJson<{ output: ThinkFlowOutput }>(response);
+      const nextOutput = data.output;
+      setPptOutlineFeedback('');
+      setActivePptSlideIndex(0);
+      setRightMode('outline');
+      setLeftTab('outputs');
+      setOutputs((previous) => {
+        const existingIndex = previous.findIndex((item) => item.id === nextOutput.id);
+        if (existingIndex >= 0) {
+          const nextItems = [...previous];
+          nextItems[existingIndex] = nextOutput;
+          return nextItems;
+        }
+        return [nextOutput, ...previous];
+      });
+      setActiveOutputId(nextOutput.id);
+      if (!isStoryboardOutputType(targetType)) {
+        setOutputContexts((previous) => ({
+          ...previous,
+          [nextOutput.id]: {
+            snapshot: buildOutputContextSnapshot({
+              outputId: nextOutput.id,
+              targetType,
+              documentId: outputDocumentId,
+              guidanceItemIds: resolvedGuidanceIds,
+              selectedSourceIds: resolvedSourceIds,
+              boundDocumentIds: resolvedBoundDocIds,
+            }),
+            isStale: false,
+            staleReason: '',
+          },
+        }));
+      }
+      void refreshOutputs(nextOutput.id);
+      // 视频成片走 paper2video/*，勿调用 /generate（对 video 几乎无效果）
+      if (options?.autoGenerate && targetType !== 'video') {
+        await generateOutputById(nextOutput.id);
+      }
+    } catch (error: any) {
+      setGlobalError(error?.message || '生成大纲失败');
+    } finally {
+      setGeneratingOutline(null);
     }
-    await handleNotebookChatMessage(query);
   };
 
   const updateOutlineSection = (index: number, patch: Partial<OutlineSection>) => {
@@ -3511,7 +3191,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             '你是 ThinkFlow 的 AI 笔记整理器。',
             '请根据给定来源与对话片段，输出一份简洁、可继续编辑的 markdown 摘要。',
             '不要直接复制原始问答，要先归纳。',
-            'Markdown 层级规则：最大标题只能使用二级标题 ##；不要输出一级标题 #；主要模块必须用 ##，不要把主要模块写成 ###。',
             '必须包含这些二级标题：',
             '## 这段在说什么',
             '## 当前结论',
@@ -3524,7 +3203,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             '请根据给定来源与对话片段，输出一份高权重、只读的 markdown 产出指导。',
             '这份内容将直接进入后续 PPT / 报告 / 其他产出的核心上下文。',
             '不要复述原始问答，要输出明确要求。',
-            'Markdown 层级规则：最大标题只能使用二级标题 ##；不要输出一级标题 #；主要模块必须用 ##，不要把主要模块写成 ###。',
             '必须包含这些二级标题：',
             '## 产出目标',
             '## 必须覆盖',
@@ -3634,9 +3312,333 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     return generateCaptureTitle({ destinationType, sourceContent, prompt });
   };
 
+  const saveOutline = async (options?: { pipelineStage?: string; enableImages?: boolean }): Promise<boolean> => {
+    if (!activeOutputId || !activeOutput) return false;
+    setOutlineSaving(true);
+    try {
+      const response = await apiFetch(`/api/v1/kb/outputs/${activeOutputId}/outline`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+          title: activeOutput.title,
+          prompt: activeOutput.prompt || '',
+          outline: activeOutput.outline || [],
+          pipeline_stage: options?.pipelineStage,
+          enable_images:
+            typeof options?.enableImages === 'boolean'
+              ? options.enableImages
+              : activeOutput.enable_images,
+        }),
+      });
+      const data = await parseJson<{ output: ThinkFlowOutput }>(response);
+      setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+      return true;
+    } catch (error: any) {
+      setGlobalError(error?.message || '保存大纲失败');
+      return false;
+    } finally {
+      setOutlineSaving(false);
+    }
+  };
+
+  const confirmPptOutline = async () => {
+    await saveOutline({ pipelineStage: 'pages_ready' });
+  };
+
+  const runPaper2videoSubtitle = async () => {
+    if (!activeOutputId || !activeOutput || activeOutput.target_type !== 'video') return;
+    const saved = await saveOutline();
+    if (!saved) return;
+    setGeneratingOutput(true);
+    try {
+      const p2vConfig = activeOutput.paper2video_config;
+      const response = await apiFetch(`/api/v1/kb/outputs/${activeOutputId}/paper2video/run-subtitle`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+          ...(p2vConfig ? paper2videoPayloadFromConfig(p2vConfig) : {}),
+        }),
+      });
+      const data = await parseJson<{ output: ThinkFlowOutput }>(response);
+      setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+      setActivePptSlideIndex(0);
+      await refreshOutputs(activeOutputId);
+    } catch (error: any) {
+      setGlobalError(error?.message || '生成逐镜口播稿失败');
+    } finally {
+      setGeneratingOutput(false);
+    }
+  };
+
+  const runPaper2videoContinue = async () => {
+    if (!activeOutputId || !activeOutput || activeOutput.target_type !== 'video') return;
+    const outlineLen = (activeOutput.outline || []).length;
+    if (!outlineLen) {
+      setGlobalError('分镜大纲为空，无法合成视频。');
+      return;
+    }
+    if (activePptConfirmedCount < outlineLen) {
+      setGlobalError('请先逐镜确认口播稿，再合成视频。');
+      return;
+    }
+    const saved = await saveOutline();
+    if (!saved) return;
+    setGeneratingOutput(true);
+    try {
+      const p2vConfig = activeOutput.paper2video_config;
+      const response = await apiFetch(`/api/v1/kb/outputs/${activeOutputId}/paper2video/continue-after-edit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+          ...(p2vConfig ? paper2videoPayloadFromConfig(p2vConfig) : {}),
+        }),
+      });
+      const data = await parseJson<{ output: ThinkFlowOutput }>(response);
+      setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+      await refreshOutputs(activeOutputId);
+    } catch (error: any) {
+      setGlobalError(error?.message || '合成视频失败');
+    } finally {
+      setGeneratingOutput(false);
+    }
+  };
+
+  const refinePptOutline = async () => {
+    if (!activeOutputId || !activeOutput || !isStoryboardOutputType(activeOutput.target_type)) return;
+    const feedback = String(pptOutlineFeedback || '').trim();
+    if (!feedback) {
+      setGlobalError('请先输入你想让 AI 修改大纲的要求。');
+      return;
+    }
+    setPptRefiningOutline(true);
+    try {
+      const response = await apiFetch(`/api/v1/kb/outputs/${activeOutputId}/outline-refine`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+          feedback,
+        }),
+      });
+      const data = await parseJson<{ output: ThinkFlowOutput }>(response);
+      setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+      setPptOutlineFeedback('');
+    } catch (error: any) {
+      setGlobalError(error?.message || 'AI 修改大纲失败');
+    } finally {
+      setPptRefiningOutline(false);
+    }
+  };
+
+  const regenerateActivePptPage = async () => {
+    if (!activeOutput || !isStoryboardOutputType(activeOutput.target_type) || !activePptSlide) return;
+    const prompt = String(pptPagePrompt || '').trim();
+    if (!prompt) {
+      setGlobalError('请先输入你想修改当前页的要求。');
+      return;
+    }
+    if (!activePptCurrentPreview && activeOutput.target_type === 'ppt') {
+      setGlobalError('请先生成一版页面草稿，再改单页。');
+      return;
+    }
+    if (activeOutput.target_type === 'video') {
+      setGlobalError('视频分镜暂不支持「按提示重做当前页」。请直接编辑口播稿并保存，再确认当前镜。');
+      return;
+    }
+    setPptPageBusyAction('regenerate');
+    setPptPageStatus(`第 ${activePptSlide.index + 1} 页正在按提示重做...`);
+    console.info('[ThinkFlow] regeneratePptPage:start', {
+      outputId: activeOutput.id,
+      pageIndex: activePptSlide.index,
+      prompt,
+    });
+    try {
+      const regenPath = `/api/v1/kb/outputs/${activeOutput.id}/pages/${activePptSlide.index}/regenerate`;
+      const response = await apiFetch(regenPath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+          prompt,
+        }),
+      });
+      const data = await parseJson<{ output: ThinkFlowOutput }>(response);
+      setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+      setPptPagePrompt('');
+      console.info('[ThinkFlow] regeneratePptPage:success', {
+        outputId: data.output.id,
+        pageIndex: activePptSlide.index,
+        updatedAt: data.output.updated_at,
+      });
+      setPptPageStatus(`第 ${activePptSlide.index + 1} 页已重新生成，可在预览图下方切换历史版本`);
+    } catch (error: any) {
+      console.error('[ThinkFlow] regeneratePptPage:error', {
+        outputId: activeOutput.id,
+        pageIndex: activePptSlide.index,
+        error: error?.message || String(error || ''),
+      });
+      setGlobalError(error?.message || '当前页重生成失败');
+      setPptPageStatus(`第 ${activePptSlide.index + 1} 页重生成失败`);
+    } finally {
+      setPptPageBusyAction('');
+    }
+  };
+
+  const selectActivePptPageVersion = async (versionId: string) => {
+    if (!activeOutput || !isStoryboardOutputType(activeOutput.target_type) || !activePptSlide || !versionId) return;
+    setPptPageBusyAction('select_version');
+    setPptPageStatus(`第 ${activePptSlide.index + 1} 页正在切换历史版本...`);
+    console.info('[ThinkFlow] selectPptPageVersion:start', {
+      outputId: activeOutput.id,
+      pageIndex: activePptSlide.index,
+      versionId,
+    });
+    try {
+      const selPath =
+        activeOutput.target_type === 'video'
+          ? `/api/v1/kb/outputs/${activeOutput.id}/scenes/${activePptSlide.index}/versions/${versionId}/select`
+          : `/api/v1/kb/outputs/${activeOutput.id}/pages/${activePptSlide.index}/versions/${versionId}/select`;
+      const response = await apiFetch(selPath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+        }),
+      });
+      const data = await parseJson<{ output: ThinkFlowOutput }>(response);
+      setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+      setPptPageStatus(`第 ${activePptSlide.index + 1} 页已切换到所选历史版本`);
+      console.info('[ThinkFlow] selectPptPageVersion:success', {
+        outputId: data.output.id,
+        pageIndex: activePptSlide.index,
+        versionId,
+      });
+    } catch (error: any) {
+      console.error('[ThinkFlow] selectPptPageVersion:error', {
+        outputId: activeOutput.id,
+        pageIndex: activePptSlide.index,
+        versionId,
+        error: error?.message || String(error || ''),
+      });
+      setGlobalError(error?.message || '切换历史版本失败');
+      setPptPageStatus(`第 ${activePptSlide.index + 1} 页切换历史版本失败`);
+    } finally {
+      setPptPageBusyAction('');
+    }
+  };
+
+  const confirmActivePptPage = async () => {
+    if (!activeOutput || !isStoryboardOutputType(activeOutput.target_type) || !activePptSlide) return;
+    if (!activePptCurrentPreview && activeOutput.target_type === 'ppt') {
+      setGlobalError('当前页还没有生成结果，无法确认。');
+      return;
+    }
+    setPptPageBusyAction('confirm');
+    try {
+      const confirmPath =
+        activeOutput.target_type === 'video'
+          ? `/api/v1/kb/outputs/${activeOutput.id}/scenes/${activePptSlide.index}/confirm`
+          : `/api/v1/kb/outputs/${activeOutput.id}/pages/${activePptSlide.index}/confirm`;
+      const response = await apiFetch(confirmPath, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+        }),
+      });
+      const data = await parseJson<{ output: ThinkFlowOutput }>(response);
+      setOutputs((previous) => previous.map((item) => (item.id === data.output.id ? data.output : item)));
+      const outlineLen = (data.output.outline || []).length;
+      const reviews = Array.isArray(data.output.page_reviews) ? data.output.page_reviews : [];
+      const confirmedCount = reviews.filter((item) => item.confirmed).length;
+      const videoAllDone =
+        data.output.target_type === 'video' && outlineLen > 0 && confirmedCount >= outlineLen;
+      if (data.output.pipeline_stage !== 'generated') {
+        setActivePptSlideIndex((previous) => {
+          const maxIndex = (data.output.outline || []).length - 1;
+          return Math.min(previous + 1, Math.max(maxIndex, 0));
+        });
+        setPptPageStatus(
+          videoAllDone
+            ? '当前镜已确认。全部分镜已确认，请点击上方或底部的「合成视频」。'
+            : `第 ${activePptSlide.index + 1} 页已确认`,
+        );
+      } else {
+        setPptPageStatus('全部页面已确认，已进入结果页');
+      }
+    } catch (error: any) {
+      setGlobalError(error?.message || '确认当前页失败');
+    } finally {
+      setPptPageBusyAction('');
+    }
+  };
+
+  const generateOutputById = async (outputId: string) => {
+    if (!outputId) return;
+    setGeneratingOutput(true);
+    try {
+      const response = await apiFetch(`/api/v1/kb/outputs/${outputId}/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+        }),
+      });
+      await parseJson<{ output: ThinkFlowOutput }>(response);
+      await refreshOutputs(outputId);
+      setOutputContexts((previous) => {
+        const current = previous[outputId];
+        if (!current) return previous;
+        return {
+          ...previous,
+          [outputId]: {
+            ...current,
+            isStale: false,
+            staleReason: '',
+          },
+        };
+      });
+    } catch (error: any) {
+      setGlobalError(error?.message || '生成产出失败');
+    } finally {
+      setGeneratingOutput(false);
+    }
+  };
+
   const generateOutput = async () => {
     if (!activeOutputId) return;
-    if (activeOutput?.target_type === 'ppt' && activePptStage === 'outline_ready') {
+    if (isStoryboardOutputType(activeOutput?.target_type) && activePptStage === 'outline_ready') {
+      if (activeOutput?.target_type === 'video') {
+        await runPaper2videoSubtitle();
+        return;
+      }
       await confirmPptOutline();
       return;
     }
@@ -3697,10 +3699,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           email: effectiveUser?.email || '',
         }),
       });
-      const result = await parseJson(response);
+      await parseJson(response);
       await refreshFiles();
-      const sourceName = result?.source_path ? String(result.source_path).split('/').pop() : '';
-      pushToast(sourceName ? `已导入为来源素材：${sourceName}` : '已导入为来源素材', 'success');
     } catch (error: any) {
       setGlobalError(error?.message || '回流来源失败');
     }
@@ -3713,42 +3713,82 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     const result = activeOutput.result || {};
     const flashcards = getFlashcardsFromResult(result);
     const quizQuestions = getQuizQuestionsFromResult(result);
-    if (activeOutput.target_type === 'ppt') {
+    if (isStoryboardOutputType(activeOutput.target_type)) {
+      const deck = activeOutput.target_type;
+      const unit = deck === 'video' ? '镜' : '页';
+      const pageLabel = deck === 'video' ? '分镜' : '页面';
+      const brand = deck === 'video' ? '视频' : 'PPT';
       const previewImages = activePptPreviewImages;
       const selectedSlide = activePptSlide?.slide;
       const selectedIndex = activePptSlide?.index ?? 0;
       const selectedImage = activePptCurrentPreview;
-      const selectedSlideFailed = Boolean(selectedSlide?.generation_failed || (selectedSlide?.mode || '').includes('failed'));
-      const hasPreviewImages = previewImages.some(Boolean);
-      const canDownloadPpt = activePptStage === 'generated';
+      const canDownloadDeck = activePptStage === 'generated';
+      const videoMp4Path = deck === 'video' && canDownloadDeck ? String(result.video_mp4_path || '').trim() : '';
+      const showVideoFinalPreview = Boolean(videoMp4Path);
       return (
         <div className="thinkflow-output-preview thinkflow-ppt-viewer">
-          {hasPreviewImages && selectedSlide ? (
+          {previewImages.length > 0 && selectedSlide ? (
             <>
               <div className="thinkflow-ppt-viewer-stage">
                 <div className="thinkflow-ppt-viewer-toolbar">
                   <div className="thinkflow-ppt-viewer-toolbar-copy">
-                    <span className="thinkflow-ppt-outline-summary-index">第 {selectedSlide.pageNum || selectedIndex + 1} 页</span>
-                    <strong>{selectedSlide.title || `页面 ${selectedIndex + 1}`}</strong>
+                    {showVideoFinalPreview && videoPreviewTab === 'final' ? (
+                      <>
+                        <span className="thinkflow-ppt-outline-summary-index">视频成片</span>
+                        <strong>预览与下载</strong>
+                      </>
+                    ) : (
+                      <>
+                        <span className="thinkflow-ppt-outline-summary-index">第 {selectedSlide.pageNum || selectedIndex + 1} {unit}</span>
+                        <strong>{selectedSlide.title || `${pageLabel} ${selectedIndex + 1}`}</strong>
+                      </>
+                    )}
                   </div>
                   <div className="thinkflow-ppt-viewer-links">
-                    {canDownloadPpt && result.ppt_pdf_path ? (
+                    {canDownloadDeck && deck === 'ppt' && result.ppt_pdf_path ? (
                       <a href={result.ppt_pdf_path} target="_blank" rel="noreferrer" className="thinkflow-download-link">
                         <ExternalLink size={14} />
                         打开 PDF
                       </a>
                     ) : null}
-                    {canDownloadPpt && result.ppt_pptx_path ? (
+                    {canDownloadDeck && deck === 'ppt' && result.ppt_pptx_path ? (
                       <a href={result.ppt_pptx_path} target="_blank" rel="noreferrer" className="thinkflow-download-link">
                         <Download size={14} />
                         下载 PPTX
                       </a>
                     ) : null}
+                    {showVideoFinalPreview ? renderVideoMp4Actions(videoMp4Path, 'sm') : null}
                   </div>
                 </div>
-                <div className="thinkflow-ppt-viewer-frame">
-                  {selectedImage ? (
-                    <img src={withAssetVersion(selectedImage, `${activeOutput.updated_at}_${selectedIndex}`)} alt={`PPT 第 ${selectedIndex + 1} 页`} />
+                {showVideoFinalPreview ? (
+                  <div className="thinkflow-video-preview-tabs" role="tablist" aria-label="视频预览模式">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={videoPreviewTab === 'final'}
+                      className={`thinkflow-video-preview-tab ${videoPreviewTab === 'final' ? 'is-active' : ''}`}
+                      onClick={() => setVideoPreviewTab('final')}
+                    >
+                      <Play size={15} />
+                      成片预览
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={videoPreviewTab === 'slides'}
+                      className={`thinkflow-video-preview-tab ${videoPreviewTab === 'slides' ? 'is-active' : ''}`}
+                      onClick={() => setVideoPreviewTab('slides')}
+                    >
+                      <LayoutGrid size={15} />
+                      分镜图
+                    </button>
+                  </div>
+                ) : null}
+                <div className={`thinkflow-ppt-viewer-frame ${showVideoFinalPreview && videoPreviewTab === 'final' ? 'has-video' : ''}`}>
+                  {showVideoFinalPreview && videoPreviewTab === 'final' ? (
+                    renderVideoMp4Player(videoMp4Path)
+                  ) : selectedImage ? (
+                    <img src={withAssetVersion(selectedImage, `${activeOutput.updated_at}_${selectedIndex}`)} alt={`${brand} 第 ${selectedIndex + 1} ${unit}`} />
                   ) : (
                     <div className="thinkflow-empty">这一页还没有图像预览。</div>
                   )}
@@ -3771,7 +3811,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                           {version.preview_path ? (
                             <img
                               src={withAssetVersion(version.preview_path, `${version.created_at}_${version.id}`)}
-                              alt={`第 ${selectedIndex + 1} 页历史版本 ${index + 1}`}
+                              alt={`第 ${selectedIndex + 1} ${unit}历史版本 ${index + 1}`}
                             />
                           ) : (
                             <div className="thinkflow-empty">暂无缩略图</div>
@@ -3786,48 +3826,32 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   </div>
                 ) : null}
                 <div className="thinkflow-ppt-viewer-caption">
-                  <p>
-                    {selectedSlideFailed
-                      ? `当前页生成失败：${selectedSlide.generation_error || '请重新生成该页或整套页面。'}`
-                      : selectedSlide.layout_description || '当前页暂时没有布局描述。'}
-                  </p>
+                  <p>{selectedSlide.layout_description || '当前页暂时没有布局描述。'}</p>
                 </div>
               </div>
               <div className="thinkflow-ppt-filmstrip">
                 {previewImages.map((image, index) => {
                   const review = activePptPageReviews.find((item) => item.page_index === index);
-                  const slide = (activeOutput.outline || [])[index];
-                  const slideFailed = Boolean(slide?.generation_failed || (slide?.mode || '').includes('failed'));
                   return (
-                      <button
+                    <button
                       key={`${image}_${index}`}
                       type="button"
                       className={`thinkflow-ppt-filmstrip-card ${selectedIndex === index ? 'is-active' : ''}`}
                       onClick={() => setActivePptSlideIndex(index)}
-                      >
-                        <div className="thinkflow-ppt-filmstrip-thumb">
-                          {image ? (
-                            <img src={withAssetVersion(image, `${activeOutput.updated_at}_${index}`)} alt={`PPT 第 ${index + 1} 页`} />
-                          ) : (
-                            <div className="thinkflow-empty thinkflow-ppt-filmstrip-empty">待生成</div>
-                          )}
-                        </div>
-                        <div className="thinkflow-ppt-filmstrip-meta">
-                          <span>第 {index + 1} 页</span>
-                          {slideFailed ? (
-                            <strong>生成失败</strong>
-                          ) : review?.confirmed ? (
-                            <strong>已确认</strong>
-                          ) : (
-                            <em>待核对</em>
-                          )}
-                        </div>
-                      </button>
-                    );
-                  })}
-                </div>
+                    >
+                      <div className="thinkflow-ppt-filmstrip-thumb">
+                        <img src={withAssetVersion(image, `${activeOutput.updated_at}_${index}`)} alt={`${brand} 第 ${index + 1} ${unit}`} />
+                      </div>
+                      <div className="thinkflow-ppt-filmstrip-meta">
+                        <span>第 {index + 1} {unit}</span>
+                        {review?.confirmed ? <strong>已确认</strong> : <em>待核对</em>}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
             </>
-          ) : canDownloadPpt && result.ppt_pdf_path ? (
+          ) : canDownloadDeck && deck === 'ppt' && result.ppt_pdf_path ? (
             <div className="thinkflow-pdf-embed-shell">
               <div className="thinkflow-pdf-embed-toolbar">
                 <strong>{activeOutput.title}</strong>
@@ -3839,7 +3863,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
               <iframe src={result.ppt_pdf_path} title={activeOutput.title} />
             </div>
           ) : (
-            <div className="thinkflow-empty">确认逐页生成后，这里会显示页面预览与下载入口。</div>
+            <div className="thinkflow-empty">确认逐镜/逐页生成后，这里会显示预览与下载入口。</div>
           )}
         </div>
       );
@@ -3848,9 +3872,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       return (
         <div className="thinkflow-output-preview">
           <div className="thinkflow-markdown">
-            <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-              {String(result.preview_markdown)}
-            </ReactMarkdown>
+            <ReactMarkdown>{String(result.preview_markdown)}</ReactMarkdown>
           </div>
         </div>
       );
@@ -3871,18 +3893,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     }
     if (result.mermaid_code) {
       return (
-        <ThinkFlowMindmapPreview
-          activeOutput={activeOutput}
-          files={files}
-          conversationSourceRefs={conversationSourceRefs}
-          resolveFileUrl={resolveFileUrl}
-          setConversationSourceRefs={setConversationSourceRefs}
-          setSelectedIds={setSelectedIds}
-          persistConversationWorkspaceState={({ sourceRefs }) => persistConversationWorkspaceState({ sourceRefs })}
-          setCaptureFeedback={setCaptureFeedback}
-          setGlobalError={setGlobalError}
-          setChatInput={setChatInput}
-        />
+        <div className="thinkflow-output-preview">
+          <MermaidPreview mermaidCode={String(result.mermaid_code)} title="导图预览" />
+        </div>
       );
     }
     if (activeOutput.target_type === 'flashcard' && flashcards.length > 0) return renderFlashcardPreview(flashcards);
@@ -3896,7 +3909,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   };
 
   const renderDirectOutputWorkspace = () => {
-    if (!activeOutput || activeOutput.target_type === 'ppt') return null;
+    if (!activeOutput || isStoryboardOutputType(activeOutput.target_type)) return null;
     const result = activeOutput.result || {};
     const downloadUrl = result.download_url || result.pdf_path || result.previewUrl || result.preview_url || result.audio_path || '';
     return (
@@ -4012,20 +4025,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     return Array.from(new Set(titles));
   };
 
-  const buildDirectOutputDocumentTitles = (documentId: string, primaryTitle: string, boundTitles: string[]) => {
-    const titles = [
-      documentId ? primaryTitle : '',
-      ...boundTitles,
-    ]
-      .map((item) => String(item || '').trim())
-      .filter(Boolean);
-    return Array.from(new Set(titles));
-  };
-
   const renderOutputWorkspaceHeader = () => {
     if (!activeOutput) return null;
     const snapshot = activeOutputContext?.snapshot;
-    const isPptOutput = activeOutput.target_type === 'ppt';
+    const isDeckOutput = isStoryboardOutputType(activeOutput.target_type);
+    const deckLabel = activeOutput.target_type === 'video' ? '视频' : 'PPT';
     const nonPptDocumentTitle =
       snapshot?.documentTitle ||
       documents.find((item) => item.id === activeOutput.document_id)?.title ||
@@ -4050,7 +4054,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             .map((item) => item.title || '未命名产出指导');
     const pptDocumentTitle =
       documents.find((item) => item.id === activeOutput.document_id)?.title ||
-      activeOutput.title.replace(/\s*·\s*PPT$/u, '') ||
+      activeOutput.title.replace(/\s*·\s*(PPT|视频)$/u, '') ||
       '未设置';
     const pptSourceNames = activeOutput.source_names || [];
     const pptBoundDocTitles =
@@ -4063,10 +4067,10 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       .filter((item) => (activeOutput.guidance_item_ids || []).includes(item.id))
       .map((item) => item.title || '未命名产出指导');
     const pptReferenceDocTitles = buildPptReferenceDocumentTitles(pptDocumentTitle, pptBoundDocTitles);
-    const sourceCount = isPptOutput ? pptSourceNames.length : nonPptSourceNames.length;
-    const boundDocCount = isPptOutput ? pptReferenceDocTitles.length : nonPptBoundDocTitles.length;
-    const guidanceCount = isPptOutput ? pptGuidanceTitles.length : nonPptGuidanceTitles.length;
-    const collapsedPills = isPptOutput
+    const sourceCount = isDeckOutput ? pptSourceNames.length : nonPptSourceNames.length;
+    const boundDocCount = isDeckOutput ? pptReferenceDocTitles.length : nonPptBoundDocTitles.length;
+    const guidanceCount = isDeckOutput ? pptGuidanceTitles.length : nonPptGuidanceTitles.length;
+    const collapsedPills = isDeckOutput
       ? [
           `来源 ${sourceCount}`,
           `梳理文档 / 参考文档 ${boundDocCount}`,
@@ -4124,16 +4128,18 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             <p>
               {activeOutput.target_type === 'ppt'
                 ? 'PPT 会先基于来源生成大纲，确认后再进入逐页生成。来源仍是主输入，梳理文档和产出指导只作为增强上下文。'
-                : '非 PPT 产出会直接基于确认时的来源快照生成结果。这个结果版本不会在当前会话里动态改来源；需要新范围时请重新生成一版。'}
+                : activeOutput.target_type === 'video'
+                  ? '视频会先基于来源生成分镜大纲，确认后再进入逐镜生成。来源仍是主输入，梳理文档和产出指导只作为增强上下文。'
+                  : '非 PPT / 视频产出会直接基于确认时的来源快照生成结果。这个结果版本不会在当前会话里动态改来源；需要新范围时请重新生成一版。'}
             </p>
           </div>
 
-          {isPptOutput ? (
+          {isDeckOutput ? (
             <>
               <div className="thinkflow-output-source-lock-card">
                 <div className="thinkflow-output-source-lock-copy">
-                  <strong>本次 PPT 来源已锁定</strong>
-                  <p>当前会话只使用创建时确认的来源、梳理文档和产出指导。后续可重开新一轮 PPT，但不会在当前会话里动态改来源。</p>
+                  <strong>本次 {deckLabel} 来源已锁定</strong>
+                  <p>当前会话只使用创建时确认的来源、梳理文档和产出指导。后续可重开新一轮 {deckLabel}，但不会在当前会话里动态改来源。</p>
                 </div>
                 <div className="thinkflow-output-source-lock-grid">
                   <div className="thinkflow-output-source-lock-section">
@@ -4192,77 +4198,608 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     );
   };
 
+  const renderPptStageRail = () => {
+    const target = activeOutput?.target_type || 'ppt';
+    const steps: Array<{ key: PptPipelineStage; label: string }> = [
+      { key: 'outline_ready', label: getStoryboardStageLabel(target, 'outline_ready') },
+      { key: 'pages_ready', label: getStoryboardStageLabel(target, 'pages_ready') },
+      { key: 'generated', label: getStoryboardStageLabel(target, 'generated') },
+    ];
+    const currentIndex = steps.findIndex((step) => step.key === activePptStage);
+    return (
+      <div className="thinkflow-ppt-stage-rail">
+        {steps.map((step, index) => (
+          <div
+            key={step.key}
+            className={`thinkflow-ppt-stage-pill ${activePptStage === step.key ? 'is-active' : ''} ${index < currentIndex ? 'is-complete' : ''}`}
+          >
+            <span>{index + 1}</span>
+            <strong>{step.label}</strong>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const renderPptOutlineWorkspace = () => {
     if (!activeOutput) return null;
+    const slides = activeOutput.outline || [];
+    const selectedSlide = activePptSlide?.slide || null;
+    const selectedSlideIndex = activePptSlide?.index ?? 0;
+    const isVideoDeck = activeOutput.target_type === 'video';
     return (
-      <PptOutlinePanel
-        activeOutput={activeOutput}
-        activePptOutline={activePptOutline}
-        activePptSlide={activePptSlide}
-        activePptStage={activePptStage}
-        activePptDraftPending={activePptDraftPending}
-        archivedOutlineChatSessions={archivedOutlineChatSessions}
-        outlineSaving={outlineSaving}
-        generatingOutput={generatingOutput}
-        draftOutline={activeOutput.outline_chat_draft_outline}
-        onSetRightMode={setRightMode}
-        onSaveOutline={saveOutline}
-        onConfirmPptOutline={confirmPptOutline}
-        onDiscardPptOutlineDraft={discardPptOutlineDraft}
-        onUpdateOutlineSection={updateOutlineSection}
-        onSetActivePptSlideIndex={setActivePptSlideIndex}
-        onAddPptOutlineSection={addPptOutlineSection}
-      />
+      <>
+        {renderPptStageRail()}
+        <div className="thinkflow-ppt-stage-header">
+          <div className="thinkflow-ppt-stage-copy">
+            <h4>{getStoryboardStageLabel(activeOutput.target_type, activePptStage)}</h4>
+            <p>
+              {isVideoDeck
+                ? '先检查分镜标题与要点是否与 PDF 页面对齐，可随时「保存大纲」。准备好后点击「从 PDF 生成逐镜口播稿」，系统会结合每一页生成口播文本并进入「口播稿与分镜确认」阶段。'
+                : '这一步先确认整套页级大纲。先看单页预览，再改局部内容；需要整体调结构时，再用 AI 修改。'}
+            </p>
+          </div>
+          <div className="thinkflow-ppt-stage-actions">
+            <button type="button" className="thinkflow-doc-action-btn" onClick={() => setRightMode('doc')}>
+              返回文档
+            </button>
+            <button type="button" className="thinkflow-doc-action-btn is-active" onClick={() => void saveOutline()} disabled={outlineSaving}>
+              {outlineSaving ? '保存中...' : '保存大纲'}
+            </button>
+            <button
+              type="button"
+              className="thinkflow-generate-btn"
+              onClick={() => void (isVideoDeck ? runPaper2videoSubtitle() : confirmPptOutline())}
+              disabled={outlineSaving || generatingOutput}
+            >
+              {generatingOutput
+                ? isVideoDeck
+                  ? '口播稿生成中...'
+                  : '处理中...'
+                : isVideoDeck
+                  ? '从 PDF 生成逐镜口播稿'
+                  : '确认大纲，进入逐页生成'}
+            </button>
+          </div>
+        </div>
+        <div className="thinkflow-ppt-refine-panel">
+          <textarea
+            className="thinkflow-outline-textarea"
+            value={pptOutlineFeedback}
+            onChange={(event) => setPptOutlineFeedback(event.target.value)}
+            placeholder="例如：把前两页更聚焦问题背景，弱化实验细节，把结论页提前一页。"
+            rows={3}
+          />
+          <div className="thinkflow-ppt-refine-actions">
+            <button type="button" className="thinkflow-doc-action-btn" onClick={() => setPptOutlineFeedback('')}>
+              清空
+            </button>
+            <button type="button" className="thinkflow-doc-action-btn is-active" onClick={() => void refinePptOutline()} disabled={pptRefiningOutline}>
+              {pptRefiningOutline ? 'AI 调整中...' : '提示词 AI 修改'}
+            </button>
+          </div>
+        </div>
+        <div className="thinkflow-ppt-outline-canvas">
+          {selectedSlide ? (
+            <div className="thinkflow-ppt-focus-shell">
+              <article className="thinkflow-ppt-focus-preview">
+                <div className="thinkflow-ppt-focus-preview-top">
+                  <span className="thinkflow-ppt-outline-summary-index">第 {selectedSlide.pageNum || selectedSlideIndex + 1} 页</span>
+                  <span className="thinkflow-ppt-focus-preview-label">当前页预览</span>
+                </div>
+                <div className="thinkflow-ppt-focus-slide">
+                  <div className="thinkflow-ppt-focus-slide-head">
+                    <h4>{selectedSlide.title || `页面 ${selectedSlideIndex + 1}`}</h4>
+                    <p>{selectedSlide.layout_description || '这页还没有填写布局说明。'}</p>
+                  </div>
+                  {(selectedSlide.key_points || selectedSlide.bullets || []).length > 0 ? (
+                    <ul className="thinkflow-ppt-focus-points">
+                      {(selectedSlide.key_points || selectedSlide.bullets || []).map((point, pointIndex) => (
+                        <li key={`${selectedSlide.id || selectedSlideIndex}_${pointIndex}`}>{point}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <div className="thinkflow-ppt-outline-card-empty">这页还没有要点。</div>
+                  )}
+                  {selectedSlide.asset_ref ? <div className="thinkflow-ppt-outline-card-asset">素材：{selectedSlide.asset_ref}</div> : null}
+                </div>
+              </article>
+              <div className="thinkflow-ppt-slide-editor">
+                <div className="thinkflow-ppt-slide-editor-head">
+                  <div>
+                    <span className="thinkflow-output-workspace-kicker">单页编辑</span>
+                    <h4>正在编辑第 {selectedSlide.pageNum || selectedSlideIndex + 1} 页</h4>
+                  </div>
+                </div>
+                <input
+                  className="thinkflow-outline-input"
+                  value={selectedSlide.title || ''}
+                  onChange={(event) => updateOutlineSection(selectedSlideIndex, { title: event.target.value })}
+                  placeholder="页面标题"
+                />
+                <textarea
+                  className="thinkflow-outline-textarea"
+                  value={selectedSlide.layout_description || ''}
+                  onChange={(event) =>
+                    updateOutlineSection(selectedSlideIndex, {
+                      layout_description: event.target.value,
+                      summary: event.target.value,
+                    })
+                  }
+                  placeholder="这一页的布局描述 / 页面角色"
+                  rows={3}
+                />
+                <textarea
+                  className="thinkflow-outline-textarea"
+                  value={(selectedSlide.key_points || selectedSlide.bullets || []).join('\n')}
+                  onChange={(event) =>
+                    updateOutlineSection(selectedSlideIndex, {
+                      key_points: event.target.value.split('\n').map((text) => text.trim()).filter(Boolean),
+                      bullets: event.target.value.split('\n').map((text) => text.trim()).filter(Boolean),
+                    })
+                  }
+                  placeholder="每行一个要点"
+                  rows={7}
+                />
+                <input
+                  className="thinkflow-outline-input"
+                  value={selectedSlide.asset_ref || ''}
+                  onChange={(event) => updateOutlineSection(selectedSlideIndex, { asset_ref: event.target.value || null })}
+                  placeholder="可选：来源素材引用（asset_ref）"
+                />
+              </div>
+            </div>
+          ) : null}
+          <div className="thinkflow-ppt-outline-strip">
+            {slides.map((item, index) => (
+              <button
+                key={item.id || `${activeOutput.id}_${index}`}
+                type="button"
+                className={`thinkflow-ppt-outline-card ${selectedSlideIndex === index ? 'is-active' : ''}`}
+                onClick={() => setActivePptSlideIndex(index)}
+              >
+                <div className="thinkflow-ppt-outline-card-top">
+                  <span className="thinkflow-ppt-outline-summary-index">第 {item.pageNum || index + 1} 页</span>
+                  <span className="thinkflow-ppt-outline-card-cta">{selectedSlideIndex === index ? '编辑中' : '查看'}</span>
+                </div>
+                <h4>{item.title || `页面 ${index + 1}`}</h4>
+                {item.layout_description ? <p>{item.layout_description}</p> : null}
+                {(item.key_points || item.bullets || []).length > 0 ? (
+                  <ul>
+                    {(item.key_points || item.bullets || []).slice(0, 3).map((point, pointIndex) => (
+                      <li key={`${item.id || index}_${pointIndex}`}>{point}</li>
+                    ))}
+                  </ul>
+                ) : (
+                  <div className="thinkflow-ppt-outline-card-empty">这页还没有要点。</div>
+                )}
+              </button>
+            ))}
+            {isVideoDeck ? null : (
+              <button type="button" className="thinkflow-outline-add-btn thinkflow-ppt-outline-add-card" onClick={addPptOutlineSection}>
+                + 添加页面
+              </button>
+            )}
+          </div>
+        </div>
+        <div className="thinkflow-outline-footer">
+          <div className="thinkflow-outline-actions">
+            <button type="button" className="thinkflow-doc-action-btn" onClick={() => setRightMode('doc')}>
+              返回文档
+            </button>
+            <button type="button" className="thinkflow-doc-action-btn is-active" onClick={() => void saveOutline()} disabled={outlineSaving}>
+              {outlineSaving ? '保存中...' : '保存大纲'}
+            </button>
+            <button
+              type="button"
+              className="thinkflow-generate-btn"
+              onClick={() => void (isVideoDeck ? runPaper2videoSubtitle() : confirmPptOutline())}
+              disabled={outlineSaving || generatingOutput}
+            >
+              {generatingOutput
+                ? isVideoDeck
+                  ? '口播稿生成中...'
+                  : '处理中...'
+                : isVideoDeck
+                  ? '从 PDF 生成逐镜口播稿'
+                  : '确认大纲，进入逐页生成'}
+            </button>
+          </div>
+        </div>
+      </>
+    );
+  };
+
+  const renderPptLockedOutlinePreview = () => {
+    if (!activeOutput || !pptOutlineReadonlyOpen) return null;
+    const slides = activeOutput.outline || [];
+    return (
+      <div className="thinkflow-ppt-locked-outline">
+        <div className="thinkflow-ppt-locked-outline-head">
+          <div>
+            <span className="thinkflow-output-workspace-kicker">已确认大纲</span>
+            <h4>当前大纲只读</h4>
+          </div>
+          <button type="button" className="thinkflow-doc-action-btn" onClick={() => setPptOutlineReadonlyOpen(false)}>
+            收起
+          </button>
+        </div>
+        <div className="thinkflow-ppt-outline-summary-list">
+          {slides.map((item, index) => (
+            <article key={item.id || `${activeOutput.id}_${index}`} className="thinkflow-ppt-outline-summary-card">
+              <span className="thinkflow-ppt-outline-summary-index">第 {item.pageNum || index + 1} 页</span>
+              <h4>{item.title || `页面 ${index + 1}`}</h4>
+              {item.layout_description ? <p>{item.layout_description}</p> : null}
+              {(item.key_points || item.bullets || []).length > 0 ? (
+                <ul>
+                  {(item.key_points || item.bullets || []).slice(0, 4).map((point, pointIndex) => (
+                    <li key={`${item.id || index}_${pointIndex}`}>{point}</li>
+                  ))}
+                </ul>
+              ) : (
+                <div className="thinkflow-ppt-outline-card-empty">这页还没有要点。</div>
+              )}
+            </article>
+          ))}
+        </div>
+      </div>
     );
   };
 
   const renderPptGenerationReview = () => {
     if (!activeOutput) return null;
+    const hasDraftPages = activePptPreviewImages.length > 0;
+    const totalSlides = (activeOutput.outline || []).length || activeOutput.page_count || 0;
+    const currentPageNumber = activePptSlide?.slide.pageNum || (activePptSlide?.index ?? 0) + 1;
+    const isVideoDeck = activeOutput.target_type === 'video';
+    const allVideoScenesConfirmed = isVideoDeck && totalSlides > 0 && activePptConfirmedCount >= totalSlides;
     return (
-      <PptPageReviewPanel
-        activeOutput={activeOutput}
-        activePptStage={activePptStage}
-        activePptPreviewImages={activePptPreviewImages}
-        activePptSlide={activePptSlide}
-        activePptConfirmedCount={activePptConfirmedCount}
-        activePptPageVersions={activePptPageVersions}
-        activePptCurrentPreview={activePptCurrentPreview}
-        activePptCurrentReview={activePptCurrentReview}
-        pptOutlineReadonlyOpen={pptOutlineReadonlyOpen}
-        pptPagePrompt={pptPagePrompt}
-        pptPageBusyAction={pptPageBusyAction}
-        pptPageStatus={pptPageStatus}
-        generatingOutput={generatingOutput}
-        onSetPptOutlineReadonlyOpen={setPptOutlineReadonlyOpen}
-        onSetPptPagePrompt={setPptPagePrompt}
-        onSetActivePptSlideIndex={setActivePptSlideIndex}
-        onGenerateOutputById={generateOutputById}
-        onRegenerateActivePptPage={regenerateActivePptPage}
-        onConfirmActivePptPage={confirmActivePptPage}
-        renderOutputPreview={renderOutputPreview}
-        onRevert={revertToOutlineStage}
-        onGenerate={() => void generateOutputById(activeOutput.id)}
-        allConfirmed={activePptConfirmedCount === (activeOutput.outline || []).length && (activeOutput.outline || []).length > 0}
-      />
+      <>
+        {renderPptStageRail()}
+        <div className="thinkflow-ppt-stage-header">
+          <div className="thinkflow-ppt-stage-copy">
+            <h4>{getStoryboardStageLabel(activeOutput.target_type, activePptStage)}</h4>
+            <p>
+              {isVideoDeck
+                ? '逐镜查看 PDF 页预览与口播稿，可直接编辑文本并「保存讲稿」。每一镜确认通过后，再点击「合成视频」进入 refine、TTS 与成片流程。'
+                : '大纲已经确认完成。先生成每页结果，再逐页核对、改单页并确认通过；这一步不再支持改大纲。'}
+            </p>
+          </div>
+          <div className="thinkflow-ppt-stage-actions">
+            <button
+              type="button"
+              className="thinkflow-doc-action-btn"
+              onClick={() => setPptOutlineReadonlyOpen((previous) => !previous)}
+            >
+              {pptOutlineReadonlyOpen ? '收起已确认大纲' : '查看已确认大纲'}
+            </button>
+            {isVideoDeck ? (
+              <>
+                <button
+                  type="button"
+                  className="thinkflow-doc-action-btn is-active"
+                  onClick={() => void saveOutline()}
+                  disabled={outlineSaving || generatingOutput}
+                >
+                  {outlineSaving ? '保存中...' : '保存讲稿'}
+                </button>
+                <button
+                  type="button"
+                  className="thinkflow-generate-btn"
+                  onClick={() => void runPaper2videoContinue()}
+                  disabled={generatingOutput || !allVideoScenesConfirmed}
+                >
+                  {generatingOutput ? '成片生成中...' : '合成视频'}
+                </button>
+              </>
+            ) : (
+              <button type="button" className="thinkflow-generate-btn" onClick={() => void generateOutputById(activeOutput.id)} disabled={generatingOutput}>
+                {generatingOutput ? '生成页面结果中...' : hasDraftPages ? '重新生成每页结果' : '生成每页结果'}
+              </button>
+            )}
+          </div>
+        </div>
+        {renderPptLockedOutlinePreview()}
+        <div className="thinkflow-ppt-generation-review">
+          <div className="thinkflow-ppt-generation-card">
+            <span className="thinkflow-ppt-generation-label">{isVideoDeck ? '分镜数量' : '页面规模'}</span>
+            <strong>{totalSlides} 页</strong>
+          </div>
+          <div className="thinkflow-ppt-generation-card">
+            <span className="thinkflow-ppt-generation-label">确认进度</span>
+            <strong>
+              {activePptConfirmedCount} / {totalSlides}
+            </strong>
+          </div>
+          <div className="thinkflow-ppt-generation-toggle is-readonly">
+            <span>{activeOutput.enable_images !== false ? '已开启' : '已关闭'}</span>
+            <strong>来源素材与自动插图 / 生图</strong>
+          </div>
+          <div className="thinkflow-ppt-generation-note">
+            {isVideoDeck
+              ? '口播稿通过「保存讲稿」写入服务端。全部分镜确认后，「合成视频」才会调用 continue-after-edit（refine + TTS + 成片）。'
+              : '该配置已在确认大纲时锁定。若需修改，请新建一份新的 PPT 产出。'}
+          </div>
+          {pptPageStatus ? <div className="thinkflow-ppt-page-toast">{pptPageStatus}</div> : null}
+        </div>
+        {hasDraftPages ? (
+          <div className="thinkflow-ppt-review-shell">
+            <div className="thinkflow-ppt-review-main">
+              {renderOutputPreview()}
+              <div className="thinkflow-ppt-review-actions">
+                {isVideoDeck ? (
+                  <>
+                    <div className="thinkflow-ppt-review-copy">
+                      <span className="thinkflow-output-workspace-kicker">口播稿</span>
+                      <h4>第 {currentPageNumber} 镜</h4>
+                      <p>可直接编辑下方口播稿，并通过上方或底部的「保存讲稿」写入服务端；确认本镜内容后点击「确认当前镜」。</p>
+                    </div>
+                    <textarea
+                      className="thinkflow-outline-textarea"
+                      value={String(activePptSlide?.slide?.script_text ?? '')}
+                      onChange={(event) => {
+                        if (!activePptSlide) return;
+                        updateOutlineSection(activePptSlide.index, { script_text: event.target.value });
+                      }}
+                      placeholder="本镜口播内容（可在 subtitle 结果基础上润色）"
+                      rows={10}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <div className="thinkflow-ppt-review-copy">
+                      <span className="thinkflow-output-workspace-kicker">单页修改</span>
+                      <h4>第 {currentPageNumber} 页核对与改单页</h4>
+                      <p>这一页如果不对，就直接补一句修改要求，让模型只重做当前页。重做完成后会进入当前页历史版本，你可以切回旧版本再确认。</p>
+                    </div>
+                    <textarea
+                      className="thinkflow-outline-textarea"
+                      value={pptPagePrompt}
+                      onChange={(event) => setPptPagePrompt(event.target.value)}
+                      placeholder="例如：这页不要讲方法细节，改成问题背景 + 核心结论；配图换成更简洁的结构图。"
+                      rows={3}
+                    />
+                  </>
+                )}
+                <div className="thinkflow-ppt-review-btn-row">
+                  <button
+                    type="button"
+                    className="thinkflow-doc-action-btn"
+                    onClick={() => setActivePptSlideIndex((previous) => Math.max(previous - 1, 0))}
+                    disabled={(activePptSlide?.index ?? 0) === 0 || pptPageBusyAction !== '' || generatingOutput}
+                  >
+                    <ChevronLeft size={14} />
+                    上一页
+                  </button>
+                  <button
+                    type="button"
+                    className="thinkflow-doc-action-btn"
+                    onClick={() =>
+                      setActivePptSlideIndex((previous) =>
+                        Math.min(previous + 1, Math.max((activeOutput.outline || []).length - 1, 0)),
+                      )
+                    }
+                    disabled={
+                      (activePptSlide?.index ?? 0) >= Math.max((activeOutput.outline || []).length - 1, 0) ||
+                      pptPageBusyAction !== '' ||
+                      generatingOutput
+                    }
+                  >
+                    下一页
+                    <ArrowRight size={14} />
+                  </button>
+                  {isVideoDeck ? null : (
+                    <button
+                      type="button"
+                      className="thinkflow-doc-action-btn is-active"
+                      onClick={() => void regenerateActivePptPage()}
+                      disabled={!pptPagePrompt.trim() || pptPageBusyAction !== '' || generatingOutput}
+                    >
+                      <RefreshCw size={14} className={pptPageBusyAction === 'regenerate' ? 'is-spinning' : ''} />
+                      {pptPageBusyAction === 'regenerate' ? '当前页重生成中...' : '按提示重做当前页'}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    className="thinkflow-generate-btn"
+                    onClick={() => void confirmActivePptPage()}
+                    disabled={
+                      (!activePptCurrentPreview && activeOutput.target_type === 'ppt') ||
+                      pptPageBusyAction !== '' ||
+                      generatingOutput
+                    }
+                  >
+                    <CheckCircle2 size={14} />
+                    {pptPageBusyAction === 'confirm'
+                      ? '确认中...'
+                      : (activePptSlide?.index ?? 0) >= Math.max((activeOutput.outline || []).length - 1, 0)
+                        ? isVideoDeck
+                          ? '确认当前镜并完成'
+                          : '确认当前页并完成'
+                        : isVideoDeck
+                          ? '确认当前镜并继续'
+                          : '确认当前页并继续'}
+                  </button>
+                </div>
+                <div className="thinkflow-ppt-inline-feedback">
+                  {!isVideoDeck && pptPageBusyAction === 'regenerate' ? '正在调用后端重做当前页，请稍候...' : null}
+                  {!isVideoDeck && pptPageBusyAction === 'select_version' ? '正在切换历史版本，请稍候...' : null}
+                  {!isVideoDeck && !pptPageBusyAction && activePptPageVersions.length > 0
+                    ? `当前页已有 ${activePptPageVersions.length} 个历史版本，可在预览图下方直接切换。`
+                    : null}
+                </div>
+                {activePptCurrentReview?.confirmed ? (
+                  <div className="thinkflow-ppt-page-toast is-confirmed">
+                    {isVideoDeck ? '当前镜已确认，可继续浏览其它分镜。' : '当前页已经确认通过，你也可以继续重做。'}
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="thinkflow-ppt-draft-empty">
+            <div className="thinkflow-empty">
+              {isVideoDeck
+                ? '还没有分镜预览图。请返回「分镜与来源」步骤并成功运行「从 PDF 生成逐镜口播稿」，或检查后端是否已将 slide 预览写入 video_pipeline。'
+                : '这一步还没有页面草稿。先生成一版整套页图，再逐页查看、改单页、确认通过。'}
+            </div>
+            <div className="thinkflow-ppt-outline-summary-list">
+              {(activeOutput.outline || []).map((item, index) => (
+                <article key={item.id || `${activeOutput.id}_${index}`} className="thinkflow-ppt-outline-summary-card">
+                  <span className="thinkflow-ppt-outline-summary-index">第 {index + 1} 页</span>
+                  <h4>{item.title || `页面 ${index + 1}`}</h4>
+                  {item.layout_description ? <p>{item.layout_description}</p> : null}
+                  {(item.key_points || item.bullets || []).length > 0 ? (
+                    <ul>
+                      {(item.key_points || item.bullets || []).slice(0, 4).map((point, pointIndex) => (
+                        <li key={`${item.id || index}_${pointIndex}`}>{point}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </div>
+        )}
+        <div className="thinkflow-outline-footer">
+          <div className="thinkflow-outline-actions">
+            {isVideoDeck ? (
+              <>
+                <button
+                  type="button"
+                  className="thinkflow-doc-action-btn"
+                  onClick={() => setPptOutlineReadonlyOpen((previous) => !previous)}
+                >
+                  {pptOutlineReadonlyOpen ? '收起已确认大纲' : '查看已确认大纲'}
+                </button>
+                <button
+                  type="button"
+                  className="thinkflow-doc-action-btn is-active"
+                  onClick={() => void saveOutline()}
+                  disabled={outlineSaving || generatingOutput}
+                >
+                  {outlineSaving ? '保存中...' : '保存讲稿'}
+                </button>
+                <button
+                  type="button"
+                  className="thinkflow-generate-btn"
+                  onClick={() => void runPaper2videoContinue()}
+                  disabled={generatingOutput || !allVideoScenesConfirmed}
+                >
+                  {generatingOutput ? '成片生成中...' : '合成视频'}
+                </button>
+              </>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  className="thinkflow-doc-action-btn"
+                  onClick={() => setPptOutlineReadonlyOpen((previous) => !previous)}
+                >
+                  {pptOutlineReadonlyOpen ? '收起已确认大纲' : '查看已确认大纲'}
+                </button>
+                <button type="button" className="thinkflow-generate-btn" onClick={() => void generateOutputById(activeOutput.id)} disabled={generatingOutput}>
+                  {generatingOutput ? '生成页面结果中...' : hasDraftPages ? '重新生成每页结果' : '生成每页结果'}
+                </button>
+              </>
+            )}
+          </div>
+        </div>
+      </>
     );
   };
 
   const renderPptGeneratedResult = () => {
     if (!activeOutput) return null;
     return (
-      <PptGeneratedResultPanel
-        activeOutput={activeOutput}
-        activePptStage={activePptStage}
-        pptOutlineReadonlyOpen={pptOutlineReadonlyOpen}
-        onSetPptOutlineReadonlyOpen={setPptOutlineReadonlyOpen}
-        onImportOutputToSource={importOutputToSource}
-        renderOutputPreview={renderOutputPreview}
-      />
+      <>
+        {renderPptStageRail()}
+        <div className="thinkflow-ppt-stage-header">
+          <div className="thinkflow-ppt-stage-copy">
+            <h4>{getStoryboardStageLabel(activeOutput.target_type, activePptStage)}</h4>
+            <p>
+              {activeOutput.target_type === 'video'
+                ? '成片已就绪。可在此预览分镜、播放或下载 MP4，也可将来源回流到素材。若需重跑，请新建一条视频产出。'
+                : '全部页面都已确认通过，当前 PPT 产出状态已经确定。这里主要用于预览、下载和回流来源。'}
+            </p>
+          </div>
+          <div className="thinkflow-ppt-stage-actions">
+            <button
+              type="button"
+              className="thinkflow-doc-action-btn"
+              onClick={() => setPptOutlineReadonlyOpen((previous) => !previous)}
+            >
+              {pptOutlineReadonlyOpen ? '收起已确认大纲' : '查看已确认大纲'}
+            </button>
+            <button type="button" className="thinkflow-doc-action-btn" onClick={() => void importOutputToSource()}>
+              回流来源
+            </button>
+          </div>
+        </div>
+        {renderPptLockedOutlinePreview()}
+        <div className="thinkflow-outline-footer">
+          <div className="thinkflow-outline-preview">{renderOutputPreview()}</div>
+          {activeOutput.result?.download_url ||
+          activeOutput.result?.ppt_pdf_path ||
+          activeOutput.result?.ppt_pptx_path ||
+          activeOutput.result?.video_mp4_path ? (
+            <div className="thinkflow-ppt-download-row">
+              {activeOutput.target_type === 'video' && activeOutput.result?.video_mp4_path ? (
+                <div className="thinkflow-video-result-bar">
+                  <div className="thinkflow-video-result-bar-copy">
+                    <Video size={20} />
+                    <div>
+                      <strong>视频成片</strong>
+                      <span>可在上方主区域切换「成片预览 / 分镜图」</span>
+                    </div>
+                  </div>
+                  {renderVideoMp4Actions(activeOutput.result.video_mp4_path, 'lg')}
+                </div>
+              ) : null}
+              {activeOutput.result?.ppt_pdf_path ? (
+                <a href={activeOutput.result.ppt_pdf_path} target="_blank" rel="noreferrer" className="thinkflow-download-link">
+                  <Download size={14} />
+                  打开 PDF
+                </a>
+              ) : null}
+              {activeOutput.result?.ppt_pptx_path ? (
+                <a href={activeOutput.result.ppt_pptx_path} target="_blank" rel="noreferrer" className="thinkflow-download-link">
+                  <Download size={14} />
+                  下载 PPTX
+                </a>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      </>
     );
   };
 
   const renderPptWorkspace = () => {
     if (!activeOutput) return null;
+    if (activeOutput.target_type === 'video' && activePptStage === 'pending') {
+      return (
+        <>
+          {renderPptStageRail()}
+          <div className="thinkflow-ppt-stage-header">
+            <div className="thinkflow-ppt-stage-copy">
+              <h4>{getStoryboardStageLabel('video', 'pending')}</h4>
+              <p>
+                该产出仍处于旧版「排队」状态。可点击下方按钮尝试从 PDF 生成逐镜口播稿；若仍失败，请新建一条视频产出，或请管理员检查 paper2video 工作流与 LLM 配置。
+              </p>
+            </div>
+          </div>
+          <div className="thinkflow-outline-footer">
+            <div className="thinkflow-outline-preview">{renderOutputPreview()}</div>
+            <div className="thinkflow-outline-actions">
+              <button type="button" className="thinkflow-generate-btn" onClick={() => void runPaper2videoSubtitle()} disabled={generatingOutput}>
+                {generatingOutput ? '口播稿生成中...' : '从 PDF 生成逐镜口播稿'}
+              </button>
+            </div>
+          </div>
+        </>
+      );
+    }
     if (activePptStage === 'generated') return renderPptGeneratedResult();
     if (activePptStage === 'pages_ready') return renderPptGenerationReview();
     return renderPptOutlineWorkspace();
@@ -4361,9 +4898,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     if (!panelGuideVisibility[panel]) return null;
     const config: Record<PanelGuideKey, { title: string; description: string; capabilities: string }> = {
       summary: {
-        title: 'Summary 卡片说明',
-        description: '这里维护多张 item summary 卡片，以及一张由所有 item summary 重新总结出来的总 Summary。',
-        capabilities: '第一版只从你主动选择的对话内容生成 item summary；总 Summary 只在你点击重算时更新。',
+        title: '摘要区说明',
+        description: '这里用来沉淀你已经确认的理解、结论和待追问点，适合把单条回答、本轮问答或多轮讨论整理成 AI 笔记。',
+        capabilities: '可继续编辑、补充和改名，适合作为阅读记录与后续追问线索。',
       },
       doc: {
         title: '梳理文档说明',
@@ -4438,22 +4975,19 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           };
 
   const summaryPanelProps = {
-    summaryItems: itemSummaryItems.map((item) => ({ id: item.id, title: item.title, summary_kind: item.summary_kind })),
-    allSummary: allSummary ? { id: allSummary.id, title: allSummary.title, summary_kind: allSummary.summary_kind } : null,
+    summaryItems: summaryItems.map((item) => ({ id: item.id, title: item.title })),
     activeSummaryId,
-    activeSummary: activeSummary ? { id: activeSummary.id, title: activeSummary.title, summary_kind: activeSummary.summary_kind } : null,
+    activeSummary: activeSummary ? { id: activeSummary.id, title: activeSummary.title } : null,
     summaryTitle,
     summaryContent,
     summaryEditMode,
     workspaceSaving,
-    rebuildingAllSummary,
     panelGuide: renderPanelGuide('summary'),
     onSelectSummary: async (id: string) => {
       setRightMode('summary');
       await loadWorkspaceItemDetail(id);
     },
     onCreateSummary: () => createWorkspaceItem('summary'),
-    onRebuildAllSummary: rebuildAllSummary,
     onToggleSummaryEdit: () => setSummaryEditMode((previous) => !previous),
     onDeleteSummary: (id: string) => deleteWorkspaceItem('summary', id),
     onSummaryTitleChange: setSummaryTitle,
@@ -4477,12 +5011,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   };
 
   const documentPanelProps = {
-    documents: materialListDocuments.map((doc) => ({ id: doc.id, title: doc.title })),
+    documents: documents.map((doc) => ({ id: doc.id, title: doc.title })),
     activeDocumentId,
-    activeDocument: activeDocument ? { id: activeDocument.id, title: activeDocument.title, document_type: activeDocument.document_type } : null,
-    pendingDocument: pptOutputCreationPending
-      ? { title: pptOutputCreationPending.title, content: pptOutputCreationPending.content }
-      : null,
+    activeDocument: activeDocument ? { id: activeDocument.id, title: activeDocument.title } : null,
     documentTitle,
     documentContent,
     editMode,
@@ -4492,13 +5023,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     documentSections,
     renderDocumentSection,
     docBodyRef,
-    focusState: documentFocusState,
-    stashItems: documentStashItems,
-    changeLogs: documentChangeLogs,
-    conversationActiveDocumentId,
-    conversationActiveDocument: conversationActiveDocument
-      ? { id: conversationActiveDocument.id, title: conversationActiveDocument.title }
-      : null,
     guidanceItems: guidanceItems.map((item) => ({ id: item.id, title: item.title })),
     selectedGuidanceIds,
     outputButtons,
@@ -4508,12 +5032,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       setActiveDocumentId(id);
       setRightMode('doc');
       await loadDocumentDetail(id);
-      await setConversationActiveDocument(id);
     },
-    onActivateDisplayedDocument: () => activeDocumentId ? setConversationActiveDocument(activeDocumentId) : Promise.resolve(),
-    onClearFocus: () => updateDisplayedDocumentFocus(normalizeFocusState()),
-    onCreateDocument: async () => { await createDocument(); },
-    onCreateOutputDocument: createOutputDocument,
+    onCreateDocument: createDocument,
     onToggleDocumentEdit: () => setEditMode((previous) => !previous),
     onToggleVersionPanel: () => setShowVersionPanel((previous) => !previous),
     onDeleteDocument: deleteDocument,
@@ -4523,9 +5043,12 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     onToggleGuidanceSelection: toggleGuidanceSelection,
     onOutputAction: (type: string) => {
       if (type === 'ppt') {
-        return openPptSourceLockIntent();
+        return openPptSourceLockIntent('ppt');
       }
-      return openDirectOutputIntent(type as Exclude<OutputType, 'ppt'>);
+      if (type === 'video') {
+        return openPptSourceLockIntent('video');
+      }
+      return openDirectOutputIntent(type as Exclude<OutputType, 'ppt' | 'video'>);
     },
     onSaveDocument: saveDocument,
   };
@@ -4535,17 +5058,15 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     generatingOutline,
     generatingOutlineLabel: outputButtons.find((item) => item.type === generatingOutline)?.label || '产出',
     outputWorkspaceHeader: renderOutputWorkspaceHeader(),
-    pptWorkspace: renderPptWorkspace(),
+    storyboardWorkspace: renderPptWorkspace(),
     directOutputWorkspace: renderDirectOutputWorkspace(),
     isOutputHeaderCollapsed,
     onOutputWorkspaceScroll: handleOutputWorkspaceScroll,
   };
 
-  const pushSourceSummary = buildPushSourceSummary(pushPopover.sourceEntries);
-
   return (
     <div className="thinkflow-root">
-      <ThinkFlowTopBar notebookTitle={notebookTitle} onBack={onBack} />
+      <ThinkFlowTopBar notebookTitle={notebookTitle} onBack={onBack} onOpenHistory={openHistoryPanel} />
 
       {/* ── Toast stack ─────────────────────────────────────────────── */}
       {toasts.length > 0 && (
@@ -4578,10 +5099,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           isOutputWorkspace={hideLeftSidebar}
           leftTab={leftTab}
           loadingFiles={loadingFiles}
-          onLeftTabChange={(tab) => {
-            setLeftTab(tab);
-            if (tab === 'conversations') void refreshConversationList();
-          }}
+          onLeftTabChange={setLeftTab}
           onOpenOutput={openExistingOutput}
           onPreviewSource={handlePreviewSource}
           onDeleteSource={(file) => void handleDeleteSource(file)}
@@ -4593,31 +5111,25 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           onUpload={handleUpload}
           onAddSource={() => setShowAddSourceModal(true)}
           onReEmbedSource={handleReEmbedSource}
-          conversationList={conversationList}
+          conversationList={[]}
           activeConversationId={conversationId}
-          onSelectConversation={(id) => void loadConversationMessages(id)}
+          onSelectConversation={setConversationId}
           onNewConversation={handleNewConversation}
         />
 
         <ThinkFlowCenterPanel
           activeOutput={activeOutput}
-          activePptSlideIndex={activePptSlideIndex}
           boundDocIds={boundDocIds}
-          chatTitle={isPptOutputConversationMode ? '📋 PPT 产出文档讨论' : undefined}
           chatInput={chatInput}
-          chatLoading={chatLoading || Boolean(pptOutputCreationPending)}
-          chatMessages={visibleChatMessages}
-          chatPlaceholder={
-            isPptOutputConversationMode
-              ? (pptOutputCreationPending ? '正在生成初始大纲，请稍候...' : '继续调整右侧产出文档，例如“整体更偏业务汇报，弱化技术细节”')
-              : undefined
-          }
-          chatTopPanel={renderOutlineChatTopPanel()}
+          chatLoading={chatLoading}
+          chatMessages={chatMessages}
           chatScrollRef={chatScrollRef}
-          documents={materialListDocuments}
+          documents={documents}
           focusedMessageId={focusedMessageId}
+          handleChatSelectionMouseUp={handleChatSelectionMouseUp}
+          handleSelectionCopy={handleSelectionCopy}
+          handleSelectionPush={handleSelectionPush}
           handleSendMessage={handleSendMessage}
-          isOutlineChatMode={isPptOutputConversationMode}
           messageRefs={messageRefs}
           multiSelectPrompt={multiSelectPrompt}
           openMultiMessagePush={openMultiMessagePush}
@@ -4635,11 +5147,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           renderMessageMarkdown={renderMessageMarkdown}
           rightPanelOpen={rightPanelOpen}
           selectedMessageIds={selectedMessageIds}
+          selectionToolbar={selectionToolbar}
           setChatInput={setChatInput}
           setMultiSelectPrompt={setMultiSelectPrompt}
           toggleBoundDoc={toggleBoundDoc}
           toggleMessageSelection={toggleMessageSelection}
           workspaceMode={workspaceMode}
+          onOpenHistory={openHistoryPanel}
           onNewConversation={handleNewConversation}
           chatMode={chatMode}
           onChatModeChange={setChatMode}
@@ -4651,7 +5165,6 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             userId: effectiveUser?.id || 'local',
             userEmail: effectiveUser?.email || '',
           }}
-          onSetActivePptSlideIndex={setActivePptSlideIndex}
         />
 
         {rightPanelOpen ? (
@@ -4678,11 +5191,18 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       {pptSourceLockIntent ? (
         <>
           <div className="thinkflow-popover-overlay" onClick={() => setPptSourceLockIntent(null)} />
-          <div className="thinkflow-output-context-modal thinkflow-output-lock-modal">
+          <div
+            className={`thinkflow-output-context-modal thinkflow-output-lock-modal${
+              pptSourceLockIntent.storyboardTarget === 'video' ? ' thinkflow-p2v-lock-modal' : ''
+            }`}
+          >
             <div className="thinkflow-output-context-modal-header">
               <div>
-                <h3>确认本次 PPT 来源</h3>
-                <p>这一步会锁定本轮 PPT 的来源范围。确认后，当前 PPT 会话内不再提供“更新来源”的入口。</p>
+                <h3>确认本次 {pptSourceLockIntent.storyboardTarget === 'video' ? '视频' : 'PPT'} 来源</h3>
+                <p>
+                  这一步会锁定本轮 {pptSourceLockIntent.storyboardTarget === 'video' ? '视频' : 'PPT'}{' '}
+                  的来源范围。确认后，当前会话内不再提供“更新来源”的入口。
+                </p>
               </div>
               <button type="button" className="thinkflow-push-close" onClick={() => setPptSourceLockIntent(null)}>
                 关闭
@@ -4690,8 +5210,27 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             </div>
 
             <div className="thinkflow-output-context-modal-body">
+              {pptSourceLockIntent.storyboardTarget === 'video' ? (
+                <div className="thinkflow-p2v-prerequisite-banner" role="note">
+                  <p>
+                    当前生成视频预期的输入是 <strong>.pptx</strong> 文件，或{' '}
+                    <strong>PDF 格式的 PPT 内容</strong>（每页为幻灯片页面，而非整篇论文正文）。
+                    若你目前只有完整文档/论文类素材，请先走「生成 PPT」流程，再基于 PPT 生成视频。
+                  </p>
+                  <button
+                    type="button"
+                    className="thinkflow-p2v-prerequisite-btn"
+                    disabled={pptSourceLockIntent.loading || pptSourceLockIntent.submitting}
+                    onClick={switchVideoLockToPptFlow}
+                  >
+                    生成 PPT
+                  </button>
+                </div>
+              ) : null}
               {pptSourceLockIntent.loading ? (
-                <div className="thinkflow-empty">正在整理这次 PPT 的来源快照...</div>
+                <div className="thinkflow-empty">
+                  正在整理这次 {pptSourceLockIntent.storyboardTarget === 'video' ? '视频' : 'PPT'} 的来源快照...
+                </div>
               ) : pptSourceLockIntent.errorMessage ? (
                 <div className="thinkflow-empty">{pptSourceLockIntent.errorMessage}</div>
               ) : (
@@ -4746,6 +5285,136 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                       )}
                     </div>
                   </section>
+
+                  {pptSourceLockIntent.storyboardTarget === 'video' && pptSourceLockIntent.videoConfig ? (
+                    <section className="thinkflow-output-context-group thinkflow-p2v-config-section">
+                      <div className="thinkflow-output-context-group-title">视频配置</div>
+                      <p className="thinkflow-p2v-config-note">
+                        启用数字人约增加 5–10 分钟。
+                      </p>
+
+                      <label className="thinkflow-p2v-field">
+                        <span>语言</span>
+                        <select
+                          value={pptSourceLockIntent.videoConfig.language}
+                          onChange={(event) =>
+                            setPptSourceLockIntent((current) =>
+                              current && current.videoConfig
+                                ? {
+                                    ...current,
+                                    videoConfig: { ...current.videoConfig, language: event.target.value },
+                                  }
+                                : current,
+                            )
+                          }
+                        >
+                          {(pptSourceLockIntent.paper2videoOptions?.languages || [
+                            { id: 'zh', label: '中文' },
+                            { id: 'en', label: 'English' },
+                          ]).map((item) => (
+                            <option key={item.id} value={item.id}>
+                              {item.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+
+                      <div className="thinkflow-p2v-field">
+                        <span>数字人</span>
+                        <div className="thinkflow-p2v-segmented">
+                          {[
+                            { id: 'none', label: '不需要数字人' },
+                            { id: 'system', label: '系统数字人' },
+                            { id: 'custom', label: '上传自己的' },
+                          ].map((item) => (
+                            <button
+                              key={item.id}
+                              type="button"
+                              className={
+                                pptSourceLockIntent.videoConfig?.avatar_mode === item.id ? 'active' : ''
+                              }
+                              onClick={() =>
+                                setPptSourceLockIntent((current) =>
+                                  current && current.videoConfig
+                                    ? {
+                                        ...current,
+                                        videoConfig: {
+                                          ...current.videoConfig,
+                                          avatar_mode: item.id as Paper2VideoConfig['avatar_mode'],
+                                        },
+                                      }
+                                    : current,
+                                )
+                              }
+                            >
+                              {item.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {pptSourceLockIntent.videoConfig.avatar_mode === 'system' ? (
+                        <div className="thinkflow-p2v-avatar-grid">
+                          {(pptSourceLockIntent.paper2videoOptions?.avatars || []).map((avatar) => (
+                            <button
+                              key={avatar.id}
+                              type="button"
+                              className={`thinkflow-p2v-avatar-card${
+                                pptSourceLockIntent.videoConfig?.avatar_id === avatar.id ? ' selected' : ''
+                              }`}
+                              onClick={() =>
+                                setPptSourceLockIntent((current) =>
+                                  current && current.videoConfig
+                                    ? {
+                                        ...current,
+                                        videoConfig: { ...current.videoConfig, avatar_id: avatar.id },
+                                      }
+                                    : current,
+                                )
+                              }
+                            >
+                              <img
+                                src={paper2videoPresetPreviewUrls[`avatar:${avatar.id}`] || ''}
+                                alt={avatar.label}
+                              />
+                              <span>{avatar.label}</span>
+                            </button>
+                          ))}
+                        </div>
+                      ) : null}
+
+                      {pptSourceLockIntent.videoConfig.avatar_mode === 'custom' ? (
+                        <label className="thinkflow-p2v-upload-drop">
+                          <input
+                            type="file"
+                            accept="image/png,image/jpeg,image/webp"
+                            onChange={(event) => {
+                              const file = event.target.files?.[0] || null;
+                              setPptSourceLockIntent((current) => {
+                                if (!current) return current;
+                                if (current.customAvatarPreviewUrl) {
+                                  URL.revokeObjectURL(current.customAvatarPreviewUrl);
+                                }
+                                return {
+                                  ...current,
+                                  customAvatarFile: file,
+                                  customAvatarPreviewUrl: file ? URL.createObjectURL(file) : '',
+                                  videoConfig: current.videoConfig
+                                    ? { ...current.videoConfig, avatar_upload_token: '' }
+                                    : current.videoConfig,
+                                };
+                              });
+                            }}
+                          />
+                          <span>选择 JPG / PNG 人脸图片</span>
+                          {pptSourceLockIntent.customAvatarPreviewUrl ? (
+                            <img src={pptSourceLockIntent.customAvatarPreviewUrl} alt="自定义数字人预览" />
+                          ) : null}
+                        </label>
+                      ) : null}
+
+                    </section>
+                  ) : null}
                 </>
               )}
             </div>
@@ -4756,7 +5425,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   ? '正在整理来源，请稍候。'
                   : pptSourceLockIntent.errorMessage
                     ? '来源解析失败，请关闭后重试。'
-                    : '确认后会生成一份 PPT 产出文档和初始大纲，先留在主工作区继续对话调整。'}
+                    : `当前正在编辑的梳理文档也会在这里一并锁定。确认后将直接进入 ${
+                        pptSourceLockIntent.storyboardTarget === 'video' ? '视频分镜大纲' : 'PPT 大纲'
+                      } 阶段。`}
               </span>
               <div className="thinkflow-output-context-actions">
                 <button type="button" className="thinkflow-doc-action-btn" onClick={() => setPptSourceLockIntent(null)}>
@@ -4766,9 +5437,17 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   type="button"
                   className="thinkflow-generate-btn"
                   onClick={() => void confirmPptSourceLockIntent()}
-                  disabled={pptSourceLockIntent.loading || Boolean(pptSourceLockIntent.errorMessage)}
+                  disabled={
+                    pptSourceLockIntent.loading ||
+                    pptSourceLockIntent.submitting ||
+                    Boolean(pptSourceLockIntent.errorMessage)
+                  }
                 >
-                  {pptSourceLockIntent.loading ? '整理来源中...' : '确认并生成产出文档'}
+                  {pptSourceLockIntent.loading
+                    ? '整理来源中...'
+                    : pptSourceLockIntent.submitting
+                      ? '正在提交...'
+                      : '确认并生成大纲'}
                 </button>
               </div>
             </div>
@@ -4812,13 +5491,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   <section className="thinkflow-output-context-group">
                     <div className="thinkflow-output-context-group-title">梳理文档 / 参考文档</div>
                     <div className="thinkflow-output-lock-list">
-                      {buildDirectOutputDocumentTitles(
-                        directOutputIntent.outputDocumentId,
+                      {buildPptReferenceDocumentTitles(
                         directOutputIntent.outputDocumentTitle,
                         directOutputIntent.boundDocumentTitles,
                       ).length > 0 ? (
-                        buildDirectOutputDocumentTitles(
-                          directOutputIntent.outputDocumentId,
+                        buildPptReferenceDocumentTitles(
                           directOutputIntent.outputDocumentTitle,
                           directOutputIntent.boundDocumentTitles,
                         ).map((item) => (
@@ -4896,8 +5573,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           >
             <div className="thinkflow-push-header">
               <div>
-                <h3>推送到文档</h3>
-                <p>AI 只会通过这次显式推送修改文档。</p>
+                <h3>沉淀到工作区</h3>
+                <p>把当前对话整理到右侧工作区，后续可以继续复用。</p>
               </div>
               <button
                 type="button"
@@ -4912,81 +5589,159 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             {pushError ? <div className="thinkflow-push-status is-error">{pushError}</div> : null}
             <div className="thinkflow-push-body">
               <div className="thinkflow-push-field">
-                <div className="thinkflow-push-label">目标位置</div>
-                <select
-                  className="thinkflow-push-select"
-                  value={pushPopover.targetType}
-                  disabled={pushSubmitting}
-                  onChange={(event) => {
-                    const targetType = event.target.value as StructuredPushTargetType;
-                    setPushPopover((previous) => ({
-                      ...previous,
-                      targetType,
-                      transform: coercePushTransform(targetType, previous.transform),
-                    }));
-                  }}
-                >
-                  {getDefaultPushTarget(documentFocusState) === 'focus' ? <option value="focus">当前焦点：{documentFocusState.description}</option> : null}
-                  {documentSections.map((section) => (
-                    <option key={section.id} value="section">
-                      章节：{section.heading || section.id}
-                    </option>
+                <div className="thinkflow-push-label">沉淀目标</div>
+                <div className="thinkflow-push-destinations">
+                  {[
+                    { value: 'summary', label: '摘要', desc: '沉淀关键理解与结论' },
+                    { value: 'document', label: '文档', desc: '整理成持续演进的主文档' },
+                    { value: 'guidance', label: '产出指导', desc: '作为后续输出的重要约束和方向' },
+                  ].map((item) => (
+                    <label
+                      key={item.value}
+                      className={`thinkflow-push-mode ${pushPopover.destinationType === item.value ? 'is-active' : ''}`}
+                    >
+                      <input
+                        type="radio"
+                        checked={pushPopover.destinationType === item.value}
+                        disabled={pushSubmitting}
+                        onChange={() =>
+                          setPushPopover((previous) => ({
+                            ...previous,
+                            destinationType: item.value as PushDestinationType,
+                            targetItemId:
+                              item.value === 'summary'
+                                ? activeSummaryId || summaryItems[0]?.id || '__new__'
+                                : item.value === 'guidance'
+                                  ? activeGuidanceId || guidanceItems[0]?.id || '__new__'
+                                  : previous.targetItemId,
+                          }))
+                        }
+                      />
+                      <div>
+                        <div className="thinkflow-push-mode-title">{item.label}</div>
+                        <div className="thinkflow-push-mode-desc">{item.desc}</div>
+                      </div>
+                    </label>
                   ))}
-                  <option value="new_section">+ 新建章节</option>
-                  <option value="stash">暂存区</option>
-                  <option value="document_end">文档末尾</option>
-                </select>
-                {pushPopover.targetType === 'section' ? (
-                  <select
-                    className="thinkflow-push-select"
-                    value={pushPopover.targetSectionId}
-                    disabled={pushSubmitting}
-                    onChange={(event) => setPushPopover((previous) => ({ ...previous, targetSectionId: event.target.value }))}
-                  >
-                    {documentSections.map((section) => (
-                      <option key={section.id} value={section.id}>
-                        {section.heading || section.id}
-                      </option>
-                    ))}
-                  </select>
-                ) : null}
-                {pushPopover.targetType === 'new_section' ? (
-                  <input
-                    className="thinkflow-outline-input"
-                    value={pushPopover.newSectionTitle}
-                    disabled={pushSubmitting}
-                    onChange={(event) => setPushPopover((previous) => ({ ...previous, newSectionTitle: event.target.value }))}
-                    placeholder="新章节标题"
-                  />
-                ) : null}
+                </div>
               </div>
 
-              <div className="thinkflow-push-field">
-                <div className="thinkflow-push-label">处理方式</div>
-                <div className="thinkflow-push-modes">
-                  {[
-                    { value: 'ai_append', label: '整理后追加', desc: '推荐：先归纳再写入目标位置' },
-                    { value: 'raw_append', label: '原文追加', desc: '不改写来源内容，直接放入目标' },
-                    { value: 'ai_merge', label: '融合到此章节', desc: '只适合当前焦点或现有章节' },
-                  ].map((item) => {
-                    const disabled = !canUsePushTransform(pushPopover.targetType, item.value as StructuredPushTransform);
-                    return (
-                      <label key={item.value} className={`thinkflow-push-mode ${pushPopover.transform === item.value ? 'is-active' : ''} ${disabled ? 'is-disabled' : ''}`}>
+              {pushPopover.destinationType === 'document' ? (
+                <div className="thinkflow-push-field">
+                  <div className="thinkflow-push-label">目标文档</div>
+                  <select
+                    className="thinkflow-push-select"
+                    value={pushPopover.targetDocId}
+                    disabled={pushSubmitting}
+                    onChange={(event) => setPushPopover((previous) => ({ ...previous, targetDocId: event.target.value }))}
+                  >
+                    {documents.map((doc) => (
+                      <option key={doc.id} value={doc.id}>
+                        {doc.title}
+                      </option>
+                    ))}
+                    <option value="__new__">+ 新建文档</option>
+                  </select>
+                </div>
+              ) : (
+                <div className="thinkflow-push-field">
+                  <div className="thinkflow-push-label">目标{pushPopover.destinationType === 'summary' ? '摘要' : '产出指导'}</div>
+                  <select
+                    className="thinkflow-push-select"
+                    value={pushPopover.targetItemId || '__new__'}
+                    disabled={pushSubmitting}
+                    onChange={(event) => setPushPopover((previous) => ({ ...previous, targetItemId: event.target.value }))}
+                  >
+                    {(pushPopover.destinationType === 'summary' ? summaryItems : guidanceItems).map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.title}
+                      </option>
+                    ))}
+                    <option value="__new__">+ 新建{pushPopover.destinationType === 'summary' ? '摘要' : '产出指导'}</option>
+                  </select>
+                </div>
+              )}
+
+              {(pushPopover.destinationType === 'document' ? pushPopover.targetDocId === '__new__' : (pushPopover.targetItemId || '__new__') === '__new__') ? (
+                <div className="thinkflow-push-field">
+                  <div className="thinkflow-push-label">命名方式</div>
+                  <div className="thinkflow-push-title-modes">
+                    <label className={`thinkflow-push-mode ${pushPopover.titleMode === 'ai' ? 'is-active' : ''}`}>
+                      <input
+                        type="radio"
+                        checked={pushPopover.titleMode === 'ai'}
+                        disabled={pushSubmitting}
+                        onChange={() => setPushPopover((previous) => ({ ...previous, titleMode: 'ai', newTitle: '' }))}
+                      />
+                      <div>
+                        <div className="thinkflow-push-mode-title">AI 命名</div>
+                        <div className="thinkflow-push-mode-desc">自动生成一个简洁可读的标题</div>
+                      </div>
+                    </label>
+                    <label className={`thinkflow-push-mode ${pushPopover.titleMode === 'manual' ? 'is-active' : ''}`}>
+                      <input
+                        type="radio"
+                        checked={pushPopover.titleMode === 'manual'}
+                        disabled={pushSubmitting}
+                        onChange={() =>
+                          setPushPopover((previous) => ({
+                            ...previous,
+                            titleMode: 'manual',
+                            newTitle: previous.newTitle || inferDocumentTitle(previous.sourceContent, previous.prompt),
+                          }))
+                        }
+                      />
+                      <div>
+                        <div className="thinkflow-push-mode-title">手动填写</div>
+                        <div className="thinkflow-push-mode-desc">你可以直接定标题，不填时也会回退为 AI 命名</div>
+                      </div>
+                    </label>
+                  </div>
+                  {pushPopover.titleMode === 'manual' ? (
+                    <>
+                      <div className="thinkflow-push-label">新建名称</div>
+                      <input
+                        className="thinkflow-outline-input"
+                        value={pushPopover.newTitle}
+                        disabled={pushSubmitting}
+                        onChange={(event) => setPushPopover((previous) => ({ ...previous, newTitle: event.target.value }))}
+                        placeholder="可手动填写；留空则仍会回退为 AI 命名"
+                      />
+                    </>
+                  ) : (
+                    <div className="thinkflow-push-title-hint">当前将由 AI 自动命名，你确认沉淀后会直接生成。</div>
+                  )}
+                </div>
+              ) : null}
+
+              {pushPopover.destinationType === 'document' ? (
+                <div className="thinkflow-push-field">
+                  <div className="thinkflow-push-label">处理方式</div>
+                  <div className="thinkflow-push-modes">
+                    {[
+                      { value: 'append', label: '直接追加', desc: '原文放入文档末尾' },
+                      { value: 'organize', label: 'AI整理后追加', desc: '整理成当前提纲', recommended: true },
+                      { value: 'merge', label: 'AI融合到已有内容', desc: '融入现有段落' },
+                    ].map((item) => (
+                      <label key={item.value} className={`thinkflow-push-mode ${pushPopover.mode === item.value ? 'is-active' : ''}`}>
                         <input
                           type="radio"
-                          checked={pushPopover.transform === item.value}
-                          disabled={pushSubmitting || disabled}
-                          onChange={() => setPushPopover((previous) => ({ ...previous, transform: item.value as StructuredPushTransform }))}
+                          checked={pushPopover.mode === item.value}
+                          disabled={pushSubmitting}
+                          onChange={() => setPushPopover((previous) => ({ ...previous, mode: item.value as PushMode }))}
                         />
                         <div>
-                          <div className="thinkflow-push-mode-title">{item.label}</div>
+                          <div className="thinkflow-push-mode-title">
+                            {item.label}
+                            {item.recommended ? <span className="thinkflow-push-recommended">推荐</span> : null}
+                          </div>
                           <div className="thinkflow-push-mode-desc">{item.desc}</div>
                         </div>
                       </label>
-                    );
-                  })}
+                    ))}
+                  </div>
                 </div>
-              </div>
+              ) : null}
 
               <div className="thinkflow-push-field">
                 <div className="thinkflow-push-label">补充指示（可选）</div>
@@ -4995,14 +5750,24 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   value={pushPopover.prompt}
                   disabled={pushSubmitting}
                   onChange={(event) => setPushPopover((previous) => ({ ...previous, prompt: event.target.value }))}
-                  placeholder={pushPopover.transform === 'raw_append' ? '原文追加不需要指令' : '如：提炼核心数据；标注 [待确认]；转成当前提纲'}
+                  placeholder={
+                    pushPopover.destinationType === 'guidance'
+                      ? '如：这是给 PPT 的指导，强调业务价值、避免学术化表达'
+                      : pushPopover.destinationType === 'summary'
+                        ? '如：提炼关键结论，保留仍待确认的问题'
+                        : '如：提炼核心数据；标注 [待确认]；转成当前提纲'
+                  }
                 />
               </div>
 
               <div className="thinkflow-push-field">
                 <div className="thinkflow-push-label">本次沉淀来源</div>
                 <div className="thinkflow-push-preview">
-                  <span className="thinkflow-push-preview-chip">{pushSourceSummary.label}</span>
+                  {pushPopover.sourceEntries.map((entry) => (
+                    <span key={`${entry.messageId}_${entry.kind}`} className="thinkflow-push-preview-chip">
+                      {entry.kind === 'qa' ? 'QA' : entry.kind === 'multi' ? '多轮' : entry.role === 'assistant' ? 'AI' : '你'} · {entry.time}
+                    </span>
+                  ))}
                   <p>{pushPopover.sourceContent.slice(0, 220)}</p>
                 </div>
               </div>
@@ -5018,7 +5783,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                 取消
               </button>
               <button type="button" className="thinkflow-generate-btn" onClick={() => void executePush()} disabled={pushSubmitting}>
-                {pushSubmitting ? '处理中...' : '推送 ⟩'}
+                {pushSubmitting ? '处理中...' : '确认沉淀'}
               </button>
             </div>
           </div>
@@ -5032,7 +5797,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             <div className="thinkflow-history-header">
               <div>
                 <h3>历史对话</h3>
-                <p>这里展示当前笔记本下已记录的会话。</p>
+                <p>这里展示当前笔记本下已记录的对话内容。</p>
               </div>
               <button type="button" className="thinkflow-push-close" onClick={() => setHistoryOpen(false)}>
                 关闭
@@ -5040,27 +5805,19 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             </div>
             <div className="thinkflow-history-body">
               {historyLoading ? <div className="thinkflow-empty">正在加载历史对话...</div> : null}
-              {!historyLoading && historyConversations.length === 0 ? <div className="thinkflow-empty">当前还没有可查看的历史对话。</div> : null}
-              {!historyLoading && historyConversations.length > 0 ? (
+              {!historyLoading && historyMessages.length === 0 ? <div className="thinkflow-empty">当前还没有可查看的历史对话。</div> : null}
+              {!historyLoading && historyMessages.length > 0 ? (
                 <div className="thinkflow-history-list">
-                  {historyConversations.map((item) => (
-                    <button
-                      key={item.id}
-                      type="button"
-                      className={`thinkflow-history-item ${item.id === conversationId ? 'is-active' : ''}`}
-                      onClick={() => {
-                        void (async () => {
-                          setConversationId(item.id);
-                          await loadConversationMessages(item.id);
-                          setHistoryOpen(false);
-                        })();
-                      }}
-                    >
+                  {historyMessages.map((item) => (
+                    <article key={item.id} className={`thinkflow-history-item is-${item.role}`}>
                       <div className="thinkflow-history-meta">
-                        <strong>{item.title || '新对话'}</strong>
-                        {item.updated_at || item.created_at ? <span>{formatThinkFlowDateTime(item.updated_at || item.created_at)}</span> : null}
+                        <strong>{item.role === 'assistant' ? 'AI' : '你'}</strong>
+                        {item.created_at ? <span>{item.created_at}</span> : null}
                       </div>
-                    </button>
+                      <div className="thinkflow-history-content">
+                        <ReactMarkdown>{item.content}</ReactMarkdown>
+                      </div>
+                    </article>
                   ))}
                 </div>
               ) : null}
@@ -5086,9 +5843,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
               {sourcePreviewLoading ? <div className="thinkflow-empty">正在加载来源内容...</div> : null}
               {!sourcePreviewLoading ? (
                 <div className="thinkflow-source-preview-content">
-                  <ReactMarkdown remarkPlugins={[remarkMath]} rehypePlugins={[rehypeKatex]}>
-                    {sourcePreviewContent}
-                  </ReactMarkdown>
+                  <ReactMarkdown>{sourcePreviewContent}</ReactMarkdown>
                 </div>
               ) : null}
             </div>

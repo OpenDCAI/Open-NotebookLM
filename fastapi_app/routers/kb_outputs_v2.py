@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, File, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from fastapi_app.services.output_v2_service import OutputV2Service
@@ -29,6 +30,12 @@ class OutlineRequest(BaseModel):
     api_key: Optional[str] = None
     model: Optional[str] = None
     enable_images: Optional[bool] = None
+    language: Optional[str] = None
+    tts_model: Optional[str] = None
+    tts_voice_name: Optional[str] = None
+    avatar_mode: Optional[str] = None
+    avatar_id: Optional[str] = None
+    avatar_upload_token: Optional[str] = None
 
 
 class SaveOutlineRequest(BaseModel):
@@ -85,6 +92,17 @@ class GenerateOutputRequest(BaseModel):
     api_url: Optional[str] = None
     api_key: Optional[str] = None
     model: Optional[str] = None
+
+
+class Paper2VideoWorkflowRequest(GenerateOutputRequest):
+    """paper2video 专用：可选 TTS、语言与数字人（默认读产出项已保存配置）。"""
+
+    tts_model: Optional[str] = None
+    tts_voice_name: Optional[str] = None
+    language: Optional[str] = None
+    avatar_mode: Optional[str] = None
+    avatar_id: Optional[str] = None
+    avatar_upload_token: Optional[str] = None
 
 
 class RegeneratePptPageRequest(GenerateOutputRequest):
@@ -155,8 +173,48 @@ async def create_outline(request: OutlineRequest) -> Dict[str, Any]:
         api_key=request.api_key,
         model=request.model,
         enable_images=request.enable_images,
+        language=request.language,
+        tts_model=request.tts_model,
+        tts_voice_name=request.tts_voice_name,
+        avatar_mode=request.avatar_mode,
+        avatar_id=request.avatar_id,
+        avatar_upload_token=request.avatar_upload_token,
     )
     return {"success": True, "output": item}
+
+
+@router.get("/paper2video/options")
+async def paper2video_options() -> Dict[str, Any]:
+    return {"success": True, **service.get_paper2video_options()}
+
+
+@router.get("/paper2video/preset-asset")
+async def paper2video_preset_asset(
+    kind: str = Query(...),
+    asset_id: str = Query(..., alias="id"),
+) -> FileResponse:
+    path = service.resolve_paper2video_preset_asset(kind=kind, asset_id=asset_id)
+    media = "image/png" if kind == "avatar" else "audio/wav"
+    return FileResponse(path, media_type=media, filename=path.name)
+
+
+@router.post("/paper2video/upload-avatar")
+async def paper2video_upload_avatar(
+    notebook_id: str = Query(...),
+    notebook_title: str = Query(""),
+    user_id: str = Query("local"),
+    email: Optional[str] = Query(None),
+    file: UploadFile = File(...),
+) -> Dict[str, Any]:
+    content = await file.read()
+    payload = service.save_paper2video_avatar_upload(
+        notebook_id=notebook_id,
+        notebook_title=notebook_title,
+        user_id=_effective_user(user_id, email),
+        filename=file.filename or "avatar.png",
+        content=content,
+    )
+    return {"success": True, **payload}
 
 
 @router.put("/{output_id}/outline")
@@ -263,6 +321,50 @@ async def generate_output(output_id: str, request: GenerateOutputRequest) -> Dic
     return {"success": True, "output": item}
 
 
+@router.post("/{output_id}/paper2video/run-subtitle")
+async def paper2video_run_subtitle(output_id: str, request: Paper2VideoWorkflowRequest) -> Dict[str, Any]:
+    item = await service.run_paper2video_subtitle(
+        notebook_id=request.notebook_id,
+        notebook_title=request.notebook_title,
+        user_id=_effective_user(request.user_id, request.email),
+        email=(request.email or request.user_id or "local").strip() or "local",
+        output_id=output_id,
+        api_url=request.api_url,
+        api_key=request.api_key,
+        model=request.model,
+        tts_model=request.tts_model,
+        tts_voice_name=request.tts_voice_name,
+        language=request.language,
+        avatar_mode=request.avatar_mode,
+        avatar_id=request.avatar_id,
+        avatar_upload_token=request.avatar_upload_token,
+    )
+    return {"success": True, "output": item}
+
+
+@router.post("/{output_id}/paper2video/continue-after-edit")
+async def paper2video_continue_after_edit(
+    output_id: str, request: Paper2VideoWorkflowRequest
+) -> Dict[str, Any]:
+    item = await service.run_paper2video_continue_after_edit(
+        notebook_id=request.notebook_id,
+        notebook_title=request.notebook_title,
+        user_id=_effective_user(request.user_id, request.email),
+        email=(request.email or request.user_id or "local").strip() or "local",
+        output_id=output_id,
+        api_url=request.api_url,
+        api_key=request.api_key,
+        model=request.model,
+        tts_model=request.tts_model,
+        tts_voice_name=request.tts_voice_name,
+        language=request.language,
+        avatar_mode=request.avatar_mode,
+        avatar_id=request.avatar_id,
+        avatar_upload_token=request.avatar_upload_token,
+    )
+    return {"success": True, "output": item}
+
+
 @router.post("/{output_id}/pages/{page_index}/regenerate")
 async def regenerate_ppt_page(
     output_id: str,
@@ -313,6 +415,61 @@ async def select_ppt_page_version(
         user_id=_effective_user(request.user_id, request.email),
         output_id=output_id,
         page_index=page_index,
+        version_id=version_id,
+    )
+    return {"success": True, "output": item}
+
+
+@router.post("/{output_id}/scenes/{scene_index}/regenerate")
+async def regenerate_video_scene(
+    output_id: str,
+    scene_index: int,
+    request: RegeneratePptPageRequest,
+) -> Dict[str, Any]:
+    item = await service.regenerate_video_scene(
+        notebook_id=request.notebook_id,
+        notebook_title=request.notebook_title,
+        user_id=_effective_user(request.user_id, request.email),
+        email=(request.email or request.user_id or "local").strip() or "local",
+        output_id=output_id,
+        scene_index=scene_index,
+        prompt=request.prompt,
+        api_url=request.api_url,
+        api_key=request.api_key,
+        model=request.model,
+    )
+    return {"success": True, "output": item}
+
+
+@router.post("/{output_id}/scenes/{scene_index}/confirm")
+async def confirm_video_scene(
+    output_id: str,
+    scene_index: int,
+    request: GenerateOutputRequest,
+) -> Dict[str, Any]:
+    item = service.confirm_video_scene(
+        notebook_id=request.notebook_id,
+        notebook_title=request.notebook_title,
+        user_id=_effective_user(request.user_id, request.email),
+        output_id=output_id,
+        scene_index=scene_index,
+    )
+    return {"success": True, "output": item}
+
+
+@router.post("/{output_id}/scenes/{scene_index}/versions/{version_id}/select")
+async def select_video_scene_version(
+    output_id: str,
+    scene_index: int,
+    version_id: str,
+    request: SelectPptPageVersionRequest,
+) -> Dict[str, Any]:
+    item = service.select_video_scene_version(
+        notebook_id=request.notebook_id,
+        notebook_title=request.notebook_title,
+        user_id=_effective_user(request.user_id, request.email),
+        output_id=output_id,
+        scene_index=scene_index,
         version_id=version_id,
     )
     return {"success": True, "output": item}

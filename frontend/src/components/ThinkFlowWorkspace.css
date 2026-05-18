@@ -4053,6 +4053,151 @@
   flex-wrap: wrap;
 }
 
+.thinkflow-video-preview-tabs {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 2px 0;
+}
+
+.thinkflow-video-preview-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  border: 1px solid rgba(221, 227, 236, 0.96);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.88);
+  color: var(--tf-muted);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: border-color 160ms ease, background 160ms ease, color 160ms ease, box-shadow 160ms ease;
+}
+
+.thinkflow-video-preview-tab:hover {
+  border-color: rgba(47, 103, 239, 0.32);
+  color: var(--tf-text);
+}
+
+.thinkflow-video-preview-tab.is-active {
+  border-color: rgba(47, 103, 239, 0.5);
+  background: linear-gradient(180deg, rgba(241, 246, 255, 0.98), rgba(232, 240, 255, 0.92));
+  color: var(--tf-accent);
+  box-shadow: 0 8px 20px rgba(40, 76, 170, 0.1);
+}
+
+.thinkflow-ppt-viewer-frame.has-video {
+  min-height: min(52vh, 560px);
+  padding: 12px;
+  background: #0f1419;
+}
+
+.thinkflow-video-player-wrap {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.thinkflow-video-player {
+  width: 100%;
+  max-height: min(52vh, 560px);
+  border-radius: 12px;
+  background: #000;
+  outline: none;
+}
+
+.thinkflow-video-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.thinkflow-video-actions.is-compact .thinkflow-video-btn {
+  padding: 8px 12px;
+  font-size: 12px;
+}
+
+.thinkflow-video-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  cursor: pointer;
+  transition: transform 160ms ease, box-shadow 160ms ease, background 160ms ease;
+}
+
+.thinkflow-video-btn:hover {
+  transform: translateY(-1px);
+}
+
+.thinkflow-video-btn-primary {
+  border: 0;
+  background: linear-gradient(135deg, #2f67ef 0%, #1d4ed8 100%);
+  color: #fff;
+  box-shadow: 0 10px 24px rgba(47, 103, 239, 0.28);
+}
+
+.thinkflow-video-btn-primary:hover {
+  box-shadow: 0 14px 28px rgba(47, 103, 239, 0.34);
+}
+
+.thinkflow-video-btn-secondary {
+  border: 1px solid rgba(221, 227, 236, 0.96);
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--tf-text);
+}
+
+.thinkflow-video-btn-secondary:hover {
+  border-color: rgba(47, 103, 239, 0.34);
+  color: var(--tf-accent);
+}
+
+.thinkflow-video-result-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  padding: 14px 16px;
+  border-radius: 16px;
+  border: 1px solid rgba(221, 227, 236, 0.94);
+  background: linear-gradient(180deg, rgba(248, 250, 255, 0.98), rgba(255, 255, 255, 0.92));
+  box-shadow: 0 12px 28px rgba(27, 43, 68, 0.06);
+}
+
+.thinkflow-video-result-bar-copy {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  color: var(--tf-accent);
+}
+
+.thinkflow-video-result-bar-copy strong {
+  display: block;
+  font-size: 15px;
+  color: var(--tf-text);
+  line-height: 1.4;
+}
+
+.thinkflow-video-result-bar-copy span {
+  display: block;
+  margin-top: 2px;
+  font-size: 12px;
+  color: var(--tf-muted);
+  font-weight: 400;
+  line-height: 1.5;
+}
+
 @media (max-width: 1280px) {
   .thinkflow-ppt-focus-shell {
     grid-template-columns: 1fr;
@@ -4332,6 +4477,246 @@
   color: var(--tf-text);
   font-size: 13px;
   line-height: 1.5;
+}
+
+.thinkflow-p2v-lock-modal {
+  width: min(860px, calc(100vw - 36px));
+}
+
+.thinkflow-p2v-prerequisite-banner {
+  margin-bottom: 16px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  border: 1px solid #e8c84a;
+  background: linear-gradient(180deg, #fffbeb 0%, #fff6d6 100%);
+  display: grid;
+  gap: 12px;
+}
+
+.thinkflow-p2v-prerequisite-banner p {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: #5c4800;
+}
+
+.thinkflow-p2v-prerequisite-banner strong {
+  font-weight: 700;
+  color: #3f3200;
+}
+
+.thinkflow-p2v-prerequisite-btn {
+  justify-self: start;
+  padding: 8px 16px;
+  border-radius: 10px;
+  border: 1px solid #d4a72c;
+  background: #fff;
+  color: #5c4800;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+}
+
+.thinkflow-p2v-prerequisite-btn:hover:not(:disabled) {
+  background: #fffdf5;
+  border-color: #c9971f;
+  box-shadow: 0 2px 8px rgba(92, 72, 0, 0.12);
+}
+
+.thinkflow-p2v-prerequisite-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.thinkflow-p2v-config-section {
+  margin-top: 4px;
+}
+
+.thinkflow-p2v-config-note {
+  margin: 0 0 12px;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--tf-subtle);
+}
+
+.thinkflow-p2v-field {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.thinkflow-p2v-field > span {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--tf-text);
+}
+
+.thinkflow-p2v-field select,
+.thinkflow-p2v-field input[type='text'] {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid rgba(224, 230, 239, 0.95);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.98);
+  color: var(--tf-text);
+  font-size: 13px;
+}
+
+.thinkflow-p2v-segmented {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.thinkflow-p2v-segmented button {
+  padding: 8px 12px;
+  border: 1px solid rgba(224, 230, 239, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+  color: var(--tf-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.thinkflow-p2v-segmented button.active {
+  border-color: rgba(37, 99, 235, 0.55);
+  background: rgba(37, 99, 235, 0.1);
+  color: #1d4ed8;
+}
+
+.thinkflow-p2v-avatar-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.thinkflow-p2v-avatar-card {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid rgba(224, 230, 239, 0.95);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.98);
+  cursor: pointer;
+  text-align: center;
+}
+
+.thinkflow-p2v-avatar-card.selected {
+  border-color: rgba(37, 99, 235, 0.55);
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.12);
+}
+
+.thinkflow-p2v-avatar-card img {
+  width: 100%;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 10px;
+  background: rgba(248, 250, 255, 0.9);
+}
+
+.thinkflow-p2v-avatar-card span {
+  font-size: 12px;
+  color: var(--tf-text);
+}
+
+.thinkflow-p2v-upload-drop {
+  display: grid;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 14px;
+  border: 1px dashed rgba(148, 163, 184, 0.9);
+  border-radius: 14px;
+  background: rgba(248, 250, 255, 0.7);
+  cursor: pointer;
+}
+
+.thinkflow-p2v-upload-drop input[type='file'] {
+  display: none;
+}
+
+.thinkflow-p2v-upload-drop img {
+  max-width: 140px;
+  max-height: 140px;
+  border-radius: 12px;
+  object-fit: cover;
+}
+
+.thinkflow-p2v-voice-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+.thinkflow-p2v-voice-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px 4px 10px;
+  border: 1px solid rgba(224, 230, 239, 0.95);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.96);
+}
+
+.thinkflow-p2v-voice-chip.selected {
+  border-color: rgba(37, 99, 235, 0.55);
+  background: rgba(37, 99, 235, 0.1);
+}
+
+.thinkflow-p2v-voice-chip-label {
+  border: none;
+  background: transparent;
+  padding: 2px 0;
+  font-size: 12px;
+  color: var(--tf-text);
+  cursor: pointer;
+}
+
+.thinkflow-p2v-voice-chip.selected .thinkflow-p2v-voice-chip-label {
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.thinkflow-p2v-voice-chip-play {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  border-radius: 999px;
+  background: rgba(37, 99, 235, 0.08);
+  color: #2563eb;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.thinkflow-p2v-voice-chip-play:hover {
+  background: rgba(37, 99, 235, 0.16);
+}
+
+.thinkflow-p2v-voice-chip-play.playing {
+  background: rgba(37, 99, 235, 0.2);
+  color: #1d4ed8;
+}
+
+.thinkflow-p2v-voice-link {
+  display: inline-block;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: #2563eb;
+  text-decoration: none;
+}
+
+.thinkflow-p2v-voice-link:hover {
+  text-decoration: underline;
+}
+
+.thinkflow-p2v-voice-custom {
+  margin-top: 4px;
 }
 
 .thinkflow-output-source-lock-card {

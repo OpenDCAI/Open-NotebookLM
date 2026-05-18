@@ -17,7 +17,7 @@ export type PushDestinationType = 'summary' | 'document' | 'guidance';
 
 export type ThinkFlowMessage = {
   id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant';
   content: string;
   time: string;
   pushed?: boolean;
@@ -26,24 +26,6 @@ export type ThinkFlowMessage = {
   sourceMapping?: Record<string, string>;
   sourcePreviewMapping?: Record<string, string>;
   sourceReferenceMapping?: Record<string, CitationReference>;
-  meta?: Record<string, any>;
-};
-
-export type OutlineDirective = {
-  id: string;
-  scope?: 'global' | 'slide';
-  type?: string;
-  label: string;
-  instruction?: string;
-  action?: 'set' | 'remove';
-  value?: string;
-  page_num?: number | null;
-};
-
-export type OutlineIntentSummary = {
-  mode?: 'global' | 'slide' | 'mixed' | 'none';
-  global_directives?: OutlineDirective[];
-  slide_targets?: { page_num: number; instruction: string }[];
 };
 
 export type DocumentSourceRef = {
@@ -78,12 +60,6 @@ export type ThinkFlowDocument = {
   content?: string;
   created_at: string;
   updated_at: string;
-  document_type?: 'summary_doc' | 'output_doc';
-  focus_state?: {
-    type?: string;
-    section_ids?: string[];
-    description?: string;
-  };
   version_count?: number;
   status_tokens?: Record<string, number>;
   push_traces?: DocumentPushTrace[];
@@ -108,63 +84,37 @@ export type OutlineSection = {
   asset_ref?: string | null;
   ppt_img_path?: string;
   generated_img_path?: string;
-  generation_failed?: boolean;
-  generation_error?: string;
-  mode?: string;
-};
-
-export type PptOutputInfo = {
-  type?: string;
-  title?: string;
-  page_count?: number;
-  audience?: string;
-  source_names?: string[];
-  bound_document_titles?: string[];
-  stage_label?: string;
-};
-
-export type PptStyleInfo = {
-  preset?: 'business' | 'academic' | 'clean' | 'custom' | string;
-  label?: string;
-  tone?: string;
-  visual_style?: string;
-  audience_assumption?: string;
-  supplement_prompt?: string[];
+  /** 视频分镜：逐页/逐镜口播稿（subtitle 阶段写入，可在 pages_ready 继续编辑） */
+  script_text?: string;
 };
 
 export type WorkspaceItemType = 'summary' | 'guidance';
 export type PanelGuideKey = 'summary' | 'doc' | 'guidance';
-export type ThinkFlowLeftTab = 'conversations' | 'materials' | 'outputs';
+export type ThinkFlowLeftTab = 'materials' | 'outputs';
 export type ThinkFlowRightMode = 'summary' | 'doc' | 'guidance' | 'outline';
 export type WorkspaceMode = 'normal' | 'output_focus' | 'output_immersive';
 export type ChatMode = 'chat' | 'table-analysis';
-export type PptPipelineStage = 'outline_ready' | 'pages_ready' | 'generated';
+export type PptPipelineStage = 'outline_ready' | 'pages_ready' | 'generated' | 'pending';
 
 export type ConversationHistoryMessage = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
   created_at?: string;
-  fileAnalyses?: any[];
-  sourceMapping?: Record<string, string>;
-  sourcePreviewMapping?: Record<string, string>;
-  sourceReferenceMapping?: Record<string, CitationReference>;
 };
 
 export type ThinkFlowWorkspaceItem = {
   id: string;
   type: WorkspaceItemType;
-  summary_kind?: 'item' | 'all';
   title: string;
   content?: string;
   source_refs?: DocumentSourceRef[];
-  source_summary_item_ids?: string[];
   capture_count?: number;
   created_at: string;
   updated_at: string;
 };
 
-export type OutputType = 'ppt' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
+export type OutputType = 'ppt' | 'video' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
 
 export type PptPageReview = {
   page_index: number;
@@ -186,6 +136,29 @@ export type PptPageVersion = {
   created_at: string;
 };
 
+export type Paper2VideoConfig = {
+  language: string;
+  avatar_mode: 'none' | 'system' | 'custom';
+  avatar_id: string;
+  avatar_upload_token?: string;
+};
+
+export type Paper2VideoPresetItem = {
+  id: string;
+  label: string;
+  preview_url?: string;
+  tts_model?: string;
+};
+
+export type Paper2VideoOptionsPayload = {
+  avatars: Paper2VideoPresetItem[];
+  voices: Paper2VideoPresetItem[];
+  tts_models: string[];
+  languages: Array<{ id: string; label: string }>;
+  defaults: Paper2VideoConfig;
+  cosyvoice_voice_list_url: string;
+};
+
 export type ThinkFlowOutput = {
   id: string;
   document_id: string;
@@ -196,7 +169,6 @@ export type ThinkFlowOutput = {
   prompt?: string;
   page_count?: number;
   outline?: OutlineSection[];
-  outline_global_directives?: OutlineDirective[];
   result?: Record<string, any>;
   guidance_item_ids?: string[];
   guidance_snapshot_text?: string;
@@ -206,79 +178,12 @@ export type ThinkFlowOutput = {
   bound_document_titles?: string[];
   result_path?: string;
   enable_images?: boolean;
-  outline_chat_history?: ConversationHistoryMessage[];
-  outline_chat_sessions?: {
-    id: string;
-    status?: 'active' | 'applied' | 'archived';
-    messages?: ConversationHistoryMessage[];
-    draft_outline?: OutlineSection[];
-    draft_output_info?: PptOutputInfo;
-    draft_style_info?: PptStyleInfo;
-    draft_global_directives?: OutlineDirective[];
-    intent_summary?: OutlineIntentSummary;
-    summary?: string;
-    has_pending_changes?: boolean;
-    change_summary?: string;
-    created_at?: string;
-    updated_at?: string;
-    applied_at?: string;
-  }[];
-  outline_chat_active_session_id?: string;
-  outline_chat_draft_outline?: OutlineSection[];
-  outline_chat_draft_output_info?: PptOutputInfo;
-  outline_chat_draft_style_info?: PptStyleInfo;
-  outline_chat_draft_global_directives?: OutlineDirective[];
-  outline_chat_has_pending_changes?: boolean;
-  output_info?: PptOutputInfo;
-  style_info?: PptStyleInfo;
+  language?: string;
+  paper2video_config?: Paper2VideoConfig;
   page_reviews?: PptPageReview[];
   page_versions?: PptPageVersion[];
-  stage_history?: StageHistorySnapshot[];
   created_at: string;
   updated_at: string;
-};
-
-export type ManualEditLog = {
-  page_index: number;
-  fields: ('title' | 'layout_description' | 'key_points' | 'asset_ref')[];
-  summary: string;
-  timestamp: string;
-};
-
-export type MergeConflict = {
-  page_index: number;
-  field: string;
-  draft_value: string;
-  manual_value: string;
-};
-
-export type MergeConflictReport = {
-  conflicts: MergeConflict[];
-  auto_merged_count: number;
-};
-
-export type SystemMessageMeta = {
-  type: 'manual_edit' | 'stage_change' | 'merge_result' | 'page_action';
-  content: string;
-  edit_log?: ManualEditLog;
-  conflict_report?: MergeConflictReport;
-  page_filter?: number;
-};
-
-export type PageReviewChatContext = {
-  title: string;
-  placeholder: string;
-  pageIndex: number;
-  pageTitle: string;
-  thumbnailUrl?: string;
-};
-
-export type StageHistorySnapshot = {
-  id: string;
-  stage: PptPipelineStage;
-  page_reviews: PptPageReview[];
-  result: Record<string, any> | null;
-  reverted_at: string;
 };
 
 export type FlashcardItem = {
@@ -331,6 +236,8 @@ export type OutputContextState = {
 };
 
 export type PptSourceLockIntent = {
+  /** PPT 与 Video 共用来源确认弹窗，平行功能而非派生关系 */
+  storyboardTarget: 'ppt' | 'video';
   outputDocumentId: string;
   outputDocumentTitle: string;
   outputTitle: string;
@@ -345,7 +252,7 @@ export type PptSourceLockIntent = {
 };
 
 export type DirectOutputIntent = {
-  targetType: Exclude<OutputType, 'ppt'>;
+  targetType: Exclude<OutputType, 'ppt' | 'video'>;
   outputDocumentId: string;
   outputDocumentTitle: string;
   outputTitle: string;

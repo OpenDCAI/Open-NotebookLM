@@ -17,7 +17,8 @@ FRONTEND_HEALTH_URL="http://127.0.0.1:${FRONTEND_PORT}/"
 EMBEDDING_HEALTH_URL="http://127.0.0.1:${EMBEDDING_PORT}/health"
 LOCK_FILE="$PROJECT_ROOT/logs/monitor.lock"
 STARTUP_GRACE_SECONDS=15
-BACKEND_STARTUP_TIMEOUT=120
+# paper2video continue（refine+TTS+ffmpeg）常超过 2 分钟；过短会在长任务中途误杀后端
+BACKEND_STARTUP_TIMEOUT=900
 FRONTEND_STARTUP_TIMEOUT=60
 EMBEDDING_STARTUP_TIMEOUT=180
 MONITOR_INITIALIZED=0
@@ -51,7 +52,8 @@ fi
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> logs/monitor.log; }
 
 is_port_up()   { ss -tlnH "sport = :$1" 2>/dev/null | grep -q LISTEN; }
-http_ok()       { curl --max-time 5 -fsS -o /dev/null "$1"; }
+# paper2video / MinerU 等重任务可能短暂占用线程池；过短超时易误判为宕机并杀死正在跑的长请求。
+http_ok()       { curl --max-time 25 -fsS -o /dev/null "$1"; }
 proc_age()      { ps -o etimes= -p "$1" 2>/dev/null | awk '{print $1}'; }
 find_backend()  { pgrep -f "uvicorn fastapi_app.main:app.*--port ${BACKEND_PORT}" | head -1; }
 find_frontend() { pgrep -f "vite.*--port ${FRONTEND_PORT}" | head -1; }

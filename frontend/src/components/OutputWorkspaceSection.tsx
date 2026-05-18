@@ -5,7 +5,7 @@ type OutputWorkspaceSectionProps = {
   generatingOutline: string | null;
   generatingOutlineLabel: string;
   outputWorkspaceHeader: ReactNode;
-  pptWorkspace: ReactNode;
+  storyboardWorkspace: ReactNode;
   directOutputWorkspace: ReactNode;
   isOutputHeaderCollapsed: boolean;
   onOutputWorkspaceScroll: (scrollTop: number) => void;
@@ -16,7 +16,7 @@ export function OutputWorkspaceSection({
   generatingOutline,
   generatingOutlineLabel,
   outputWorkspaceHeader,
-  pptWorkspace,
+  storyboardWorkspace,
   directOutputWorkspace,
   isOutputHeaderCollapsed,
   onOutputWorkspaceScroll,
@@ -26,13 +26,13 @@ export function OutputWorkspaceSection({
       {activeOutput ? (
         <>
           {outputWorkspaceHeader}
-          {activeOutput.target_type === 'ppt' ? (
+          {activeOutput.target_type === 'ppt' || activeOutput.target_type === 'video' ? (
             <div
               className={`thinkflow-output-workspace-body ${isOutputHeaderCollapsed ? 'is-header-collapsed' : ''}`}
               data-testid="output-workspace-body"
               onScroll={(event) => onOutputWorkspaceScroll(event.currentTarget.scrollTop)}
             >
-              {pptWorkspace}
+              {storyboardWorkspace}
             </div>
           ) : (
             <div

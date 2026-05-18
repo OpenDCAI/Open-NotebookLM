@@ -1,0 +1,1415 @@
+from __future__ import annotations
+
+from workflow_engine.logger import get_logger
+import subprocess
+from pathlib import Path
+from typing import Dict, Any, Tuple, Optional, List, Union, Optional
+import os
+os.environ["TORCH_FORCE_NO_WEIGHTS_ONLY_LOAD"] = "1"
+import json
+from PIL import Image, ImageFont, ImageDraw
+import shutil
+import multiprocessing
+import string
+import cv2
+import numpy as np
+
+log = get_logger(__name__)
+import re
+
+
+def pptx_to_pdf(pptx_path: Union[str, Path], output_dir: Union[str, Path]) -> str:
+    """
+    使用 LibreOffice 将 PPTX（或 PPT）转为 PDF，供 paper2video 等 workflow 使用。
+
+    Args:
+        pptx_path: 输入 PPTX/PPT 文件路径
+        output_dir: 输出目录，生成的 PDF 将写入此目录，文件名为 pptx_path 的 stem + .pdf
+
+    Returns:
+        生成的 PDF 文件路径（字符串）
+
+    Raises:
+        FileNotFoundError: 输入文件不存在
+        RuntimeError: LibreOffice 未安装或转换失败
+    """
+    pptx_path = Path(pptx_path).resolve()
+    output_dir = Path(output_dir).resolve()
+    if not pptx_path.is_file():
+        raise FileNotFoundError(f"PPTX file not found: {pptx_path}")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    soffice_bin = os.environ.get("SOFFICE_BIN") or "libreoffice"
+    cmd = [
+        soffice_bin,
+        "--headless",
+        "--convert-to",
+        "pdf",
+        "--outdir",
+        str(output_dir),
+        str(pptx_path),
+    ]
+    log.info("[p2v] Converting PPTX to PDF: %s -> %s", pptx_path, output_dir)
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    except subprocess.TimeoutExpired as e:
+        raise RuntimeError(f"LibreOffice conversion timeout: {e}") from e
+    except FileNotFoundError as e:
+        raise RuntimeError(
+            "LibreOffice not found. Install it (e.g. apt install libreoffice) to support PPTX conversion."
+        ) from e
+    pdf_name = pptx_path.with_suffix(".pdf").name
+    pdf_path = output_dir / pdf_name
+    if not pdf_path.is_file():
+        raise RuntimeError(f"PDF conversion failed, expected output: {pdf_path}")
+    log.info("[p2v] PDF saved: %s", pdf_path)
+    return str(pdf_path)
+
+
+def get_image_paths(directory_path: str) -> List[str]:
+    """
+    遍历指定目录及其子目录，查找所有常见的图片文件，并按照日期排序，返回它们的路径字符串列表。
+    """
+    # 1. 常用图片文件扩展名列表
+    image_extensions = [
+        '*.png', '*.jpg', '*.jpeg', '*.gif', '*.bmp', '*.svg', '*.webp'
+    ]
+    
+    base_path = Path(directory_path)
+    if not base_path.is_dir():
+        log.error("Directory not found at %s", directory_path)
+        return []
+
+    found_image_paths: List[Path] = []
+    
+    # 2. 递归遍历目录并收集路径
+    for ext in image_extensions:
+        found_image_paths.extend(base_path.glob(ext))
+
+    #3. 对找到的图片路径按照文件名日期进行排序，确保顺序
+    def natural_sort_key(path: Path):
+        numbers = re.findall(r'(\d+)', path.name)
+        return tuple(int(n) for n in numbers) if numbers else (float('inf'),)
+    
+    found_image_paths.sort(key=natural_sort_key)
+    return [str(p.resolve()) for p in found_image_paths]
+
+def create_subtitle_image(text, font_size=32, font_path="arial.ttf"):
+    # fixme: 硬编码了路径，后续可能需要修改
+    if font_path == "/mnt/paper2any/hlg/Open-NotebookLM/workflow_engine/toolkits/p2vtool/fonts/NotoSansCJK-Regular.ttc":
+        try:
+            font = ImageFont.truetype(font_path, font_size, index=2)
+        except Exception as e:
+            log.warning("Failed to load font from '%s': %s", font_path, e)
+            log.warning("Using default font; font_size will be ignored.")
+            font = ImageFont.load_default()
+
+    dummy_img = Image.new("RGBA", (70, 70))
+    draw = ImageDraw.Draw(dummy_img)
+    bbox = draw.textbbox((0, 0), text, font=font)
+    text_w = bbox[2] - bbox[0]
+    text_h = bbox[3] - bbox[1]
+
+    padding = 20
+    box_w = text_w + 2*padding
+    box_h = text_h + 2*padding
+    img = Image.new("RGBA", (box_w, box_h), (0, 0, 0, 160))  # semi-transparent black
+
+    draw = ImageDraw.Draw(img)
+    draw.text((padding, padding), text, font=font, fill=(255, 255, 255, 255))
+
+    return img
+
+# 根据语音识别结果（带时间戳），生成对应的视频字幕片段
+def generate_subtitle_clips(sentence_timesteps_file, video_w, video_h, font_size):
+    from moviepy.editor import ImageClip
+    clips = []
+    # 距画面底边的留白（按高度比例 + 下限），避免字幕贴底或被裁切
+    bottom_margin = max(int(video_h * 0.14), font_size * 4, 56)
+    with open(sentence_timesteps_file, 'r', encoding='utf-8') as f:
+        datas = json.load(f)
+    for sentence_timestep in datas:
+        # fixme:这里的绝对路径是 支持英文的字体，如果是中文的，需要进行修改
+        img = create_subtitle_image(sentence_timestep["text"], font_size=font_size, font_path="/mnt/paper2any/hlg/Open-NotebookLM/workflow_engine/toolkits/p2vtool/fonts/NotoSansCJK-Regular.ttc")
+        img_array = np.array(img)
+        clip_h = int(img_array.shape[0])
+        y_pos = max(0, int(video_h) - clip_h - bottom_margin)
+        clip = (ImageClip(img_array, ismask=False)
+                .set_duration(sentence_timestep["end"] - sentence_timestep["start"])
+                .set_start(sentence_timestep["start"])
+                .set_position(("center", y_pos)))
+        clips.append(clip)
+    return clips
+
+# 从sentece_timesteps_path中读取有关的sentence的时间和文本，实际上就是保存的cursor.json文件中的内容
+def add_subtitles(video_path, output_path, sentence_timesteps_path, font_size):
+    from moviepy.editor import VideoFileClip, CompositeVideoClip
+    log.info("[Step 1] Generating subtitle clips...")
+    video = VideoFileClip(video_path)
+    subs = generate_subtitle_clips(sentence_timesteps_path, video.w, video.h, font_size)
+
+    log.info("[Step 2] Rendering final video...")
+    final = CompositeVideoClip([video] + subs)
+    # 使用cpu
+    final.write_videofile(output_path, codec="libx264", audio_codec="aac", threads=12, preset="veryfast")
+    # 使用GPU加速
+    # final.write_videofile(output_path, codec="h264_nvenc", audio_codec="aac")
+
+def render_cursor_on_video(
+    input_video: str,
+    output_video: str,
+    cursor_points: list,          # list of (time, x, y)
+    transition_duration: float = 0.1,
+    cursor_size: int = 10,
+    cursor_img_path: str = "cursor.png"):
+
+    img = Image.open(cursor_img_path)
+    img_resized = img.resize((cursor_size, cursor_size))
+    img_resized.save(cursor_img_path)
+
+
+    def get_video_resolution(path):
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height",
+            "-of", "json", path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        info = json.loads(result.stdout)
+        width = info["streams"][0]["width"]
+        height = info["streams"][0]["height"]
+        return width, height
+
+    w, h = get_video_resolution(input_video)
+    log.info("Video resolution: %sx%s", w, h)
+
+    # 记录了鼠标的移动位置信息，以一个列表的形式
+    filters = []
+
+    t_first, _, _ = cursor_points[0]
+    # 在视频正式开始时，记录光标轨迹之前，让光标静止悬浮在屏幕的正中央
+    if t_first > transition_duration:
+        cx = w / 2 - cursor_size / 2
+        cy = h / 2 - cursor_size / 2
+        global_hold = (
+            f"overlay=x={cx}:y={cy-20}:"
+            f"enable='between(t,0,{round(t_first - transition_duration, 3)})'"
+        )
+        filters.append(global_hold)
+        
+    for i in range(1, len(cursor_points)):
+        t0, x0, y0 = cursor_points[i - 1]
+        t1, x1, y1 = cursor_points[i]
+
+        hold_start = round(t0, 3)
+        hold_end = round(t1 - transition_duration, 3)
+        if hold_end > hold_start:
+            x_hold = x0 - cursor_size / 2
+            y_hold = y0 - cursor_size / 2
+            hold_expr = (
+                f"overlay=x={x_hold}:y={y_hold}:"
+                f"enable='between(t,{hold_start},{hold_end})'"
+            )
+            filters.append(hold_expr)
+
+        move_start = round(t1 - transition_duration, 3)
+        move_end = t1
+        dx = x1 - x0
+        dy = y1 - y0
+        x_expr = f"{x0 - cursor_size/2} + ({dx})*(t-{move_start})/{transition_duration}"
+        y_expr = f"{y0 - cursor_size/2} + ({dy})*(t-{move_start})/{transition_duration}"
+        move_expr = (
+            f"overlay=x={x_expr}:y={y_expr}:"
+            f"enable='between(t,{move_start},{move_end})'"
+        )
+        filters.append(move_expr)
+
+    # 最后一个光标点之后到视频结束：保持光标在最后位置，避免末尾几秒光标消失
+    video_duration = get_mp4_duration_ffprobe(input_video)
+    t_last, x_last, y_last = cursor_points[-1]
+    t_hold_end = round(video_duration, 3)
+    t_hold_start = round(t_last, 3)
+    if t_hold_end > t_hold_start:
+        x_hold = x_last - cursor_size / 2
+        y_hold = y_last - cursor_size / 2
+        final_hold = (
+            f"overlay=x={x_hold}:y={y_hold}:"
+            f"enable='between(t,{t_hold_start},{t_hold_end})'"
+        )
+        filters.append(final_hold)
+
+    filter_lines = []
+    stream_in = "[0][1]"
+    for i, expr in enumerate(filters):
+        stream_out = f"[tmp{i}]" if i < len(filters) - 1 else "[vout]"
+        filter_lines.append(f"{stream_in} {expr} {stream_out}")
+        stream_in = f"{stream_out}[1]"
+
+    filter_complex = "; ".join(filter_lines)
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", input_video,
+        "-i", cursor_img_path,
+        "-filter_complex", filter_complex,
+        "-map", "[vout]",
+        "-map", "0:a?",
+        "-c:v", "libx264",
+        "-c:a", "copy",
+        output_video
+    ]
+    subprocess.run(cmd, check=True)
+    log.info("Done. Output saved to: %s", output_video)
+
+
+def render_video_with_cursor_from_json(
+    video_path,
+    out_video_path,
+    json_path,
+    cursor_img_path,
+    transition_duration=0.1,
+    cursor_size=16
+):
+    with open(json_path, "r") as f:
+        data = json.load(f)
+
+    cursor_points = []
+    for idx, slide in enumerate(data):
+        if idx == 0: start_time = slide["start"]
+        else: start_time = slide["start"] + 0.5
+        x, y = slide["cursor"]
+        cursor_points.append((start_time, x, y))
+    
+    render_cursor_on_video(
+        input_video=video_path,
+        output_video=out_video_path,
+        cursor_points=cursor_points,
+        transition_duration=transition_duration,
+        cursor_size=cursor_size,
+        cursor_img_path=cursor_img_path
+    )
+'''========================== 解析生成 数字人 相关的函数  =================================='''
+def run_echomimic_inference(args):
+    from ruamel.yaml import YAML
+    source_image, driving_audio, save_video_dir, config_path, script_path, talking_head_env, gpu_id = args
+    
+    # 处理可能的 PYTHONSHASHSEED 问题
+    env = os.environ.copy()
+    keys_to_clear = ["PYTHONHASHSEED", "PYTHONPATH"] 
+    for key in keys_to_clear:
+        if key in env:
+            del env[key]
+    
+    env["PYTHONHASHSEED"] = "random"
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+
+    audio_basename = os.path.splitext(os.path.basename(driving_audio))[0]
+    save_path = os.path.join(save_video_dir, f"{audio_basename}")
+    config_bak = config_path.replace(".yaml", "_{}.yaml".format(audio_basename))
+    
+    # 修改原来配置文件中的内容，因为原有文件内容中保存文件的地址不对
+    yaml_rt = YAML()
+    yaml_rt.preserve_quotes = True  # 保留引号
+    yaml_rt.indent(mapping=2, sequence=4, offset=2) # 保持缩进风格
+
+    # 1. 读取原始配置
+    with open(config_path, 'r', encoding='utf-8') as f:
+        config_data = yaml_rt.load(f)
+
+    # 2. 修改 test_cases
+    config_data['test_cases'] = {
+        source_image: [driving_audio]
+    }
+    with open(config_bak, 'w', encoding='utf-8') as f:
+        yaml_rt.dump(config_data, f)
+    
+    cmd = [
+        talking_head_env, "-u", script_path,
+        "--config", config_bak,
+        "--save_path", save_path,
+    ]
+    log.info(f"Starting Task on GPU {gpu_id}: {audio_basename}")
+    # fixme: 硬编码了路径，后续可能需要修改
+    result = subprocess.run(cmd, cwd="/data/users/ligang/EchoMimic", env=env)
+
+    if os.path.exists(config_bak):
+        os.remove(config_bak)
+    return result
+
+
+# ------------------------- LivePortrait 云数字人 API -------------------------
+LIVEPORTRAIT_MODEL = "liveportrait"
+LIVEPORTRAIT_DETECT_MODEL = "liveportrait-detect"
+LIVEPORTRAIT_UPLOAD_API = "https://dashscope.aliyuncs.com/api/v1/uploads"
+LIVEPORTRAIT_VIDEO_SYNTHESIS_API = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/video-synthesis"
+LIVEPORTRAIT_FACE_DETECT_API = "https://dashscope.aliyuncs.com/api/v1/services/aigc/image2video/face-detect"
+LIVEPORTRAIT_TASKS_API = "https://dashscope.aliyuncs.com/api/v1/tasks"
+
+
+def _liveportrait_get_upload_policy(api_key: str, model: str = LIVEPORTRAIT_MODEL) -> dict:
+    """获取 DashScope 文件上传凭证，用于后续上传图片/音频并得到 oss:// URL。"""
+    import requests
+    resp = requests.get(
+        LIVEPORTRAIT_UPLOAD_API,
+        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+        params={"action": "getPolicy", "model": model},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if "data" not in data:
+        raise RuntimeError(f"LivePortrait getPolicy response missing data: {data}")
+    return data["data"]
+
+
+def _liveportrait_upload_file(api_key: str, file_path: str, model: str = LIVEPORTRAIT_MODEL) -> str:
+    """上传本地文件到 DashScope 临时 OSS，返回 oss://... URL。调用 API 时需加 Header X-DashScope-OssResourceResolve: enable。"""
+    import requests
+    policy_data = _liveportrait_get_upload_policy(api_key, model)
+    file_path = Path(file_path)
+    if not file_path.is_file():
+        raise FileNotFoundError(f"LivePortrait upload: file not found: {file_path}")
+    key = f"{policy_data['upload_dir']}/{file_path.name}"
+    with open(file_path, "rb") as f:
+        files = {
+            "OSSAccessKeyId": (None, policy_data["oss_access_key_id"]),
+            "Signature": (None, policy_data["signature"]),
+            "policy": (None, policy_data["policy"]),
+            "x-oss-object-acl": (None, policy_data["x_oss_object_acl"]),
+            "x-oss-forbid-overwrite": (None, policy_data["x_oss_forbid_overwrite"]),
+            "key": (None, key),
+            "success_action_status": (None, "200"),
+            "file": (file_path.name, f.read()),
+        }
+        resp = requests.post(policy_data["upload_host"], files=files, timeout=120)
+    resp.raise_for_status()
+    return f"oss://{key}"
+
+
+def liveportrait_face_detect(api_key: str, image_path: Union[str, Path]) -> Tuple[bool, str]:
+    """
+    使用 LivePortrait-detect 检测人物肖像图是否符合数字人输入规范。
+    仅支持 HTTP/OSS 链接，会先将本地文件上传到 DashScope 临时 OSS 再调用 face-detect。
+    返回 (passed, message)：通过时 passed=True、message 可能为空；不通过时 passed=False、message 为原因（如 No human face detected）。
+    """
+    import requests
+    image_path = Path(image_path)
+    if not image_path.is_file():
+        return False, "图像文件不存在"
+    image_oss = _liveportrait_upload_file(api_key, str(image_path), model=LIVEPORTRAIT_DETECT_MODEL)
+    resp = requests.post(
+        LIVEPORTRAIT_FACE_DETECT_API,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "X-DashScope-OssResourceResolve": "enable",
+        },
+        json={
+            "model": LIVEPORTRAIT_DETECT_MODEL,
+            "input": {"image_url": image_oss},
+        },
+        timeout=60,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    if "code" in data and data.get("code"):
+        return False, data.get("message", data.get("code", "检测接口返回错误"))
+    output = data.get("output", data)
+    passed = output.get("pass", False)
+    message = output.get("message") or ""
+    return bool(passed), str(message).strip()
+
+
+def _liveportrait_submit(api_key: str, image_url: str, audio_url: str, template_id: str = "normal") -> str:
+    """提交 LivePortrait 视频合成异步任务，返回 task_id。image_url/audio_url 需为 oss:// 或公网 URL。"""
+    import requests
+    payload = {
+        "model": LIVEPORTRAIT_MODEL,
+        "input": {"image_url": image_url, "audio_url": audio_url},
+        "parameters": {"template_id": template_id},
+    }
+    resp = requests.post(
+        LIVEPORTRAIT_VIDEO_SYNTHESIS_API,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            "X-DashScope-Async": "enable",
+            "X-DashScope-OssResourceResolve": "enable",
+        },
+        json=payload,
+        timeout=60,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+    task_id = data.get("output", {}).get("task_id") or data.get("task_id")
+    if not task_id:
+        raise RuntimeError(f"LivePortrait submit response missing task_id: {data}")
+    return task_id
+
+
+def _liveportrait_poll(api_key: str, task_id: str, poll_interval: float = 5.0, max_wait: float = 600.0) -> Optional[str]:
+    """轮询任务状态，成功时返回结果视频 URL，失败返回 None 或抛异常。"""
+    import requests
+    import time
+    url = f"{LIVEPORTRAIT_TASKS_API}/{task_id}"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    start = time.monotonic()
+    while (time.monotonic() - start) < max_wait:
+        resp = requests.get(url, headers=headers, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        output = data.get("output", data)
+        status = output.get("task_status") or output.get("status")
+        if status == "SUCCEEDED":
+            results = output.get("results") or output.get("result")
+            if isinstance(results, dict):
+                video_url = results.get("video_url") or results.get("url")
+                if video_url:
+                    return video_url
+            if isinstance(results, list) and results:
+                video_url = results[0].get("video_url") or results[0].get("url")
+                if video_url:
+                    return video_url
+            return output.get("video_url") or output.get("video_path")
+        if status in ("FAILED", "CANCELED"):
+            msg = output.get("message") or output.get("code") or str(data)
+            raise RuntimeError(f"LivePortrait task failed: {status} - {msg}")
+        time.sleep(poll_interval)
+    raise TimeoutError(f"LivePortrait task {task_id} did not finish within {max_wait}s")
+
+
+def _liveportrait_single(
+    api_key: str,
+    ref_img_path: str,
+    audio_path: str,
+    save_path: str | Path,
+    template_id: str = "normal",
+) -> bool:
+    """单段：上传图片+音频，提交任务，轮询并下载视频到 save_path。"""
+    import requests
+    save_path = Path(save_path)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    image_oss = _liveportrait_upload_file(api_key, ref_img_path)
+    audio_oss = _liveportrait_upload_file(api_key, audio_path)
+    task_id = _liveportrait_submit(api_key, image_oss, audio_oss, template_id=template_id)
+    video_url = _liveportrait_poll(api_key, task_id)
+    if not video_url:
+        log.warning("[liveportrait] task %s succeeded but no video_url", task_id)
+        return False
+    resp = requests.get(video_url, timeout=120)
+    resp.raise_for_status()
+    save_path.write_bytes(resp.content)
+    log.info("[liveportrait] saved %s", save_path)
+    return True
+
+
+def _liveportrait_single_with_retry(
+    api_key: str,
+    ref_img_path: str,
+    audio_path: str,
+    save_path: str | Path,
+    template_id: str = "normal",
+    max_retries: int = 3,
+    retry_delay: float = 15.0,
+) -> bool:
+    """单段 LivePortrait 生成，输出校验失败或异常时重试。"""
+    import time
+    save_path = Path(save_path)
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            if save_path.is_file():
+                try:
+                    os.remove(save_path)
+                except OSError:
+                    pass
+            ok = _liveportrait_single(api_key, ref_img_path, audio_path, save_path, template_id=template_id)
+            if not ok:
+                last_err = RuntimeError("_liveportrait_single returned False")
+                if attempt < max_retries - 1:
+                    log.warning("[liveportrait] attempt %s/%s failed, retry in %.0fs", attempt + 1, max_retries, retry_delay)
+                    time.sleep(retry_delay)
+                continue
+            if not _validate_talking_video_output(save_path, audio_path):
+                try:
+                    os.remove(save_path)
+                except OSError:
+                    pass
+                last_err = RuntimeError("LivePortrait output validation failed")
+                log.warning("[liveportrait] output validation failed (attempt %s/%s), retry in %.0fs", attempt + 1, max_retries, retry_delay)
+                if attempt < max_retries - 1:
+                    time.sleep(retry_delay)
+                    continue
+                raise last_err
+            return True
+        except Exception as e:
+            last_err = e
+            if save_path.is_file():
+                try:
+                    os.remove(save_path)
+                except OSError:
+                    pass
+            log.warning("[liveportrait] attempt %s/%s failed: %s", attempt + 1, max_retries, e)
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+            else:
+                raise
+    if last_err:
+        raise last_err
+    return False
+
+
+def _call_echomimic_api_single(
+    base_url: str,
+    ref_img_path: str,
+    audio_path: str,
+    save_dir: Path,
+    timeout_sec: int = 900,
+    max_retries: int = 10,
+    retry_delay: float = 30.0,
+    task_idx: Optional[int] = None,
+) -> bool:
+    """
+    向 EchoMimic API 发送单次推理请求，将返回的视频字节写入 save_dir/<subdir>/digit_person_withaudio.mp4。
+    task_idx 非空时用 save_dir/<task_idx>，保证与 input_list 顺序一一对应，避免多线程下同名音频或乱序导致音画错位。
+    若返回 503 则等待后重试（由 Nginx 或服务端换实例）。
+    """
+    import time
+    import httpx
+
+    if task_idx is not None:
+        out_dir = save_dir / str(task_idx)
+    else:
+        audio_basename = os.path.splitext(os.path.basename(audio_path))[0]
+        out_dir = save_dir / audio_basename
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / "digit_person_withaudio.mp4"
+
+    url = base_url.rstrip("/") + "/infer"
+    last_err = None
+    for attempt in range(max_retries):
+        try:
+            with open(ref_img_path, "rb") as f_img, open(audio_path, "rb") as f_aud:
+                files = [
+                    ("image", ("image.png", f_img.read(), "image/png")),
+                    ("audio", ("audio.wav", f_aud.read(), "audio/wav")),
+                ]
+            with httpx.Client(timeout=timeout_sec) as client:
+                resp = client.post(url, files=files)
+            if resp.status_code == 503:
+                last_err = httpx.HTTPStatusError("503 Service Unavailable", request=resp.request, response=resp)
+                log.warning("[echomimic-api] 503 (attempt %s/%s), retry in %.0fs", attempt + 1, max_retries, retry_delay)
+                time.sleep(retry_delay)
+                continue
+            resp.raise_for_status()
+            out_path.write_bytes(resp.content)
+            log.info("[echomimic-api] wrote %s", out_path)
+            return True
+        except httpx.HTTPStatusError as e:
+            last_err = e
+            if e.response.status_code == 503 and attempt < max_retries - 1:
+                log.warning("[echomimic-api] 503 (attempt %s/%s), retry in %.0fs", attempt + 1, max_retries, retry_delay)
+                time.sleep(retry_delay)
+                continue
+            # 500 等错误时打出服务端返回的 body，便于排查
+            try:
+                body = e.response.text
+                if body:
+                    log.error("[echomimic-api] server error %s body: %s", e.response.status_code, body[:2000])
+            except Exception:
+                pass
+            raise
+        except Exception as e:
+            last_err = e
+            log.warning("[echomimic-api] attempt %s/%s failed: %s", attempt + 1, max_retries, e)
+            if attempt < max_retries - 1:
+                time.sleep(retry_delay)
+            else:
+                raise
+    if last_err:
+        raise last_err
+    return True
+
+
+def talking_gen_per_slide(model_name, input_list, project_root, save_dir, env_path, api_key: Optional[str] = None):
+    """
+    数字人视频生成（Open-NotebookLM 嵌入版）：仅支持云端 LivePortrait。
+    本地 EchoMimic / GPU 子进程等路径已移除。
+    """
+    save_dir = Path(save_dir)
+    if str(model_name or "").strip().lower() != "liveportrait":
+        raise ValueError(
+            f"talking_gen_per_slide: 仅支持 model_name='liveportrait'，收到 {model_name!r}"
+        )
+
+    key = (os.getenv("LIVEPORTRAIT_KEY", "") or "").strip()
+    if not key:
+        raise ValueError("LivePortrait 需要设置环境变量 LIVEPORTRAIT_KEY")
+    from concurrent.futures import ThreadPoolExecutor
+
+    max_workers = min(4, len(input_list)) or 1
+    results = []
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = []
+        for idx, (ref_img_path, audio_path) in enumerate(input_list):
+            out_dir = save_dir / str(idx)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            out_path = out_dir / "digit_person_withaudio.mp4"
+            fut = executor.submit(
+                _liveportrait_single_with_retry,
+                key,
+                str(ref_img_path),
+                str(audio_path),
+                out_path,
+            )
+            futures.append((idx, fut))
+        for idx, fut in futures:
+            try:
+                fut.result()
+                results.append(None)
+            except Exception as e:
+                log.exception("[liveportrait] task %s failed: %s", idx, e)
+                results.append(subprocess.CompletedProcess(args=[], returncode=1))
+    return results
+
+
+def get_audio_paths(slide_audio_dir: Optional[str | Path]):
+    '''获取 slide_audio_dir 目录下的所有音频文件路径，并按数字顺序排序返回'''
+    if isinstance(slide_audio_dir, str):
+        slide_audio_dir = Path(slide_audio_dir)
+    slide_audio_paths = [
+        p for p in slide_audio_dir.iterdir()
+        if p.is_file() and re.search(r'\d+', p.name)
+    ]
+
+    def get_sort_key(file_path: Path):
+        match = re.search(r'(\d+)', file_path.name)
+        return int(match.group()) if match else float('inf')
+    
+    slide_audio_paths.sort(key=get_sort_key)
+    slide_audio_paths = [str(p) for p in slide_audio_paths]
+    return slide_audio_paths
+
+def clean_text(text):
+    text = text.lower()
+    text = text.translate(str.maketrans('', '', string.punctuation))
+    return text
+
+def get_audio_length(audio_path):
+    '''获取音频文件(.wav)的总时长（秒）'''
+    import wave
+    with wave.open(audio_path, "rb") as wf:
+        frames = wf.getnframes()
+        rate = wf.getframerate()
+        return frames / rate
+    
+def get_mp4_duration_ffprobe(path):
+    cmd = [
+        "ffprobe", "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        str(path)
+    ]
+    result = subprocess.run(cmd, stdout=subprocess.PIPE, text=True)
+    return float(result.stdout.strip())
+
+
+def merge_slides_with_talking_videos(
+    *,
+    slide_img_dir: Path,
+    talking_video_dir: Path,
+    merge_dir: Path,
+    output_mp4: Path,
+    avatar_width: int,
+    avatar_height: int,
+    num_slides: int,
+) -> None:
+    """将每页幻灯片与对应 talking head 视频叠加后 concat 为单个 mp4。"""
+    merge_dir.mkdir(parents=True, exist_ok=True)
+    list_lines: list[str] = []
+    for i in range(num_slides):
+        slide_path = slide_img_dir / f"{i + 1}.png"
+        video_path = talking_video_dir / str(i) / "digit_person_withaudio.mp4"
+        if not slide_path.is_file() or not video_path.is_file():
+            log.warning("跳过 page %s: 缺少 slide 或 talking video", i)
+            continue
+        duration = get_mp4_duration_ffprobe(video_path)
+        output_path = merge_dir / f"page_{i:03d}.mp4"
+        # libx264 要求宽高为偶数；PyMuPDF 渲染的 slide 可能是 1280x715 等奇数高
+        aw = max(2, int(avatar_width) - int(avatar_width) % 2)
+        ah = max(2, int(avatar_height) - int(avatar_height) % 2)
+        filter_complex = (
+            f"[0:v]scale=trunc(iw/2)*2:trunc(ih/2)*2[bg];"
+            f"[1:v]scale={aw}:{ah}[avatar];"
+            f"[bg][avatar]overlay=W-w-10:10,format=yuv420p[outv]"
+        )
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-loop",
+            "1",
+            "-t",
+            str(duration),
+            "-i",
+            str(slide_path),
+            "-i",
+            str(video_path),
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            "[outv]",
+            "-map",
+            "1:a",
+            "-c:v",
+            "libx264",
+            "-c:a",
+            "aac",
+            "-preset",
+            "ultrafast",
+            "-crf",
+            "23",
+            "-shortest",
+            str(output_path),
+        ]
+        try:
+            subprocess.run(cmd, check=True, capture_output=True, text=True)
+        except subprocess.CalledProcessError as exc:
+            stderr = (exc.stderr or "").strip()
+            log.error("ffmpeg 合并 slide+talking 失败 page=%s: %s", i, stderr[-2000:] if stderr else exc)
+            raise RuntimeError(f"ffmpeg 合并第 {i + 1} 页失败: {stderr[-500:] if stderr else exc}") from exc
+        list_lines.append(f"file '{output_path.resolve()}'")
+    list_file = merge_dir / "list.txt"
+    list_file.write_text("\n".join(list_lines), encoding="utf-8")
+    if not list_lines:
+        raise RuntimeError("无有效 slide/talking 片段可供合并")
+    subprocess.run(
+        ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", str(list_file), "-c", "copy", str(output_mp4)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+
+# 数字人输出校验：用于失败时触发重试
+MIN_TALKING_VIDEO_SIZE = 1024  # 至少 1KB
+DURATION_RATIO_MIN, DURATION_RATIO_MAX = 0.3, 2.5  # 视频时长/音频时长 合理区间
+
+
+def _validate_talking_video_output(
+    video_path: Union[str, Path],
+    audio_path: Optional[Union[str, Path]] = None,
+    min_size: int = MIN_TALKING_VIDEO_SIZE,
+    duration_ratio: Tuple[float, float] = (DURATION_RATIO_MIN, DURATION_RATIO_MAX),
+) -> bool:
+    """
+    校验数字人输出视频是否有效：文件存在、大小足够，可选与音频时长比例合理。
+    返回 True 表示通过，False 表示需重试。
+    """
+    p = Path(video_path)
+    if not p.is_file():
+        return False
+    if p.stat().st_size < min_size:
+        log.warning("[talking-video] output too small: %s (%s bytes)", p, p.stat().st_size)
+        return False
+    if audio_path and Path(audio_path).is_file():
+        try:
+            video_dur = get_mp4_duration_ffprobe(p)
+            audio_dur = get_audio_length(audio_path)
+        except Exception as e:
+            log.warning("[talking-video] cannot get duration for validation: %s", e)
+            return False
+        if audio_dur <= 0:
+            return True
+        ratio = video_dur / audio_dur
+        if ratio < duration_ratio[0] or ratio > duration_ratio[1]:
+            log.warning("[talking-video] duration ratio out of range: video=%.2fs audio=%.2fs ratio=%.2f", video_dur, audio_dur, ratio)
+            return False
+    return True
+
+
+'''========================== 解析生成cursor位置信息相关的函数（阿里云 GUI-Plus API）  =================================='''
+# 阿里云百炼 GUI-Plus 界面交互模型：https://help.aliyun.com/zh/model-studio/gui-automation
+GUI_PLUS_API_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+# 兼容模式仅支持 gui-plus；gui-plus-2026-02-26 需走 DashScope 原生 API
+GUI_PLUS_MODEL = "gui-plus"
+# 电脑端 System Prompt（与文档一致，模型输出 left_click + coordinate；文档示例中坐标为原图像素）
+GUI_PLUS_SYSTEM_PROMPT = r"""# Tools
+You may call one or more functions to assist with the user query.
+You are provided with function signatures within <tools></tools> XML tags:
+<tools>
+{"type": "function", "function": {"name": "computer_use", "description": "Use a mouse and keyboard to interact with a computer, and take screenshots.\n* This is an interface to a desktop GUI. You do not have access to a terminal or applications menu. You must click on desktop icons to start applications.\n* Some applications may take time to start or process actions, so you may need to wait and take successive screenshots to see the results of your actions. E.g. if you click on Firefox and a window doesn't open, try wait and taking another screenshot.\n* The screen's resolution is 1000x1000.\n* Make sure to click any buttons, links, icons, etc with the cursor tip in the center of the element. Don't click boxes on their edges unless asked.", "parameters": {"properties": {"action": {"description": "The action to perform. The available actions are:\n* `key`: Performs key down presses on the arguments passed in order, then performs key releases in reverse order.\n* `type`: Type a string of text on the keyboard.\n* `mouse_move`: Move the cursor to a specified (x, y) pixel coordinate on the screen.\n* `left_click`: Click the left mouse button at a specified (x, y) pixel coordinate on the screen.\n* `left_click_drag`: Click and drag the cursor to a specified (x, y) pixel coordinate on the screen.\n* `right_click`: Click the right mouse button at a specified (x, y) pixel coordinate on the screen.\n* `middle_click`: Click the middle mouse button at a specified (x, y) pixel coordinate on the screen.\n* `double_click`: Double-click the left mouse button at a specified (x, y) pixel coordinate on the screen.\n* `triple_click`: Triple-click the left mouse button at a specified (x, y) pixel coordinate on the screen (simulated as double-click since it's the closest action).\n* `scroll`: Performs a scroll of the mouse scroll wheel.\n* `hscroll`: Performs a horizontal scroll (mapped to regular scroll).\n* `wait`: Wait specified seconds for the change to happen.\n* `terminate`: Terminate the current task and report its completion status.\n* `answer`: Answer a question.\n* `interact`: Resolve the blocking window by interacting with the user.", "enum": ["key", "type", "mouse_move", "left_click", "left_click_drag", "right_click", "middle_click", "double_click", "triple_click", "scroll", "hscroll", "wait", "terminate", "answer", "interact"], "type": "string"}, "keys": {"description": "Required only by `action=key`.", "type": "array"}, "text": {"description": "Required only by `action=type`, `action=answer` and `action=interact`.", "type": "string"}, "coordinate": {"description": "(x, y): The x (pixels from the left edge) and y (pixels from the top edge) coordinates to move the mouse to. Required only by `action=mouse_move` and `action=left_click_drag`.", "type": "array"}, "pixels": {"description": "The amount of scrolling to perform. Positive values scroll up, negative values scroll down. Required only by `action=scroll` and `action=hscroll`.", "type": "number"}, "time": {"description": "The seconds to wait. Required only by `action=wait`.", "type": "number"}, "status": {"description": "The status of the task. Required only by `action=terminate`.", "type": "string", "enum": ["success", "failure"]}}, "required": ["action"], "type": "object"}}}
+</tools>
+For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:
+<tool_call>
+{"name": <function-name>, "arguments": <args-json-object>}
+</tool_call>
+# Response format
+Response format for every step:
+1) Action: a short imperative describing what to do in the UI.
+2) A single <tool_call>...</tool_call> block containing only the JSON: {"name": <function-name>, "arguments": <args-json-object>}.
+Rules:
+- Output exactly in the order: Action, <tool_call>.
+- Be brief: one for Action.
+- Do not output anything else outside those two parts.
+- If finishing, use action=terminate in the tool call."""
+
+
+def _extract_tool_call_coordinate(response_text: str):
+    """从 GUI-Plus 返回的 content 中解析 <tool_call> 块，取出 coordinate [x, y]（vl_high_resolution 时为原图像素）。"""
+    pattern = re.compile(r'<tool_call>\s*(.*?)\s*</tool_call>', re.DOTALL | re.IGNORECASE)
+    blocks = pattern.findall(response_text)
+    for blk in blocks:
+        blk = blk.strip()
+        try:
+            obj = json.loads(blk)
+            args = obj.get("arguments", {})
+            if isinstance(args, str):
+                args = json.loads(args)
+            coord = args.get("coordinate")
+            if isinstance(coord, (list, tuple)) and len(coord) >= 2:
+                return float(coord[0]), float(coord[1])
+        except (json.JSONDecodeError, TypeError) as e:
+            log.debug("parse tool_call block failed: %s | snippet: %s", e, (blk[:80] + "..." if len(blk) > 80 else blk))
+    return None
+
+
+def _cursor_api_coord_to_image_xy(
+    x: float, y: float,
+    image_width: int, image_height: int,
+) -> Tuple[float, float]:
+    """
+    GUI-Plus API（vl_high_resolution_images）返回的是输入图像素坐标，直接 clamp 到图像范围内即可。
+    阿里云文档示例：3008×1758 的图返回 coordinate [2530, 314]。
+    """
+    if image_width <= 0 or image_height <= 0:
+        return (image_width / 2.0, image_height / 2.0)
+    x_img = max(0.0, min(float(image_width), x))
+    y_img = max(0.0, min(float(image_height), y))
+    return (x_img, y_img)
+
+
+def _infer_cursor(instruction: str, image_path: str) -> Tuple[float, float]:
+    """
+    根据指令和截图，调用阿里云 GUI-Plus API 得到光标应指向的像素坐标 (x, y)。
+    使用环境变量 GUI_PLUS_API_KEY 作为 API Key。
+    API 返回坐标为输入图像素（见阿里云文档示例），直接 clamp 到图内使用。
+    """
+    import base64
+    from openai import OpenAI
+
+    ori_image = cv2.imread(image_path)
+    if ori_image is None:
+        raise FileNotFoundError(f"cannot read image: {image_path}")
+    original_image_height, original_image_width = ori_image.shape[:2]
+
+    api_key = os.environ.get("GUI_PLUS_API_KEY")
+    if not api_key:
+        raise RuntimeError(
+            "GUI-Plus API 需要设置环境变量 GUI_PLUS_API_KEY。"
+            "请在阿里云百炼控制台获取 API Key：https://bailian.console.aliyun.com/"
+        )
+
+    with open(image_path, "rb") as f:
+        image_b64 = base64.standard_b64encode(f.read()).decode("utf-8")
+    ext = (Path(image_path).suffix or ".png").lower()
+    mime = "image/png" if ext in (".png",) else "image/jpeg" if ext in (".jpg", ".jpeg") else "image/png"
+    image_url = f"data:{mime};base64,{image_b64}"
+
+    user_prompt = (
+        "根据以下指令，在截图中指出应该点击的位置，仅返回一个 left_click 操作与坐标。\n\n"
+        "Instruction: {}".format(instruction)
+    )
+    messages = [
+        {"role": "system", "content": GUI_PLUS_SYSTEM_PROMPT},
+        {
+            "role": "user",
+            "content": [
+                {"type": "image_url", "image_url": {"url": image_url}},
+                {"type": "text", "text": user_prompt},
+            ],
+        },
+    ]
+
+    client = OpenAI(api_key=api_key, base_url=GUI_PLUS_API_BASE_URL)
+    completion = client.chat.completions.create(
+        model=GUI_PLUS_MODEL,
+        messages=messages,
+        extra_body={"vl_high_resolution_images": True},
+    )
+    response_text = completion.choices[0].message.content or ""
+
+    coord = _extract_tool_call_coordinate(response_text)
+    if coord is not None:
+        x, y = _cursor_api_coord_to_image_xy(
+            coord[0], coord[1],
+            original_image_width, original_image_height,
+        )
+        return (x, y)
+
+    log.warning("GUI-Plus 未返回有效坐标，使用图像中心。instruction=%s", instruction[:80])
+    return (original_image_width / 2.0, original_image_height / 2.0)
+
+
+def cursor_infer(args):
+    """根据说话的内容，得到 cursor 应该指向的位置（调用 GUI-Plus API，无需本地 GPU）。"""
+    slide_idx, sentence_idx, prompt, cursor_prompt, image_path, _ = args
+
+    try:
+        point = _infer_cursor(cursor_prompt, image_path)
+    except Exception as e:
+        log.warning("cursor_infer API 或本地错误，使用图像中心作为 fallback: %s", e)
+        try:
+            ori_image = cv2.imread(image_path)
+            h, w = (ori_image.shape[:2]) if ori_image is not None else (540, 960)
+            point = (w / 2.0, h / 2.0)
+        except Exception:
+            point = (480.0, 270.0)
+        # 不 raise，直接使用 point 继续返回结果，避免子进程异常被 pickle 导致主进程崩溃
+
+    result = {
+        "slide": slide_idx,
+        "sentence": sentence_idx,
+        "speech_text": prompt,
+        "cursor_prompt": cursor_prompt,
+        "cursor": point,
+    }
+    return result
+
+'''========================== 解析生成speech相关的函数  =================================='''
+def parse_script_with_cursor(script_text):
+    '''
+    解析脚本的内容，将其分割成（prompt, cursor_prompt）两部分
+    '''
+    pages = script_text.strip().split("###\n")
+    result = []
+    for page in pages:
+        if not page.strip(): continue
+        lines = page.strip().split("\n")
+        page_data = []
+        for line in lines:
+            if "|" not in line: 
+                continue
+            text, cursor = line.split("|", 1)
+            page_data.append([text.strip(), cursor.strip()])
+        result.append(page_data)
+    return result
+
+def parse_script(script_text):
+    '''
+    解析脚本的内容，将多个句子合并成一个句子
+    '''
+    pages = script_text.strip().split("###\n")
+    result = []
+    for page in pages:
+        if not page.strip(): continue   
+        lines = page.strip().split("\n")
+        result.append(" ".join(lines))
+    return result
+
+# fixme: 这里需要判断device，可能需要多加考虑
+def _transcribe_with_whisperx_impl(audio_path: str, lang: str = "en") -> str:
+    """
+    子进程内实际执行 whisperx 转写。假定 CUDA_VISIBLE_DEVICES 已由调用方在子进程 env 中设置。
+    """
+    import torch
+    import whisperx
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    log.info(f"transcribe_with_whisperx 使用了 device: {device}")
+    model = whisperx.load_model("large-v2", device=device, compute_type="float16" if device == "cuda" else "int8")
+    result = model.transcribe(audio_path, language=lang)
+    model_a, metadata = whisperx.load_align_model(language_code=lang, device=device)
+    result_aligned = whisperx.align(result["segments"], model_a, metadata, audio_path, device)
+    segments = result_aligned["segments"]
+    if lang == "zh":
+        text = "".join(seg["text"].strip() for seg in segments)
+    else:
+        text = " ".join(seg["text"].strip() for seg in segments)
+    return text
+
+
+def transcribe_with_whisperx(audio_path, lang="en", device_id=None):
+    '''根据ref_audio生成对应的ref_text，从而在后续使用f5模型时，提供对齐文本，更好的提高最后audio的效果。
+    device_id: 指定 GPU 编号时，在子进程中运行 whisperx（CUDA_VISIBLE_DEVICES 在子进程生效）；None 表示当前进程默认 GPU。
+    '''
+    if device_id is None:
+        return _transcribe_with_whisperx_impl(audio_path, lang)
+
+    # 主进程已指定 GPU/CUDA，改 env 无效；在子进程中设置 CUDA_VISIBLE_DEVICES 后执行
+    import sys
+    import tempfile
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(device_id)
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8") as f:
+        out_path = f.name
+    try:
+        cmd = [
+            sys.executable,
+            "-c",
+            (
+                "import sys; "
+                "from pathlib import Path; "
+                "from workflow_engine.toolkits.p2vtool.p2v_tool import _transcribe_with_whisperx_impl; "
+                "text = _transcribe_with_whisperx_impl(sys.argv[1], sys.argv[2]); "
+                "Path(sys.argv[3]).write_text(text, encoding='utf-8')"
+            ),
+            audio_path,
+            lang,
+            out_path,
+        ]
+        log.info(f"transcribe_with_whisperx 在子进程运行，device_id={device_id}")
+        subprocess.run(cmd, env=env, check=True, timeout=300)
+        return Path(out_path).read_text(encoding="utf-8")
+    finally:
+        try:
+            os.unlink(out_path)
+        except OSError:
+            pass
+
+def _run_f5_in_subprocess(text_prompt: str, save_path: str, ref_audio_path: str, ref_text: str, gpu_id: int) -> None:
+    """
+    在未初始化 CUDA 的子进程中运行 F5-TTS，以便 CUDA_VISIBLE_DEVICES 生效。
+    主进程可能已固定 GPU，直接改 os.environ 无效。
+    """
+    import sys
+    env = os.environ.copy()
+    env["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    cmd = [
+        sys.executable,
+        "-c",
+        (
+            "import sys; "
+            "from workflow_engine.toolkits.p2vtool.p2v_tool import inference_f5; "
+            "inference_f5(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4])"
+        ),
+        text_prompt,
+        save_path,
+        ref_audio_path,
+        ref_text,
+    ]
+    subprocess.run(cmd, env=env, check=True, timeout=300)
+
+
+def inference_f5(text_prompt, save_path, ref_audio, ref_text):
+    '''使用 F5-TTS 模型做语音生成/克隆。通过一段参考音频及其对应的文本，克隆其音色并生成目标文本的语音'''
+    from f5_tts.api import F5TTS
+    import torch
+    try:
+        from omegaconf.listconfig import ListConfig
+        from omegaconf.dictconfig import DictConfig
+        
+        # 即使 weights_only=True，这两个类也会被放行
+        with torch.serialization.safe_globals([ListConfig, DictConfig]):
+            f5tts = F5TTS()
+    except ImportError:
+        # 如果没有 omegaconf 库，回退到普通实例化
+        f5tts = F5TTS()
+    f5tts.infer(ref_file=ref_audio, ref_text=ref_text, gen_text=text_prompt, file_wave=save_path, seed=None,)
+
+def merge_wav_files(file_list, output_path):
+    '''将多个wav文件合并为一个wav文件，实际上是将一张ppt中的多个sentence wav合并为一个wav'''
+    from pydub import AudioSegment
+    combined = AudioSegment.empty()
+    for file in file_list:
+        audio = AudioSegment.from_wav(file)
+        combined += audio
+    combined.export(output_path, format="wav")
+
+def speech_task_wrapper_with_f5(task_args):
+    """
+    单个句子的语音生成任务, 使用 F5-TTS 模型
+    """
+    (slide_idx, idx, prompt, ref_audio_path, ref_text, speech_result_path, gpu_id) = task_args
+    os.environ["CUDA_VISIBLE_DEVICES"] = str(gpu_id)
+    
+    # 2. 调用 F5-TTS 推理
+    inference_f5(prompt, str(speech_result_path), ref_audio_path, ref_text)
+    
+    # 3. 获取时长
+    duration = get_audio_length(str(speech_result_path))
+    return slide_idx, idx, duration, str(speech_result_path)
+
+def _normalize_paper2video_tts_language(language: str) -> str:
+    """Map Paper2Video request language to TTS kwargs (zh/en for DashScope language_type)."""
+    raw = str(language or "").strip().lower()
+    if raw.startswith("en"):
+        return "en"
+    if raw.startswith("zh"):
+        return "zh"
+    return ""
+
+
+def speech_task_wrapper_with_cloud_tts(task_args):
+    """
+    单个句子的语音生成任务：仅走云 TTS（Open-NotebookLM 嵌入版，不提供 F5 / Whisper 回退）。
+    task_args:
+    - 9 元组: (slide_idx, idx, prompt, speech_result_path, api_key, tts_model, chat_api_url, tts_voice_name, language)
+      language 为 paper2video 的 zh/en，会传给云 TTS（如 DashScope language_type: Chinese/English）。
+    - 8 元组: 同上但无 language（TTS 使用 Auto / 默认推断）。
+    - 兼容更长元组：仅解析前 8 或 9 项。
+    """
+    from workflow_engine.toolkits.multimodaltool.req_tts import generate_speech_and_save_async
+    import asyncio
+
+    tts_language = ""
+    if len(task_args) >= 9:
+        (
+            slide_idx,
+            idx,
+            prompt,
+            speech_result_path,
+            api_key,
+            tts_model,
+            chat_api_url,
+            tts_voice_name,
+            tts_language,
+        ) = task_args[:9]
+    elif len(task_args) >= 8:
+        (
+            slide_idx,
+            idx,
+            prompt,
+            speech_result_path,
+            api_key,
+            tts_model,
+            chat_api_url,
+            tts_voice_name,
+        ) = task_args[:8]
+    elif len(task_args) >= 7:
+        (
+            slide_idx,
+            idx,
+            prompt,
+            speech_result_path,
+            api_key,
+            tts_model,
+            chat_api_url,
+        ) = task_args[:7]
+        tts_voice_name = ""
+    else:
+        raise ValueError(
+            f"speech_task_wrapper_with_cloud_tts: expected at least 7 elements, got {len(task_args)}"
+        )
+
+    voice_name = (tts_voice_name or "").strip()
+    language_kwarg = _normalize_paper2video_tts_language(tts_language)
+
+    async def _run_cloud_tts():
+        tts_kwargs: dict = {"max_attempts": 5}
+        if language_kwarg:
+            tts_kwargs["language"] = language_kwarg
+        return await generate_speech_and_save_async(
+            prompt,
+            str(speech_result_path),
+            api_url=chat_api_url,
+            api_key=api_key,
+            model=tts_model,
+            voice_name=voice_name,
+            **tts_kwargs,
+        )
+
+    try:
+        out_path = asyncio.run(_run_cloud_tts())
+    except Exception as exc:
+        raise RuntimeError(
+            f"云 TTS 失败 slide_idx={slide_idx}, idx={idx}: {exc}"
+        ) from exc
+
+    out_path = str(out_path)
+    duration = get_audio_length(out_path)
+    return slide_idx, idx, duration, out_path
+
+
+'''========================== 使用beamer生成ppt的函数  =================================='''
+def extract_beamer_code(text_str):
+    match = re.search(r"(\\documentclass(?:\[[^\]]*\])?\{beamer\}.*?\\end\{document\})", text_str, re.DOTALL)
+    return match.group(1) if match else None
+
+def compile_tex(beamer_code_path: str):
+    tex_path = Path(beamer_code_path).resolve()
+    if not tex_path.exists():
+        raise FileNotFoundError(f"Tex file {tex_path} does not exist.")
+    work_dir = tex_path.parent
+    try:
+        # 会编译.tex文件，然后创建好一个.pdf文件
+        result = subprocess.run(
+            ["tectonic", str(tex_path)],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        code_debug_result = "\n".join([result.stdout, result.stderr])
+        log.info(f"Beamer 编译成功，输出结果：{code_debug_result}")
+        is_beamer_warning = False
+        if 'warning' in code_debug_result:
+            is_beamer_warning = True
+            log.info(f"Beamer 代码存在warning，需要更加完善一下")
+        is_beamer_wrong = False
+        return is_beamer_wrong, is_beamer_warning, code_debug_result
+    except subprocess.CalledProcessError as e:
+        log.info(f"Beamer 编译失败: {e.stderr}")
+        is_beamer_wrong = True
+        is_beamer_warning = True
+        code_debug_result = e.stderr
+        return is_beamer_wrong, is_beamer_warning, code_debug_result
+
+
+def is_overfull_warning(code_debug_result: str) -> bool:
+    """是否包含 Overfull 类 warning（内容过高/过宽），需要尝试修复。"""
+    if not code_debug_result:
+        return False
+    return "Overfull" in code_debug_result
+
+
+def is_missing_image_error(code_debug_result: str) -> bool:
+    """是否因「无法加载图片/PDF」导致编译失败（模型幻觉了不存在的路径），可清掉 asset_ref 重试。"""
+    if not code_debug_result:
+        return False
+    return "Unable to load picture or PDF file" in code_debug_result
+
+
+def is_ignorable_warning_only(code_debug_result: str) -> bool:
+    """是否仅包含可忽略的 warning（如访问绝对路径），无需修复。"""
+    if not code_debug_result:
+        return True
+    lower = code_debug_result.lower()
+    if "warning" not in lower:
+        return True
+    # 若只有 absolute path 类提示，视为可忽略
+    if "overfull" in lower:
+        return False
+    if "absolute path" in lower or "accessing absolute path" in lower:
+        return True
+    return False
+
+
+def is_table_asset(asset_ref: Any) -> bool:
+    """asset_ref 为 Table 时通常为 'Table_1' / 'Table 2' 等形式，无实际文件路径。"""
+    if not asset_ref:
+        return False
+    return str(asset_ref).strip().lower().startswith("table")
+
+
+def ensure_minueru_output(state: Any) -> None:
+    """若 state 无 minueru_output，尝试从 mineru_root 下首个 .md 读取（供 table_extractor 使用）。"""
+    if getattr(state, "minueru_output", "") and str(state.minueru_output).strip():
+        return
+    mineru_root = getattr(state, "mineru_root", "") or ""
+    if not mineru_root:
+        return
+    root = Path(mineru_root).expanduser().resolve()
+    if not root.is_dir():
+        return
+    md_files = list(root.glob("*.md"))
+    if not md_files:
+        return
+    target = md_files[0]
+    if len(md_files) > 1:
+        for f in md_files:
+            if f.stat().st_size > target.stat().st_size:
+                target = f
+    try:
+        state.minueru_output = target.read_text(encoding="utf-8")[:30000]
+    except Exception as e:
+        log.warning("从 mineru_root 读取 md 失败: %s", e)
+
+
+def merge_pdfs(pdf_paths: List[str], output_path: Union[str, Path]) -> str:
+    """将多份 PDF 按顺序合并为一份。要求 pdf_paths 中路径存在且为 PDF。"""
+    if not pdf_paths:
+        raise ValueError("merge_pdfs: pdf_paths 不能为空")
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        raise ImportError("merge_pdfs 需要 PyMuPDF (pip install pymupdf)")
+    out = Path(output_path).expanduser().resolve()
+    out.parent.mkdir(parents=True, exist_ok=True)
+    merged = fitz.open()
+    for p in pdf_paths:
+        path = Path(p).expanduser().resolve()
+        if not path.is_file():
+            log.warning("merge_pdfs: 跳过不存在的文件 %s", path)
+            continue
+        with fitz.open(path) as src:
+            merged.insert_pdf(src)
+    merged.save(out)
+    merged.close()
+    log.info("merge_pdfs: 已合并 %s 个 PDF -> %s", len(pdf_paths), out)
+    return str(out)
+
+
+def beamer_code_validator(content: str, parsed_result: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+    """检查tex是否是正确的"""
+    from tempfile import TemporaryDirectory
+
+    # 这里的 dir 具体是什么无所谓，因为我latex code中的图像路径是绝对路径
+    with TemporaryDirectory() as temp_dir_name:
+        temp_dir = Path(temp_dir_name)
+        # 在临时目录中创建 .tex 文件
+        # todo: 这里可能需要修改一下，因为在临时目录下创建文件还是不太行。
+        tex_path = temp_dir / "input.tex" 
+        
+        raw_beamer_code = parsed_result.get("latex_code", "")
+        if not raw_beamer_code:
+            log.error(f"The content of beamer code is empty!")
+            return False, "The content of beamer code is empty!"
+        beamer_code = extract_beamer_code(raw_beamer_code)
+        try:
+            # 1. 写入内容
+            tex_path.write_text(beamer_code, encoding='utf-8')
+
+            result = subprocess.run(
+                ["tectonic", str(tex_path)],
+                check=True,
+                capture_output=True,
+                text=True,
+                cwd=temp_dir
+            )
+            log.info(f"Beamer代码修改完成，没有出现error")
+            code_debug_result = "\n".join([result.stdout, result.stderr])
+            return True, None
+            
+        except subprocess.CalledProcessError as e:
+            code_debug_result = f"STDOUT:\n{e.stdout}\n\nSTDERR:\n{e.stderr}"
+            return False, code_debug_result
+
+
+def parser_beamer_latex(code: str):
+    # 1. 提取 Head: 从 \documentclass 到 \begin{document} 之间的内容
+    head_pattern = r'\\documentclass(?:\[[^\]]*\])?\{beamer\}(.*?)\\begin\{document\}'
+    head_match = re.search(head_pattern, code, flags=re.DOTALL)
+    head_content = head_match.group(1).strip() if head_match else "未找到导言区"
+
+    # 2. 提取所有 Frame (Slides)
+    # 逻辑：匹配 \begin{frame} 和 \end{frame} 之间的所有内容
+    # 注意：beamer 的 frame 可能带有参数，如 \begin{frame}{标题} 或 \begin{frame}[fragile]
+    frame_pattern = r'\\begin\{frame\}.*?(.*?)\\end\{frame\}'
+    frames = re.findall(frame_pattern, code, flags=re.DOTALL)
+    
+    frames_cleaned = [f.strip() for f in frames]
+
+    return head_content, frames_cleaned
+
+def resize_latex_image(code: Union[str, List[str]]):
+    # 改进正则：
+    # 1. 允许 width= 后面有空格
+    # 2. 捕获数值后的单位（如 \textwidth, \linewidth, \columnwidth）
+    pattern = r'(\\includegraphics\[[^\]]*width\s*=\s*)([\d.]+)\s*(\\[a-z]+|cm|mm|pt|in)?'
+    
+    def shrink_width_logic(match):
+        prefix = match.group(1)
+        current_val = float(match.group(2))
+        unit = match.group(3) if match.group(3) else "" # 捕获单位
+        
+        new_val = max(0.1, current_val - 0.2)
+        return f"{prefix}{new_val:.1f}{unit}"
+    
+    if isinstance(code, str):
+        return re.sub(pattern, shrink_width_logic, code)
+
+    if isinstance(code, list):
+        new_code = code.copy()
+        for i, line in enumerate(new_code):
+            if isinstance(line, str) and "includegraphics" in line:
+                new_code[i] = re.sub(pattern, shrink_width_logic, line)
+        return new_code
+    raise TypeError(f"Unsupported code type: {type(code)}")

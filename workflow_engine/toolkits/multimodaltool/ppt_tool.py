@@ -66,7 +66,7 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 import cv2
-from paddleocr import PaddleOCR
+# paddleocr is an optional heavy dependency; imported lazily in _get_paddle_ocr()
 
 from pptx import Presentation
 from pptx.util import Inches, Pt
@@ -117,13 +117,19 @@ SUBTITLE_RATIO_MAX = 2.0  # 副标题最大倍率
 BODY_RATIO_MIN = 0.9  # 正文最小倍率
 BODY_RATIO_MAX = 1.1  # 正文最大倍率
 
-# PaddleOCR 配置（全局只初始化一次）
-PADDLE_OCR = PaddleOCR(
-    use_angle_cls=True,  # 角度分类，处理横竖混排
-    lang="ch",  # 中文 + 英文
-    det_db_unclip_ratio=1.2 ,
-    det_db_box_thresh=0.5
-)
+_PADDLE_OCR = None
+
+def _get_paddle_ocr():
+    global _PADDLE_OCR
+    if _PADDLE_OCR is None:
+        from paddleocr import PaddleOCR
+        _PADDLE_OCR = PaddleOCR(
+            use_angle_cls=True,
+            lang="ch",
+            det_db_unclip_ratio=1.2,
+            det_db_box_thresh=0.5,
+        )
+    return _PADDLE_OCR
 
 # ----------------------------
 # Font Size Clustering
@@ -470,11 +476,11 @@ def paddle_ocr(bgr: np.ndarray, drop_score: int = DROP_SCORE):
 
     # PaddleOCR 2.x 支持 cls=True；3.x 已移除该参数，且返回结构改为 dict 列表。
     try:
-        ocr_result = PADDLE_OCR.ocr(bgr, cls=True)
+        ocr_result = _get_paddle_ocr().ocr(bgr, cls=True)
     except TypeError as e:
         if "unexpected keyword argument 'cls'" not in str(e):
             raise
-        ocr_result = PADDLE_OCR.ocr(bgr)
+        ocr_result = _get_paddle_ocr().ocr(bgr)
     lines = []
 
     if not ocr_result:

@@ -46,6 +46,7 @@ class AppSettings(BaseSettings):
 
     # Knowledge Base
     KB_CHAT_MODEL: str = "deepseek-v3.2"
+    KB_VLM_MODEL: str = ""  # Multimodal model for VLM mode; falls back to LLM_MODEL when empty
     SQLBOT_OPENAI_API_KEY: Optional[str] = None
     SQLBOT_OPENAI_API_BASE: Optional[str] = None
     SQLBOT_OPENAI_MODEL: Optional[str] = None
@@ -75,6 +76,12 @@ class AppSettings(BaseSettings):
     EMBEDDING_API_KEY: str = ""
     EMBEDDING_MODEL: str = "Octen-Embedding-0.6B"
     EMBEDDING_DIMENSION: int = 768
+
+    # Visual Embedding (multimodal, 以图搜图)
+    # 留空时自动回退到 EMBEDDING_API_URL / EMBEDDING_API_KEY
+    VISUAL_EMBEDDING_API_URL: str = ""
+    VISUAL_EMBEDDING_API_KEY: str = ""
+    VISUAL_EMBEDDING_MODEL: str = "qwen3-vl-embedding"
 
     # Image Generation Provider Configuration
     IMAGE_GEN_API_URL: str = ""

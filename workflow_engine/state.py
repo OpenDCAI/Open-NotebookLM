@@ -100,33 +100,51 @@ class DFState(MainState):
 # Paper2Video 相关 State 和 Request 定义
 # ==================== Paper2Video 生成 Request ====================
 
+def _default_p2v_cursor_png() -> str:
+    """Bundled cursor overlay image shipped with embedded p2vtool."""
+    return str((Path(__file__).resolve().parent / "toolkits" / "p2vtool" / "red.png").resolve())
+
+
 @dataclass
 class Paper2VideoRequest(MainRequest):
+    """paper2video：云 VLM + 云 TTS；数字人可选（LivePortrait，需 LIVEPORTRAIT_KEY）。"""
     paper_pdf_path: str = ""
     user_imgs_path: str = ""
-    
-    ref_audio_path: str = ""
+    ref_img_path: str = ""
+    tts_model: str = "cosyvoice-v3-flash"
+    tts_voice_name: str = ""
+    cursor_path: str = field(default_factory=_default_p2v_cursor_png)
+
 
 # ==================== Paper2Video 生成 State ======================
 @dataclass
 class Paper2VideoState(MainState):
     # 重写 request
     request: Paper2VideoRequest = field(default_factory=Paper2VideoRequest)
-    
-    # paper2video 特有字段
+
+    # 工作目录（NotebookLM 下为 outputs/.../out_*/video_pipeline）
+    result_path: str = ""
+
+    # paper2video 特有字段（与 Paper2Any 对齐的子集）
     beamer_code_path: str = ""
     is_beamer_wrong: bool = False
     is_beamer_warning: bool = False
     code_debug_result: str = ""
     ppt_path: str = ""
-    
-    # 生成字幕 + cursor的位置信息
+    img_size_debug: bool = True
+
+    slide_timesteps_path: str = ""
     slide_img_dir: str = ""
     subtitle_and_cursor: List[str] = field(default_factory=list)
     subtitle_and_cursor_path: str = ""
-    
-    # 生成的音频路径
+    tmp_sentence: str = ""
+
     speech_save_dir: str = ""
+    cursor_save_path: str = ""
+    talking_video_save_dir: str = ""
+
+    script_pages: List[Dict[str, Any]] = field(default_factory=list)
+    video_path: str = ""
 
 
 

@@ -96,6 +96,10 @@ class AppSettings(BaseSettings):
     LLM_API_KEY: str = ""
     LLM_MODEL: str = "gemini-2.5-flash"
 
+    # Paper2Video: GUI-Plus cursor（阿里云百炼 / DashScope compatible-mode）、LivePortrait（数字人）
+    GUI_PLUS_API_KEY: Optional[str] = None
+    LIVEPORTRAIT_KEY: Optional[str] = None
+
     # Legacy: Local service switches (backward compatibility)
     USE_LOCAL_TTS: int = 0
     TTS_ENGINE: str = "qwen"

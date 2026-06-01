@@ -179,6 +179,7 @@ const textMap: Record<string, string> = {
   '卡片': 'Cards',
   '测验': 'Quiz',
   'PPT': 'PPT',
+  '视频': 'Video',
   '来源': 'Sources',
   '对话': 'Chat',
   '文档': 'Document',

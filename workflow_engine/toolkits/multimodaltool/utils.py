@@ -37,10 +37,10 @@ def extract_base64(s: str) -> str:
 def encode_image_to_base64(image_path: str) -> Tuple[str, str]:
     """
     读取本地图片并编码为 Base64，同时返回图片格式（jpeg / png）。
-    如果图片过大（>3MB），则自动进行压缩/Resize以避免 413 错误。
+    超过阈值时压缩为 JPEG，避免多模态请求体过大导致网关断连/413。
     """
-    MAX_SIZE = 6 * 1024 * 1024  # 6MB
-    MAX_DIM = 2048              # 最大边长 2048
+    MAX_SIZE = 768 * 1024  # 768KB：超过则压缩（原 6MB 易把 2MB 级 slide 原样上传）
+    MAX_DIM = 1280           # 与 paper2video 渲染上限一致
 
     if not os.path.exists(image_path):
          raise FileNotFoundError(f"Image not found: {image_path}")
@@ -49,14 +49,14 @@ def encode_image_to_base64(image_path: str) -> Tuple[str, str]:
     ext = image_path.rsplit(".", 1)[-1].lower()
     fmt = "jpeg" if ext in {"jpg", "jpeg"} else "png"
 
-    # 如果文件小于 3MB 且是常见格式，直接读取
-    if file_size < MAX_SIZE and fmt in ["jpeg", "png"]:
+    # 小图直接读取；PNG 体积大，一律走压缩路径转 JPEG
+    if file_size < MAX_SIZE and fmt == "jpeg":
         with open(image_path, "rb") as f:
             raw = f.read()
         b64 = base64.b64encode(raw).decode("utf-8")
         return b64, fmt
 
-    # 否则进行压缩处理
+    # 过大或 PNG：压缩/转 JPEG
     log.info(f"[utils] Image {os.path.basename(image_path)} too large ({file_size/1024/1024:.2f}MB), compressing...")
     try:
         with Image.open(image_path) as img:

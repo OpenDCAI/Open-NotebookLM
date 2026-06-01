@@ -21,10 +21,12 @@ log = logging.getLogger(__name__)
 
 
 class OutputV2Service:
-    SUPPORTED_TYPES = {"ppt", "report", "mindmap", "podcast", "flashcard", "quiz"}
+    SUPPORTED_TYPES = {"ppt", "video", "report", "mindmap", "podcast", "flashcard", "quiz"}
     PPT_STAGE_OUTLINE = "outline_ready"
     PPT_STAGE_PAGES = "pages_ready"
     PPT_STAGE_GENERATED = "generated"
+    # Video uses the same stage strings as PPT for outline/pages/generated; "pending" marks workflow not wired.
+    VIDEO_PENDING = "pending"
 
     def _build_ppt_context_payload(
         self,
@@ -185,23 +187,6 @@ class OutputV2Service:
     def _write_json(self, path: Path, payload: Dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-    def _materialize_mindmap_text_output(
-        self,
-        *,
-        output_dir: Path,
-        result: Dict[str, Any],
-    ) -> Optional[Path]:
-        if not isinstance(result, dict):
-            return None
-        mindmap_text = str(result.get("mermaid_code") or "").strip()
-        if not mindmap_text:
-            return None
-        mindmap_md = output_dir / "mindmap.md"
-        output_dir.mkdir(parents=True, exist_ok=True)
-        mindmap_md.write_text(mindmap_text, encoding="utf-8")
-        result["markdown_path"] = _to_outputs_url(str(mindmap_md))
-        return mindmap_md
 
     def _has_explicit_llm_config(self, api_url: Optional[str], api_key: Optional[str]) -> bool:
         return bool(str(api_url or "").strip() and str(api_key or "").strip())
@@ -596,6 +581,9 @@ class OutputV2Service:
         hydrated_items: List[Dict[str, Any]] = []
         for item in items:
             next_item, item_changed = self._hydrate_ppt_item_from_disk(item, base_dir)
+            if item.get("target_type") == "video":
+                v_item, v_changed = self._hydrate_video_item_from_disk(next_item, base_dir)
+                next_item, item_changed = v_item, item_changed or v_changed
             hydrated_items.append(next_item)
             changed = changed or item_changed
         if changed:
@@ -637,6 +625,9 @@ class OutputV2Service:
         for index, item in enumerate(manifest):
             if item.get("id") == output_id:
                 next_item, changed = self._hydrate_ppt_item_from_disk(item, base_dir)
+                if item.get("target_type") == "video":
+                    v_item, v_changed = self._hydrate_video_item_from_disk(next_item, base_dir)
+                    next_item, changed = v_item, changed or v_changed
                 if changed:
                     manifest[index] = next_item
                     self._write_manifest(manifest_path, manifest)
@@ -690,24 +681,6 @@ class OutputV2Service:
         if not resolved_paths:
             return ""
         return self._truncate_text(_extract_text_from_files(resolved_paths, max_chars=max_chars), max_chars)
-
-    def _build_source_summary(self, source_paths: List[str], max_chars: int = 1500) -> str:
-        raw = self._extract_output_source_text(source_paths, max_chars=max_chars * 3)
-        if not raw.strip():
-            return ""
-        lines = raw.splitlines()
-        kept: List[str] = []
-        total = 0
-        for line in lines:
-            stripped = line.strip()
-            is_heading = stripped.startswith("#") or stripped.startswith("##")
-            if total + len(line) > max_chars and not is_heading:
-                continue
-            kept.append(line)
-            total += len(line) + 1
-            if total > max_chars:
-                break
-        return "\n".join(kept).strip()
 
     def _build_source_first_context(
         self,
@@ -832,6 +805,8 @@ class OutputV2Service:
             "summary": str(item.get("summary") or layout_description).strip(),
             "bullets": key_points,
         }
+        if item.get("script_text") is not None:
+            normalized["script_text"] = str(item.get("script_text") or "").strip()
         for key in (
             "ppt_img_path",
             "generated_img_path",
@@ -843,1004 +818,10 @@ class OutputV2Service:
         ):
             if item.get(key):
                 normalized[key] = item.get(key)
-        for key in ("generation_failed", "generation_error", "error", "mode", "page_idx"):
-            if key in item:
-                normalized[key] = item.get(key)
         return normalized
 
     def _normalize_ppt_outline(self, outline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return [self._normalize_ppt_outline_item(item or {}, index) for index, item in enumerate(outline or [])]
-
-    def _normalize_string_list(self, value: Any) -> List[str]:
-        if isinstance(value, list):
-            return [str(item or "").strip() for item in value if str(item or "").strip()]
-        if isinstance(value, str):
-            return [line.strip(" -") for line in value.splitlines() if line.strip(" -")]
-        return []
-
-    def _detect_ppt_style_preset(self, text: str) -> str:
-        value = str(text or "")
-        if any(token in value for token in ["商务", "业务", "管理层", "路演", "价值"]):
-            return "business"
-        if any(token in value for token in ["学术", "论文", "答辩", "组会", "实验"]):
-            return "academic"
-        if any(token in value for token in ["简洁", "干净", "留白", "少字", "少文字"]):
-            return "clean"
-        return "custom"
-
-    def _default_ppt_style_copy(self, preset: str) -> Dict[str, str]:
-        if preset == "business":
-            return {
-                "label": "商务风格",
-                "tone": "简洁、清晰、结论先行",
-                "visual_style": "浅色背景、少量强调色、图文平衡",
-                "audience_assumption": "面向产品、业务或管理团队，强调价值、影响和落地意义",
-            }
-        if preset == "academic":
-            return {
-                "label": "学术汇报",
-                "tone": "严谨、结构完整、证据充分",
-                "visual_style": "清晰图表、方法流程、实验对比突出",
-                "audience_assumption": "面向论文组会、答辩或技术评审，保留必要方法和实验细节",
-            }
-        if preset == "clean":
-            return {
-                "label": "简洁干净",
-                "tone": "短句、少文字、重点明确",
-                "visual_style": "留白充分、层级清楚、弱装饰",
-                "audience_assumption": "面向快速同步场景，优先保证扫描效率",
-            }
-        return {
-            "label": "自定义",
-            "tone": "清晰、准确、贴合用户补充要求",
-            "visual_style": "结构清楚，视觉表达服务内容重点",
-            "audience_assumption": "根据产出信息和用户补充要求确定",
-        }
-
-    def _normalize_ppt_output_info(self, value: Optional[Dict[str, Any]], *, item: Dict[str, Any]) -> Dict[str, Any]:
-        data = value if isinstance(value, dict) else {}
-        page_count_raw = data.get("page_count") or item.get("page_count") or len(item.get("outline") or []) or 10
-        try:
-            page_count = max(1, int(page_count_raw))
-        except Exception:
-            page_count = 10
-        source_names = self._normalize_string_list(data.get("source_names") or item.get("source_names") or [])
-        bound_titles = self._normalize_string_list(data.get("bound_document_titles") or item.get("bound_document_titles") or [])
-        return {
-            "type": "ppt",
-            "title": str(data.get("title") or item.get("title") or "PPT 产出文档").strip() or "PPT 产出文档",
-            "page_count": page_count,
-            "audience": str(data.get("audience") or "").strip(),
-            "source_names": source_names,
-            "bound_document_titles": bound_titles,
-            "stage_label": str(data.get("stage_label") or "大纲讨论中").strip() or "大纲讨论中",
-        }
-
-    def _normalize_ppt_style_info(
-        self,
-        value: Optional[Dict[str, Any]],
-        *,
-        guidance_text: str = "",
-        prompt: str = "",
-        legacy_directives: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        data = value if isinstance(value, dict) else {}
-        supplement = self._normalize_string_list(data.get("supplement_prompt"))
-        if str(guidance_text or "").strip() and str(guidance_text).strip() not in supplement:
-            supplement.append(str(guidance_text).strip())
-        if str(prompt or "").strip() and any(token in str(prompt) for token in ["风格", "商务", "学术", "简洁", "干净"]) and str(prompt).strip() not in supplement:
-            supplement.append(str(prompt).strip())
-        for directive in self._normalize_outline_chat_directives(legacy_directives):
-            label = str(directive.get("label") or directive.get("instruction") or "").strip()
-            if label and label not in supplement:
-                supplement.append(label)
-
-        detection_text = "\n".join([
-            str(data.get("preset") or ""),
-            str(data.get("label") or ""),
-            str(data.get("tone") or ""),
-            str(data.get("visual_style") or ""),
-            str(guidance_text or ""),
-            str(prompt or ""),
-            "\n".join(supplement),
-        ])
-        preset = str(data.get("preset") or "").strip() or self._detect_ppt_style_preset(detection_text)
-        if preset not in {"business", "academic", "clean", "custom"}:
-            preset = self._detect_ppt_style_preset(detection_text)
-        defaults = self._default_ppt_style_copy(preset)
-        return {
-            "preset": preset,
-            "label": str(data.get("label") or defaults["label"]).strip(),
-            "tone": str(data.get("tone") or defaults["tone"]).strip(),
-            "visual_style": str(data.get("visual_style") or defaults["visual_style"]).strip(),
-            "audience_assumption": str(data.get("audience_assumption") or defaults["audience_assumption"]).strip(),
-            "supplement_prompt": supplement,
-        }
-
-    def _ppt_structured_signature(self, value: Dict[str, Any]) -> str:
-        return json.dumps(value or {}, ensure_ascii=False, sort_keys=True)
-
-    def _apply_ppt_style_message(self, style_info: Dict[str, Any], message: str) -> Dict[str, Any]:
-        text = str(message or "").strip()
-        if not text:
-            return self._normalize_ppt_style_info(style_info)
-        if not any(token in text for token in ["风格", "商务", "学术", "简洁", "干净", "少讲", "弱化", "强化", "语气", "视觉"]):
-            return self._normalize_ppt_style_info(style_info)
-        next_info = dict(style_info or {})
-        preset = self._detect_ppt_style_preset(text)
-        if preset != "custom":
-            next_info["preset"] = preset
-            next_info.update(self._default_ppt_style_copy(preset))
-        supplement = self._normalize_string_list(next_info.get("supplement_prompt"))
-        if text not in supplement:
-            supplement.append(text)
-        next_info["supplement_prompt"] = supplement
-        return self._normalize_ppt_style_info(next_info)
-
-    def _is_ppt_style_only_message(
-        self,
-        *,
-        message: str,
-        intent_summary: Optional[Dict[str, Any]] = None,
-        active_slide_index: Optional[int] = None,
-    ) -> bool:
-        text = str(message or "").strip()
-        if not text:
-            return False
-        style_markers = ("风格", "商务", "学术", "简洁", "干净", "语气", "视觉", "受众", "汇报", "表达")
-        if not any(marker in text for marker in style_markers):
-            return False
-        outline_markers = (
-            "页",
-            "页面",
-            "单页",
-            "当前页",
-            "这页",
-            "标题",
-            "大纲",
-            "结构",
-            "顺序",
-            "新增",
-            "增加",
-            "删除",
-            "移除",
-            "合并",
-            "拆分",
-            "要点",
-            "素材",
-            "图片",
-            "图表",
-        )
-        if re.search(r"第\s*\d+\s*页", text):
-            return False
-        if any(marker in text for marker in outline_markers):
-            # “修改风格信息” is still a style metadata request, not a slide outline mutation.
-            style_info_phrase = any(phrase in text for phrase in ("风格信息", "风格调整", "调整风格", "修改风格"))
-            non_style_outline_phrase = any(
-                marker in text
-                for marker in (
-                    "页面",
-                    "单页",
-                    "当前页",
-                    "这页",
-                    "标题",
-                    "大纲",
-                    "结构",
-                    "顺序",
-                    "新增",
-                    "增加",
-                    "删除",
-                    "移除",
-                    "合并",
-                    "拆分",
-                    "要点",
-                    "素材",
-                    "图片",
-                    "图表",
-                )
-            )
-            if non_style_outline_phrase or not style_info_phrase:
-                return False
-        normalized_intent = self._normalize_outline_chat_intent_summary(intent_summary)
-        if normalized_intent.get("slide_targets"):
-            return False
-        if active_slide_index is not None and any(marker in text for marker in ("当前页", "这页", "单页")):
-            return False
-        return True
-
-    def _normalize_outline_chat_history(self, history: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-        rows: List[Dict[str, Any]] = []
-        for item in history or []:
-            if not isinstance(item, dict):
-                continue
-            content = str(item.get("content") or "").strip()
-            if not content:
-                continue
-            raw_role = str(item.get("role") or "").strip()
-            role = raw_role if raw_role in {"user", "assistant", "system"} else "user"
-            rows.append(
-                {
-                    "id": str(item.get("id") or uuid4().hex),
-                    "role": role,
-                    "content": content,
-                    "created_at": str(item.get("created_at") or self._now()),
-                }
-            )
-        return rows
-
-    def _outline_signature(self, outline: List[Dict[str, Any]]) -> str:
-        return json.dumps(self._normalize_ppt_outline(outline), ensure_ascii=False, sort_keys=True)
-
-    def _normalize_outline_chat_directives(self, directives: Optional[List[Dict[str, Any]]]) -> List[Dict[str, Any]]:
-        normalized: List[Dict[str, Any]] = []
-        for index, item in enumerate(directives or []):
-            if not isinstance(item, dict):
-                continue
-            label = str(item.get("label") or item.get("instruction") or "").strip()
-            if not label:
-                continue
-            scope = "slide" if str(item.get("scope") or "").strip() == "slide" else "global"
-            directive_type = str(item.get("type") or "custom").strip() or "custom"
-            instruction = str(item.get("instruction") or label).strip() or label
-            action = "remove" if str(item.get("action") or "").strip() == "remove" else "set"
-            row = {
-                "id": str(item.get("id") or f"directive_{index}_{uuid4().hex[:8]}"),
-                "scope": scope,
-                "type": directive_type,
-                "label": label,
-                "instruction": instruction,
-                "action": action,
-            }
-            value = str(item.get("value") or "").strip()
-            if value:
-                row["value"] = value
-            page_num = item.get("page_num")
-            if scope == "slide" and page_num not in {None, ""}:
-                try:
-                    row["page_num"] = max(1, int(page_num))
-                except Exception:
-                    pass
-            normalized.append(row)
-        return normalized
-
-    def _outline_directives_signature(self, directives: Optional[List[Dict[str, Any]]]) -> str:
-        return json.dumps(self._normalize_outline_chat_directives(directives), ensure_ascii=False, sort_keys=True)
-
-    def _normalize_outline_chat_intent_summary(self, summary: Optional[Dict[str, Any]]) -> Dict[str, Any]:
-        data = summary if isinstance(summary, dict) else {}
-        mode = str(data.get("mode") or "none").strip()
-        if mode not in {"global", "slide", "mixed", "none"}:
-            mode = "none"
-        slide_targets: List[Dict[str, Any]] = []
-        for item in data.get("slide_targets") or []:
-            if not isinstance(item, dict):
-                continue
-            instruction = str(item.get("instruction") or "").strip()
-            if not instruction:
-                continue
-            try:
-                page_num = max(1, int(item.get("page_num")))
-            except Exception:
-                continue
-            slide_targets.append({"page_num": page_num, "instruction": instruction})
-        return {
-            "mode": mode,
-            "global_directives": self._normalize_outline_chat_directives(data.get("global_directives") or []),
-            "slide_targets": slide_targets,
-        }
-
-    def _has_pending_outline_changes(
-        self,
-        *,
-        outline: List[Dict[str, Any]],
-        draft_outline: List[Dict[str, Any]],
-        output_info: Optional[Dict[str, Any]] = None,
-        draft_output_info: Optional[Dict[str, Any]] = None,
-        style_info: Optional[Dict[str, Any]] = None,
-        draft_style_info: Optional[Dict[str, Any]] = None,
-        global_directives: Optional[List[Dict[str, Any]]] = None,
-        draft_global_directives: Optional[List[Dict[str, Any]]] = None,
-    ) -> bool:
-        return (
-            self._outline_signature(draft_outline) != self._outline_signature(outline)
-            or self._ppt_structured_signature(draft_output_info or {}) != self._ppt_structured_signature(output_info or {})
-            or self._ppt_structured_signature(draft_style_info or {}) != self._ppt_structured_signature(style_info or {})
-            or self._outline_directives_signature(draft_global_directives) != self._outline_directives_signature(global_directives)
-        )
-
-    def _build_outline_chat_summary(
-        self,
-        outline: List[Dict[str, Any]],
-        *,
-        style_info: Optional[Dict[str, Any]] = None,
-        global_directives: Optional[List[Dict[str, Any]]] = None,
-    ) -> str:
-        slides = self._normalize_ppt_outline(outline)
-        if not slides:
-            return "我先总结一下当前大纲思路：这份 PPT 还没有成型页面。你可以先说你想强调的结构、重点或表达方式，我会先整理成候选改动，是否推送由你决定。"
-
-        titles = [str(item.get("title") or f"第 {index + 1} 页").strip() for index, item in enumerate(slides)]
-        page_count = len(titles)
-        parts = [f"我先总结一下当前大纲思路：这版 PPT 目前共 {page_count} 页。"]
-        if page_count == 1:
-            parts.append(f"当前主要围绕「{titles[0]}」展开。")
-        else:
-            parts.append(f"开场从「{titles[0]}」切入。")
-            middle_titles = titles[1:-1][:3]
-            if middle_titles:
-                parts.append(f"中段重点覆盖「{'」「'.join(middle_titles)}」。")
-            parts.append(f"最后收束到「{titles[-1]}」。")
-        normalized_style = self._normalize_ppt_style_info(style_info)
-        if normalized_style.get("label"):
-            parts.append(f"当前风格是「{normalized_style.get('label')}」。")
-        parts.append("你可以继续说想怎么改产出信息、风格、结构、页序或单页重点，我会先整理成候选修改；是否真正应用，由你点击“应用候选修改”决定。")
-        return "".join(parts)
-
-    def _build_outline_chat_starter_message(
-        self,
-        outline: List[Dict[str, Any]],
-        *,
-        style_info: Optional[Dict[str, Any]] = None,
-        global_directives: Optional[List[Dict[str, Any]]] = None,
-        created_at: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        return {
-            "id": uuid4().hex,
-            "role": "assistant",
-            "content": self._build_outline_chat_summary(outline, style_info=style_info, global_directives=global_directives),
-            "created_at": str(created_at or self._now()),
-        }
-
-    def _create_outline_chat_session(
-        self,
-        outline: List[Dict[str, Any]],
-        *,
-        output_info: Optional[Dict[str, Any]] = None,
-        style_info: Optional[Dict[str, Any]] = None,
-        global_directives: Optional[List[Dict[str, Any]]] = None,
-        status: str = "active",
-    ) -> Dict[str, Any]:
-        now = self._now()
-        normalized_outline = self._normalize_ppt_outline(outline)
-        normalized_output_info = self._normalize_ppt_output_info(output_info, item={"title": "PPT 产出文档", "outline": normalized_outline})
-        normalized_style_info = self._normalize_ppt_style_info(style_info, legacy_directives=global_directives)
-        starter = self._build_outline_chat_starter_message(normalized_outline, style_info=normalized_style_info, created_at=now)
-        return {
-            "id": uuid4().hex,
-            "status": status if status in {"active", "applied", "archived"} else "active",
-            "messages": [starter],
-            "draft_outline": normalized_outline,
-            "draft_output_info": normalized_output_info,
-            "draft_style_info": normalized_style_info,
-            "draft_global_directives": [],
-            "intent_summary": {"mode": "none", "global_directives": [], "slide_targets": []},
-            "summary": starter["content"],
-            "has_pending_changes": False,
-            "created_at": now,
-            "updated_at": now,
-        }
-
-    def _normalize_outline_chat_session(
-        self,
-        session: Dict[str, Any],
-        *,
-        outline: List[Dict[str, Any]],
-        output_info: Optional[Dict[str, Any]] = None,
-        style_info: Optional[Dict[str, Any]] = None,
-        global_directives: Optional[List[Dict[str, Any]]] = None,
-    ) -> tuple[Dict[str, Any], bool]:
-        changed = False
-        normalized_outline = self._normalize_ppt_outline(outline)
-        normalized_output_info = self._normalize_ppt_output_info(output_info, item={"title": "PPT 产出文档", "outline": normalized_outline})
-        normalized_style_info = self._normalize_ppt_style_info(style_info, legacy_directives=global_directives)
-        created_at = str(session.get("created_at") or self._now())
-        updated_at = str(session.get("updated_at") or created_at)
-        status = str(session.get("status") or "active").strip()
-        if status not in {"active", "applied", "archived"}:
-            status = "active"
-            changed = True
-
-        draft_outline = self._normalize_ppt_outline(session.get("draft_outline") or normalized_outline)
-        if draft_outline != (session.get("draft_outline") or []):
-            changed = True
-        draft_output_info = self._normalize_ppt_output_info(
-            session.get("draft_output_info") or normalized_output_info,
-            item={
-                "title": normalized_output_info.get("title"),
-                "outline": draft_outline,
-                "page_count": normalized_output_info.get("page_count"),
-                "source_names": normalized_output_info.get("source_names") or [],
-                "bound_document_titles": normalized_output_info.get("bound_document_titles") or [],
-            },
-        )
-        if draft_output_info != (session.get("draft_output_info") or {}):
-            changed = True
-        draft_style_info = self._normalize_ppt_style_info(session.get("draft_style_info") or normalized_style_info)
-        if draft_style_info != (session.get("draft_style_info") or {}):
-            changed = True
-        draft_global_directives: List[Dict[str, Any]] = []
-        if self._normalize_outline_chat_directives(session.get("draft_global_directives") or []):
-            changed = True
-        raw_intent_summary = session.get("intent_summary") or {}
-        intent_summary = self._normalize_outline_chat_intent_summary(raw_intent_summary)
-        if intent_summary != raw_intent_summary:
-            changed = True
-
-        messages = self._normalize_outline_chat_history(session.get("messages") or [])
-        if not messages:
-            messages = [self._build_outline_chat_starter_message(draft_outline or normalized_outline, style_info=draft_style_info, created_at=created_at)]
-            changed = True
-        elif messages[0].get("role") != "assistant":
-            messages = [self._build_outline_chat_starter_message(draft_outline or normalized_outline, style_info=draft_style_info, created_at=created_at), *messages]
-            changed = True
-
-        summary = str(session.get("summary") or messages[0].get("content") or "").strip()
-        if not summary:
-            summary = self._build_outline_chat_summary(draft_outline or normalized_outline, style_info=draft_style_info)
-            changed = True
-        if summary != str(session.get("summary") or "").strip():
-            changed = True
-
-        has_pending_changes = self._has_pending_outline_changes(
-            outline=normalized_outline,
-            draft_outline=draft_outline,
-            output_info=normalized_output_info,
-            draft_output_info=draft_output_info,
-            style_info=normalized_style_info,
-            draft_style_info=draft_style_info,
-            global_directives=[],
-            draft_global_directives=draft_global_directives,
-        )
-        if bool(session.get("has_pending_changes")) != has_pending_changes:
-            changed = True
-
-        normalized_session = {
-            "id": str(session.get("id") or uuid4().hex),
-            "status": status,
-            "messages": messages,
-            "draft_outline": draft_outline,
-            "draft_output_info": draft_output_info,
-            "draft_style_info": draft_style_info,
-            "draft_global_directives": draft_global_directives,
-            "intent_summary": intent_summary,
-            "summary": summary,
-            "has_pending_changes": has_pending_changes,
-            "created_at": created_at,
-            "updated_at": updated_at,
-        }
-        if session.get("change_summary"):
-            normalized_session["change_summary"] = str(session.get("change_summary") or "").strip()
-        if session.get("applied_at"):
-            normalized_session["applied_at"] = str(session.get("applied_at") or "").strip()
-        return normalized_session, changed
-
-    def _get_active_outline_chat_session(self, sessions: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        for session in sessions:
-            if str(session.get("status") or "") == "active":
-                return session
-        return sessions[-1] if sessions else None
-
-    def _normalize_outline_chat_sessions(
-        self,
-        item: Dict[str, Any],
-        *,
-        outline: List[Dict[str, Any]],
-        output_info: Optional[Dict[str, Any]] = None,
-        style_info: Optional[Dict[str, Any]] = None,
-    ) -> tuple[List[Dict[str, Any]], bool]:
-        changed = False
-        sessions_raw = item.get("outline_chat_sessions") or []
-        sessions: List[Dict[str, Any]] = []
-        global_directives: List[Dict[str, Any]] = []
-
-        if isinstance(sessions_raw, list) and sessions_raw:
-            for raw in sessions_raw:
-                if not isinstance(raw, dict):
-                    changed = True
-                    continue
-                normalized_session, session_changed = self._normalize_outline_chat_session(
-                    raw,
-                    outline=outline,
-                    output_info=output_info,
-                    style_info=style_info,
-                    global_directives=global_directives,
-                )
-                sessions.append(normalized_session)
-                changed = changed or session_changed
-        else:
-            legacy_history = self._normalize_outline_chat_history(item.get("outline_chat_history") or [])
-            if legacy_history:
-                archived_session = self._create_outline_chat_session(outline, output_info=output_info, style_info=style_info, status="archived")
-                archived_session["messages"] = [archived_session["messages"][0], *legacy_history]
-                archived_session["updated_at"] = legacy_history[-1].get("created_at") or archived_session["updated_at"]
-                sessions.append(archived_session)
-            sessions.append(self._create_outline_chat_session(outline, output_info=output_info, style_info=style_info, status="active"))
-            changed = True
-
-        active_indexes = [index for index, session in enumerate(sessions) if session.get("status") == "active"]
-        if not active_indexes:
-            sessions.append(self._create_outline_chat_session(outline, output_info=output_info, style_info=style_info, status="active"))
-            changed = True
-        elif len(active_indexes) > 1:
-            keep_index = active_indexes[-1]
-            for index in active_indexes[:-1]:
-                sessions[index]["status"] = "archived"
-            changed = True
-
-        return sessions, changed
-
-    def _sync_outline_chat_state(self, item: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
-        if item.get("target_type") != "ppt":
-            return item, False
-
-        changed = False
-        outline = self._normalize_ppt_outline(item.get("outline") or [])
-        if outline != (item.get("outline") or []):
-            item["outline"] = outline
-            changed = True
-        legacy_directives = self._normalize_outline_chat_directives(item.get("outline_global_directives") or [])
-        output_info = self._normalize_ppt_output_info(item.get("output_info"), item=item)
-        if output_info != (item.get("output_info") or {}):
-            item["output_info"] = output_info
-            changed = True
-        style_info = self._normalize_ppt_style_info(
-            item.get("style_info"),
-            guidance_text=str(item.get("guidance_snapshot_text") or ""),
-            prompt=str(item.get("prompt") or ""),
-            legacy_directives=legacy_directives,
-        )
-        if style_info != (item.get("style_info") or {}):
-            item["style_info"] = style_info
-            changed = True
-        if legacy_directives or (item.get("outline_global_directives") or []) != []:
-            item["outline_global_directives"] = []
-            changed = True
-
-        sessions, sessions_changed = self._normalize_outline_chat_sessions(item, outline=outline, output_info=output_info, style_info=style_info)
-        if sessions_changed or sessions != (item.get("outline_chat_sessions") or []):
-            item["outline_chat_sessions"] = sessions
-            changed = True
-
-        active_session = self._get_active_outline_chat_session(sessions)
-        active_session_id = str(active_session.get("id") or "") if active_session else ""
-        draft_outline = self._normalize_ppt_outline(active_session.get("draft_outline") or outline) if active_session else outline
-        draft_output_info = self._normalize_ppt_output_info(active_session.get("draft_output_info") or output_info, item={**item, "outline": draft_outline}) if active_session else output_info
-        draft_style_info = self._normalize_ppt_style_info(active_session.get("draft_style_info") or style_info) if active_session else style_info
-        draft_global_directives: List[Dict[str, Any]] = []
-        draft_history = self._normalize_outline_chat_history(active_session.get("messages") or []) if active_session else []
-        has_pending_changes = self._has_pending_outline_changes(
-            outline=outline,
-            draft_outline=draft_outline,
-            output_info=output_info,
-            draft_output_info=draft_output_info,
-            style_info=style_info,
-            draft_style_info=draft_style_info,
-            global_directives=[],
-            draft_global_directives=draft_global_directives,
-        )
-
-        if str(item.get("outline_chat_active_session_id") or "") != active_session_id:
-            item["outline_chat_active_session_id"] = active_session_id
-            changed = True
-        if draft_history != (item.get("outline_chat_history") or []):
-            item["outline_chat_history"] = draft_history
-            changed = True
-        if draft_outline != (item.get("outline_chat_draft_outline") or []):
-            item["outline_chat_draft_outline"] = draft_outline
-            changed = True
-        if draft_output_info != (item.get("outline_chat_draft_output_info") or {}):
-            item["outline_chat_draft_output_info"] = draft_output_info
-            changed = True
-        if draft_style_info != (item.get("outline_chat_draft_style_info") or {}):
-            item["outline_chat_draft_style_info"] = draft_style_info
-            changed = True
-        if draft_global_directives != (item.get("outline_chat_draft_global_directives") or []) or "outline_chat_draft_global_directives" not in item:
-            item["outline_chat_draft_global_directives"] = draft_global_directives
-            changed = True
-        if bool(item.get("outline_chat_has_pending_changes")) != has_pending_changes:
-            item["outline_chat_has_pending_changes"] = has_pending_changes
-            changed = True
-
-        return item, changed
-
-    def _build_outline_chat_context_snapshot(
-        self,
-        *,
-        item: Dict[str, Any],
-        document: Dict[str, Any],
-        bound_documents: List[Dict[str, Any]],
-    ) -> Dict[str, Any]:
-        source_names = [str(name or "").strip() for name in item.get("source_names") or [] if str(name or "").strip()]
-        source_paths = [str(path or "").strip() for path in item.get("source_paths") or [] if str(path or "").strip()]
-        source_summary = str(item.get("source_summary") or "").strip()
-        if not source_summary:
-            source_summary = self._build_source_summary(source_paths, max_chars=1500)
-        return {
-            "source_names": source_names,
-            "source_paths": source_paths,
-            "source_text": source_summary,
-            "document_title": str(document.get("title") or "").strip(),
-            "document_content": self._truncate_text(str(document.get("content") or "").strip(), 3000),
-            "bound_documents": [
-                {
-                    "title": str(doc.get("title") or "参考文档").strip(),
-                    "content": self._truncate_text(str(doc.get("content") or "").strip(), 2000),
-                }
-                for doc in bound_documents[:4]
-                if str(doc.get("content") or "").strip()
-            ],
-            "guidance_text": self._truncate_text(str(item.get("guidance_snapshot_text") or "").strip(), 2500),
-        }
-
-    def _build_outline_chat_feedback(
-        self,
-        *,
-        outline: List[Dict[str, Any]],
-        history: List[Dict[str, Any]],
-        conversation_history: Optional[List[Dict[str, Any]]] = None,
-        context_snapshot: Optional[Dict[str, Any]] = None,
-        output_info: Optional[Dict[str, Any]] = None,
-        style_info: Optional[Dict[str, Any]] = None,
-        global_directives: Optional[List[Dict[str, Any]]] = None,
-        intent_summary: Optional[Dict[str, Any]] = None,
-        message: str,
-        active_slide_index: Optional[int],
-    ) -> str:
-        lines = [
-            "你是 ThinkFlow 的 PPT 大纲协同编辑助手。",
-            "请根据用户最新要求，生成候选修改，不要声称已经覆盖正式产出文档。",
-            "要求：",
-            "1. 优先做最小必要修改，不要无故重写整套结构。",
-            "2. 如果用户明确要求调整顺序、合并、拆分或新增页面，可以整体修改。",
-            "3. 保持输出仍然是可生成 PPT 的 pagecontent 结构。",
-            "4. 文案用中文，标题简洁，布局描述和要点保持可执行。",
-            "5. 整体表达要求属于风格信息，不要生成隐藏的全局规则。",
-        ]
-        normalized_output_info = self._normalize_ppt_output_info(output_info, item={"title": "PPT 产出文档", "outline": outline})
-        normalized_style_info = self._normalize_ppt_style_info(style_info)
-        lines.extend(
-            [
-                "",
-                "当前产出信息：",
-                f"- 标题：{normalized_output_info.get('title')}",
-                f"- 目标页数：{normalized_output_info.get('page_count')}",
-                f"- 面向对象：{normalized_output_info.get('audience') or '未指定'}",
-                "",
-                "当前风格信息：",
-                f"- 风格类型：{normalized_style_info.get('label')}",
-                f"- 表达语气：{normalized_style_info.get('tone')}",
-                f"- 视觉倾向：{normalized_style_info.get('visual_style')}",
-            ]
-        )
-        supplement_prompt = self._normalize_string_list(normalized_style_info.get("supplement_prompt"))
-        if supplement_prompt:
-            lines.extend(["- 补充提示词：", *[f"  - {item}" for item in supplement_prompt[:8]]])
-        snapshot = context_snapshot or {}
-        source_names = [str(item or "").strip() for item in snapshot.get("source_names") or [] if str(item or "").strip()]
-        if source_names:
-            lines.extend(["", "来源文件：", *[f"- {item}" for item in source_names[:8]]])
-        source_text = str(snapshot.get("source_text") or "").strip()
-        if source_text:
-            lines.extend(["", "来源内容摘要：", source_text])
-        document_title = str(snapshot.get("document_title") or "梳理文档").strip() or "梳理文档"
-        document_content = str(snapshot.get("document_content") or "").strip()
-        if document_content:
-            lines.extend(["", f"{document_title}：", document_content])
-        bound_documents = snapshot.get("bound_documents") or []
-        if bound_documents:
-            lines.extend(["", "参考文档："])
-            for doc in bound_documents[:4]:
-                title = str(doc.get("title") or "参考文档").strip()
-                content = str(doc.get("content") or "").strip()
-                if content:
-                    lines.append(f"- {title}：{content}")
-        guidance_text = str(snapshot.get("guidance_text") or "").strip()
-        if guidance_text:
-            lines.extend(["", "产出指导：", guidance_text])
-        normalized_intent_summary = self._normalize_outline_chat_intent_summary(intent_summary)
-        if normalized_intent_summary.get("mode") != "none" or normalized_intent_summary.get("global_directives") or normalized_intent_summary.get("slide_targets"):
-            lines.extend(["", "本轮意图识别：", f"- mode: {normalized_intent_summary.get('mode') or 'none'}"])
-            for directive in normalized_intent_summary.get("global_directives") or []:
-                lines.append(f"- style: {directive.get('label')}")
-            for target in normalized_intent_summary.get("slide_targets") or []:
-                lines.append(f"- slide: 第 {target.get('page_num')} 页 -> {target.get('instruction')}")
-        if active_slide_index is not None and 0 <= active_slide_index < len(outline):
-            slide = outline[active_slide_index]
-            lines.extend(
-                [
-                    "",
-                    f"当前焦点页：第 {active_slide_index + 1} 页",
-                    f"标题：{slide.get('title') or f'页面 {active_slide_index + 1}'}",
-                    f"布局描述：{str(slide.get('layout_description') or slide.get('summary') or '').strip()}",
-                ]
-            )
-
-        recent_history = history[-6:]
-        if recent_history:
-            lines.extend(["", "历史修改对话："])
-            for item in recent_history:
-                speaker = "用户" if item.get("role") == "user" else "助手"
-                lines.append(f"{speaker}：{str(item.get('content') or '').strip()}")
-
-        recent_conversation = self._normalize_outline_chat_history(conversation_history or [])[-8:]
-        if recent_conversation:
-            lines.extend(["", "当前 notebook 对话："])
-            for item in recent_conversation:
-                speaker = "用户" if item.get("role") == "user" else "助手"
-                lines.append(f"{speaker}：{str(item.get('content') or '').strip()}")
-
-        lines.extend(["", f"用户最新要求：{str(message or '').strip()}"])
-        return "\n".join(lines).strip()
-
-    def _classify_directive_type(self, clause: str) -> str:
-        lowered = str(clause or "")
-        if "标题" in lowered and ("黑色" in lowered or "颜色" in lowered):
-            return "title_style"
-        if any(token in lowered for token in ["语气", "风格", "汇报", "表达", "偏"]):
-            return "tone"
-        if any(token in lowered for token in ["布局", "版式", "排版"]):
-            return "layout_rule"
-        return "custom"
-
-    def _build_outline_chat_intent_summary(
-        self,
-        *,
-        message: str,
-        active_slide_index: Optional[int],
-        existing_directives: Optional[List[Dict[str, Any]]] = None,
-    ) -> Dict[str, Any]:
-        text = str(message or "").strip()
-        if not text:
-            return {"mode": "none", "global_directives": [], "slide_targets": []}
-
-        clauses = [item.strip("，。；;！？!?\n ") for item in re.split(r"[，。；;！？!?\n]+", text) if item.strip("，。；;！？!?\n ")]
-        global_directives: List[Dict[str, Any]] = []
-        slide_targets: List[Dict[str, Any]] = []
-        global_markers = ("所有", "全局", "整套", "统一", "全部", "每页", "每一页", "整份", "整个大纲")
-
-        for clause in clauses or [text]:
-            page_matches = [int(match) for match in re.findall(r"第\s*(\d+)\s*页", clause)]
-            if page_matches:
-                for page_num in page_matches:
-                    slide_targets.append({"page_num": max(1, page_num), "instruction": clause})
-                remainder = re.sub(r"第\s*\d+\s*页", "", clause).strip("，。；; ")
-                if any(marker in clause for marker in global_markers):
-                    global_directives.append(
-                        {
-                            "id": f"directive_{uuid4().hex[:8]}",
-                            "scope": "global",
-                            "type": self._classify_directive_type(clause),
-                            "label": clause,
-                            "instruction": clause,
-                            "action": "remove" if any(token in clause for token in ["取消", "移除", "删除", "不要"]) else "set",
-                        }
-                    )
-                elif active_slide_index is not None and remainder in {"当前页", "这页"}:
-                    slide_targets.append({"page_num": active_slide_index + 1, "instruction": clause})
-                continue
-            if any(marker in clause for marker in global_markers) or any(token in clause for token in ["标题", "颜色", "风格", "语气", "统一", "布局", "版式"]):
-                global_directives.append(
-                    {
-                        "id": f"directive_{uuid4().hex[:8]}",
-                        "scope": "global",
-                        "type": self._classify_directive_type(clause),
-                        "label": clause,
-                        "instruction": clause,
-                        "action": "remove" if any(token in clause for token in ["取消", "移除", "删除", "不要"]) else "set",
-                    }
-                )
-            elif active_slide_index is not None and any(token in clause for token in ["当前页", "这页"]):
-                slide_targets.append({"page_num": active_slide_index + 1, "instruction": clause})
-
-        if global_directives and slide_targets:
-            mode = "mixed"
-        elif global_directives:
-            mode = "global"
-        elif slide_targets:
-            mode = "slide"
-        else:
-            mode = "slide" if active_slide_index is not None else "none"
-            if mode == "slide":
-                slide_targets.append({"page_num": active_slide_index + 1, "instruction": text})
-
-        return self._normalize_outline_chat_intent_summary(
-            {
-                "mode": mode,
-                "global_directives": global_directives,
-                "slide_targets": slide_targets,
-                "existing_directives": self._normalize_outline_chat_directives(existing_directives),
-            }
-        )
-
-    def _merge_outline_global_directives(
-        self,
-        current_directives: Optional[List[Dict[str, Any]]],
-        next_directives: Optional[List[Dict[str, Any]]],
-    ) -> List[Dict[str, Any]]:
-        merged: List[Dict[str, Any]] = list(self._normalize_outline_chat_directives(current_directives))
-        for directive in self._normalize_outline_chat_directives(next_directives):
-            same_type_indexes = [index for index, item in enumerate(merged) if item.get("type") == directive.get("type")]
-            if directive.get("action") == "remove":
-                merged = [item for item in merged if item.get("label") != directive.get("label") and item.get("type") != directive.get("type")]
-                continue
-            if same_type_indexes:
-                for index in reversed(same_type_indexes):
-                    merged.pop(index)
-            merged.append(directive)
-        return self._normalize_outline_chat_directives(merged)
-
-    def _summarize_outline_chat_change(
-        self,
-        *,
-        before_outline: List[Dict[str, Any]],
-        after_outline: List[Dict[str, Any]],
-        before_global_directives: Optional[List[Dict[str, Any]]] = None,
-        after_global_directives: Optional[List[Dict[str, Any]]] = None,
-        active_slide_index: Optional[int],
-    ) -> tuple[str, Optional[int], str]:
-        before_directives = self._normalize_outline_chat_directives(before_global_directives)
-        after_directives = self._normalize_outline_chat_directives(after_global_directives)
-        before_directive_keys = {f"{item.get('scope')}:{item.get('type')}:{item.get('label')}" for item in before_directives}
-        after_directive_keys = {f"{item.get('scope')}:{item.get('type')}:{item.get('label')}" for item in after_directives}
-        added_directives = [item for item in after_directives if f"{item.get('scope')}:{item.get('type')}:{item.get('label')}" not in before_directive_keys]
-        removed_directives = [item for item in before_directives if f"{item.get('scope')}:{item.get('type')}:{item.get('label')}" not in after_directive_keys]
-
-        if len(before_outline) != len(after_outline):
-            if added_directives or removed_directives:
-                return (
-                    "outline",
-                    None,
-                    f"已更新全局规则，并将大纲页数调整为 {len(after_outline)} 页。",
-                )
-            return (
-                "outline",
-                None,
-                f"大纲页数已调整为 {len(after_outline)} 页，已更新当前 PPT 大纲。",
-            )
-
-        changed_indexes: List[int] = []
-        for index, (before, after) in enumerate(zip(before_outline, after_outline)):
-            if json.dumps(before, ensure_ascii=False, sort_keys=True) != json.dumps(after, ensure_ascii=False, sort_keys=True):
-                changed_indexes.append(index)
-
-        if not changed_indexes:
-            if added_directives or removed_directives:
-                if added_directives and not removed_directives and len(added_directives) == 1:
-                    return ("global", None, f"已更新全局规则：{added_directives[0].get('label')}。推送后会作为整套页面规则生效。")
-                if removed_directives and not added_directives and len(removed_directives) == 1:
-                    return ("global", None, f"已移除全局规则：{removed_directives[0].get('label')}。")
-                return ("global", None, f"已更新全局规则，共调整 {len(added_directives)} 条新增、{len(removed_directives)} 条移除。")
-            focus_index = active_slide_index if active_slide_index is not None and 0 <= active_slide_index < len(after_outline) else None
-            return ("slide" if focus_index is not None else "outline", focus_index, "我已重新整理这套 PPT 大纲，没有检测到明显结构变化。")
-
-        if len(changed_indexes) == 1:
-            changed_index = changed_indexes[0]
-            changed_title = str(after_outline[changed_index].get("title") or f"第 {changed_index + 1} 页").strip()
-            if added_directives or removed_directives:
-                return ("outline", None, f"已更新全局规则，并同步调整第 {changed_index + 1} 页，当前标题为“{changed_title}”。")
-            return ("slide", changed_index, f"已更新第 {changed_index + 1} 页，当前标题为“{changed_title}”。")
-
-        if added_directives or removed_directives:
-            return ("outline", None, f"已更新全局规则，并按你的要求调整 PPT 大纲，共修改 {len(changed_indexes)} 页。")
-        return ("outline", None, f"已按你的要求更新 PPT 大纲，共调整 {len(changed_indexes)} 页。")
-
-    async def _apply_outline_chat(
-        self,
-        *,
-        item: Dict[str, Any],
-        outline: List[Dict[str, Any]],
-        output_info: Optional[Dict[str, Any]],
-        style_info: Optional[Dict[str, Any]],
-        global_directives: Optional[List[Dict[str, Any]]],
-        intent_summary: Optional[Dict[str, Any]],
-        history: List[Dict[str, Any]],
-        conversation_history: Optional[List[Dict[str, Any]]],
-        context_snapshot: Optional[Dict[str, Any]],
-        message: str,
-        active_slide_index: Optional[int],
-        email: str,
-        api_url: Optional[str],
-        api_key: Optional[str],
-        model: Optional[str],
-    ) -> Dict[str, Any]:
-        if self._is_ppt_style_only_message(
-            message=message,
-            intent_summary=intent_summary,
-            active_slide_index=active_slide_index,
-        ):
-            normalized_outline = self._normalize_ppt_outline(outline)
-            next_style_info = self._apply_ppt_style_message(self._normalize_ppt_style_info(style_info), message)
-            return {
-                "outline": normalized_outline,
-                "draft_output_info": self._normalize_ppt_output_info(output_info, item={**item, "outline": normalized_outline}),
-                "draft_style_info": next_style_info,
-                "assistant_message": "已整理一版候选风格信息，当前不会改动页级大纲。",
-                "applied_scope": "style",
-                "applied_slide_index": None,
-                "change_summary": "已整理一版候选风格信息，当前不会改动页级大纲。",
-                "draft_global_directives": [],
-                "intent_summary": {
-                    "mode": "global",
-                    "global_directives": [],
-                    "slide_targets": [],
-                },
-                "review": {
-                    "passed": True,
-                    "issues": [],
-                    "review_summary": "候选风格信息已更新，页级大纲保持不变。",
-                },
-            }
-        from fastapi_app.schemas import OutlineRefineRequest
-        from fastapi_app.services.paper2ppt_service import Paper2PPTService
-
-        result_path = str(item.get("result_path") or "").strip()
-        if not result_path:
-            raise HTTPException(status_code=400, detail="Missing result_path for PPT outline chat")
-
-        feedback = self._build_outline_chat_feedback(
-            outline=outline,
-            history=history,
-            conversation_history=conversation_history,
-            context_snapshot=context_snapshot,
-            output_info=output_info,
-            style_info=style_info,
-            global_directives=global_directives,
-            intent_summary=intent_summary,
-            message=message,
-            active_slide_index=active_slide_index,
-        )
-        service = Paper2PPTService()
-        payload = await self._run_with_backend_llm_fallback(
-            label="outline_chat:ppt",
-            api_url=api_url,
-            api_key=api_key,
-            operation=lambda resolved_api_url, resolved_api_key: service.refine_outline(
-                OutlineRefineRequest(
-                    chat_api_url=resolved_api_url or "",
-                    api_key=resolved_api_key or "",
-                    email=email,
-                    model=model or settings.PAPER2PPT_OUTLINE_MODEL,
-                    language="zh",
-                    result_path=result_path,
-                    outline_feedback=feedback,
-                    pagecontent=json.dumps(outline, ensure_ascii=False),
-                ),
-                None,
-            ),
-        )
-        next_outline = self._normalize_ppt_outline(payload.get("pagecontent") or [])
-        if not bool(item.get("enable_images", True)):
-            next_outline = self._prepare_ppt_outline_for_generation(next_outline, enable_images=False)
-        next_output_info = self._normalize_ppt_output_info(output_info, item={**item, "outline": next_outline})
-        next_style_info = self._apply_ppt_style_message(self._normalize_ppt_style_info(style_info), message)
-        next_directives: List[Dict[str, Any]] = []
-        applied_scope, applied_slide_index, assistant_message = self._summarize_outline_chat_change(
-            before_outline=outline,
-            after_outline=next_outline,
-            before_global_directives=[],
-            after_global_directives=next_directives,
-            active_slide_index=active_slide_index,
-        )
-        if self._ppt_structured_signature(next_style_info) != self._ppt_structured_signature(self._normalize_ppt_style_info(style_info)):
-            applied_scope = "style"
-            applied_slide_index = None
-            assistant_message = "已整理一版候选风格信息，并同步检查当前 PPT 大纲。"
-        return {
-            "outline": next_outline,
-            "draft_output_info": next_output_info,
-            "draft_style_info": next_style_info,
-            "assistant_message": assistant_message,
-            "applied_scope": applied_scope,
-            "applied_slide_index": applied_slide_index,
-            "change_summary": assistant_message,
-            "draft_global_directives": next_directives,
-            "intent_summary": self._normalize_outline_chat_intent_summary(intent_summary),
-            "review": {
-                "passed": True,
-                "issues": [],
-                "review_summary": "候选修改已完成基础结构检查。",
-            },
-        }
 
     def _attach_ppt_page_images_from_disk(
         self,
@@ -1871,6 +852,82 @@ class OutputV2Service:
             if image_path is not None:
                 slide["generated_img_path"] = _to_outputs_url(str(image_path))
         return normalized
+
+    def _attach_video_scene_images_from_disk(
+        self,
+        outline: List[Dict[str, Any]],
+        *,
+        pipeline_dir: Optional[Path],
+    ) -> List[Dict[str, Any]]:
+        normalized = self._normalize_ppt_outline(outline)
+        if pipeline_dir is None:
+            return normalized
+        scenes_dir = pipeline_dir / "video_scenes"
+        if not scenes_dir.exists():
+            return normalized
+
+        for index, slide in enumerate(normalized):
+            candidates = [
+                scenes_dir / f"page_{index:03d}.png",
+                scenes_dir / f"page_{index + 1:03d}.png",
+            ]
+            image_path = next(
+                (
+                    candidate
+                    for candidate in candidates
+                    if candidate.exists() and self._is_valid_image_file(candidate)
+                ),
+                None,
+            )
+            if image_path is not None:
+                slide["generated_img_path"] = _to_outputs_url(str(image_path))
+        return normalized
+
+    def _hydrate_video_item_from_disk(
+        self, item: Dict[str, Any], base_dir: Optional[Path] = None
+    ) -> tuple[Dict[str, Any], bool]:
+        if item.get("target_type") != "video":
+            return item, False
+
+        changed = False
+        pipeline_dir_raw = str(item.get("result_path") or item.get("result", {}).get("result_path") or "").strip()
+        pipeline_dir = Path(pipeline_dir_raw) if pipeline_dir_raw else None
+        if base_dir is not None:
+            pipeline_dir = self._remap_legacy_pipeline_dir(pipeline_dir, base_dir)
+
+        outline = self._normalize_ppt_outline(item.get("outline") or [])
+        hydrated_outline = self._attach_video_scene_images_from_disk(outline, pipeline_dir=pipeline_dir)
+        if json.dumps(hydrated_outline, ensure_ascii=False, sort_keys=True) != json.dumps(
+            item.get("outline") or [], ensure_ascii=False, sort_keys=True
+        ):
+            item["outline"] = hydrated_outline
+            changed = True
+
+        if pipeline_dir is not None and pipeline_dir.exists():
+            cfg_path = pipeline_dir / "paper2video_config.json"
+            if cfg_path.is_file():
+                try:
+                    disk_cfg = self._normalize_paper2video_config(json.loads(cfg_path.read_text(encoding="utf-8")))
+                    if disk_cfg != self._normalize_paper2video_config(item.get("paper2video_config")):
+                        item["paper2video_config"] = disk_cfg
+                        item["language"] = disk_cfg.get("language") or item.get("language")
+                        changed = True
+                except Exception:
+                    pass
+
+        result = item.get("result")
+        if isinstance(result, dict) and pipeline_dir is not None and pipeline_dir.exists():
+            mp4_path = pipeline_dir / "paper2video.mp4"
+            if mp4_path.exists():
+                mp4_url = _to_outputs_url(str(mp4_path))
+                if result.get("video_mp4_path") != mp4_url:
+                    result["video_mp4_path"] = mp4_url
+                    changed = True
+                if not str(result.get("download_url") or "").strip():
+                    result["download_url"] = mp4_url
+                    changed = True
+
+        return item, changed
 
     def _remap_legacy_pipeline_dir(self, pipeline_dir: Optional[Path], base_dir: Path) -> Optional[Path]:
         """Remap a stale outputs_v2/{out_id}/ppt_pipeline path to workspace/outputs/{out_id}/ppt_pipeline.
@@ -1963,8 +1020,6 @@ class OutputV2Service:
                         result["ppt_pptx_path"] = pptx_url
                         changed = True
 
-        item, state_changed = self._sync_outline_chat_state(item)
-        changed = changed or state_changed
         return item, changed
 
     def _read_json_file(self, path: Path) -> Dict[str, Any]:
@@ -2722,6 +1777,12 @@ class OutputV2Service:
         api_key: Optional[str] = None,
         model: Optional[str] = None,
         enable_images: Optional[bool] = None,
+        language: Optional[str] = None,
+        tts_model: Optional[str] = None,
+        tts_voice_name: Optional[str] = None,
+        avatar_mode: Optional[str] = None,
+        avatar_id: Optional[str] = None,
+        avatar_upload_token: Optional[str] = None,
     ) -> Dict[str, Any]:
         if target_type not in self.SUPPORTED_TYPES:
             raise HTTPException(status_code=400, detail="Unsupported output type")
@@ -2757,9 +1818,9 @@ class OutputV2Service:
             source_names=normalized_source_names,
             bound_documents=bound_documents,
             guidance_text=guidance_snapshot_text,
-            include_source_text=target_type != "ppt",
+            include_source_text=target_type not in ("ppt", "video"),
         )
-        if target_type != "ppt" and not source_context.strip():
+        if target_type not in ("ppt", "video") and not source_context.strip():
             raise HTTPException(
                 status_code=400,
                 detail="请先选择至少一个来源，或选择一份梳理文档 / 参考文档 / 产出指导。",
@@ -2799,6 +1860,57 @@ class OutputV2Service:
             stage = self.PPT_STAGE_OUTLINE
             result_payload: Dict[str, Any] = {}
             result_path = str(ppt_payload["result_path"])
+        elif target_type == "video":
+            pipeline_dir = output_dir / "video_pipeline"
+            pipeline_dir.mkdir(parents=True, exist_ok=True)
+            (pipeline_dir / "video_scenes").mkdir(parents=True, exist_ok=True)
+            p2v_options = self.get_paper2video_options()
+            paper2video_config = self._normalize_paper2video_config(
+                {
+                    "language": language,
+                    "tts_model": tts_model,
+                    "tts_voice_name": tts_voice_name,
+                    "avatar_mode": avatar_mode,
+                    "avatar_id": avatar_id,
+                    "avatar_upload_token": avatar_upload_token,
+                },
+                options=p2v_options,
+            )
+            if paper2video_config.get("avatar_mode") == "custom" and paper2video_config.get("avatar_upload_token"):
+                self._apply_custom_avatar_to_pipeline(
+                    notebook_id=notebook_id,
+                    notebook_title=notebook_title,
+                    user_id=user_id,
+                    pipeline_dir=pipeline_dir,
+                    upload_token=paper2video_config["avatar_upload_token"],
+                )
+            self._write_json(pipeline_dir / "paper2video_config.json", paper2video_config)
+            self._write_json(
+                pipeline_dir / "context.json",
+                {
+                    "status": self.VIDEO_PENDING,
+                    "message": "请调用 paper2video/run-subtitle 生成字幕，再调用 paper2video/continue-after-edit 合成视频。",
+                    "target_type": "video",
+                    "paper2video_config": paper2video_config,
+                },
+            )
+            text_basis = source_context.strip() or self._build_ppt_fallback_text(
+                document=document,
+                bound_documents=bound_documents,
+                guidance_text=guidance_snapshot_text,
+            )
+            if not text_basis.strip():
+                text_basis = "视频分镜占位内容"
+            outline = self._fallback_outline(
+                target_type=target_type,
+                title=title or document.get("title") or (normalized_source_names[0] if normalized_source_names else "video"),
+                content=text_basis,
+                page_count=normalized_page_count,
+            )
+            outline = self._normalize_ppt_outline(outline)
+            stage = self.PPT_STAGE_OUTLINE
+            result_payload = {}
+            result_path = str(pipeline_dir)
         else:
             outline = self._fallback_outline(
                 target_type=target_type,
@@ -2820,7 +1932,7 @@ class OutputV2Service:
             "status": stage,
             "pipeline_stage": stage,
             "outline": outline,
-            "page_reviews": self._build_ppt_page_reviews(outline, []) if target_type == "ppt" else [],
+            "page_reviews": self._build_ppt_page_reviews(outline, []) if target_type in ("ppt", "video") else [],
             "page_versions": [],
             "page_count": normalized_page_count,
             "guidance_item_ids": guidance_item_ids or [],
@@ -2836,10 +1948,9 @@ class OutputV2Service:
             "result_path": result_path,
             "source_document_path": str(document_md) if document_md.exists() else "",
         }
-        if target_type == "ppt":
-            source_summary = self._build_source_summary(normalized_source_paths, max_chars=1500)
-            item, _ = self._sync_outline_chat_state(item)
-            item["source_summary"] = source_summary
+        if target_type == "video":
+            item["language"] = paper2video_config["language"]
+            item["paper2video_config"] = paper2video_config
         manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
         manifest = self._read_manifest(manifest_path)
         manifest.append(item)
@@ -2858,15 +1969,15 @@ class OutputV2Service:
         outline: List[Dict[str, Any]],
         pipeline_stage: Optional[str] = None,
         enable_images: Optional[bool] = None,
-        manual_edit_log: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
         manifest = self._read_manifest(manifest_path)
         index, item = self._find_output(manifest, output_id)
-        item, _ = self._sync_outline_chat_state(item)
-        next_outline = self._normalize_ppt_outline(outline) if item.get("target_type") == "ppt" else outline
-        should_reset_ppt_state = False
-        if item.get("target_type") == "ppt":
+        deck = item.get("target_type")
+        next_outline = self._normalize_ppt_outline(outline) if deck in ("ppt", "video") else outline
+        should_reset_deck_state = False
+        if deck in ("ppt", "video"):
+            label = "PPT" if deck == "ppt" else "视频"
             current_outline = self._normalize_ppt_outline(item.get("outline") or [])
             outline_changed = json.dumps(current_outline, ensure_ascii=False, sort_keys=True) != json.dumps(
                 next_outline,
@@ -2877,14 +1988,29 @@ class OutputV2Service:
             enable_images_changed = enable_images is not None and bool(enable_images) != bool(item.get("enable_images", True))
             current_stage = str(item.get("pipeline_stage") or item.get("status") or self.PPT_STAGE_OUTLINE)
             outline_locked = current_stage in {self.PPT_STAGE_PAGES, self.PPT_STAGE_GENERATED}
-            if bool(item.get("outline_chat_has_pending_changes")) and (outline_changed or pipeline_stage == self.PPT_STAGE_PAGES):
-                raise HTTPException(status_code=400, detail="当前存在待推送的大纲改动，请先推送改动后再确认大纲。")
+            video_pages_ready = deck == "video" and current_stage == self.PPT_STAGE_PAGES
             if outline_locked:
-                if outline_changed or prompt_changed or enable_images_changed:
-                    raise HTTPException(status_code=400, detail="PPT 大纲已确认，当前阶段不支持再修改大纲或生成配置")
+                if video_pages_ready:
+                    if prompt_changed or enable_images_changed:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"{label} 已进入逐镜确认阶段，当前不支持再修改提示词或插图配置。",
+                        )
+                elif outline_changed or prompt_changed or enable_images_changed:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{label} 大纲已确认或已进入生成阶段，当前阶段不支持再修改大纲或生成配置",
+                    )
                 if pipeline_stage and pipeline_stage != current_stage:
-                    raise HTTPException(status_code=400, detail="PPT 已进入后续阶段，不支持回退到大纲编辑或切换当前状态")
-            should_reset_ppt_state = outline_changed or prompt_changed or enable_images_changed or pipeline_stage == self.PPT_STAGE_OUTLINE
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"{label} 已进入后续阶段，不支持回退到大纲编辑或切换当前状态",
+                    )
+            should_reset_deck_state = (
+                outline_changed or prompt_changed or enable_images_changed or pipeline_stage == self.PPT_STAGE_OUTLINE
+            )
+            if video_pages_ready and outline_changed and not prompt_changed and not enable_images_changed:
+                should_reset_deck_state = False
         item["outline"] = next_outline
         if title is not None:
             item["title"] = (title or "").strip() or item.get("title") or "未命名产出"
@@ -2895,55 +2021,19 @@ class OutputV2Service:
             item["status"] = pipeline_stage
         if enable_images is not None:
             item["enable_images"] = bool(enable_images)
-        if item.get("target_type") == "ppt":
-            if should_reset_ppt_state:
+        if deck in ("ppt", "video"):
+            if should_reset_deck_state:
                 item = self._reset_ppt_generation_state(item)
                 item["pipeline_stage"] = pipeline_stage or self.PPT_STAGE_OUTLINE
                 item["status"] = item["pipeline_stage"]
             else:
                 item["page_reviews"] = self._build_ppt_page_reviews(next_outline, item.get("page_reviews") or [])
-            archived_sessions = [
-                {
-                    **session,
-                    "status": "archived" if session.get("status") == "active" else session.get("status"),
-                    "has_pending_changes": False,
-                }
-                for session in item.get("outline_chat_sessions") or []
-            ]
-            item["outline_chat_sessions"] = [
-                *archived_sessions,
-                self._create_outline_chat_session(
-                    next_outline,
-                    output_info=self._normalize_ppt_output_info(item.get("output_info"), item={**item, "outline": next_outline}),
-                    style_info=self._normalize_ppt_style_info(item.get("style_info"), guidance_text=str(item.get("guidance_snapshot_text") or ""), prompt=str(item.get("prompt") or "")),
-                    status="active",
-                ),
-            ]
-            item, _ = self._sync_outline_chat_state(item)
         item["updated_at"] = self._now()
         self._write_json(
             self._item_dir(notebook_id, notebook_title, user_id, output_id) / "outline.json",
             {"outline": item["outline"]},
         )
         manifest[index] = item
-        if manual_edit_log:
-            sessions = item.get("outline_chat_sessions", [])
-            active_session_id = item.get("outline_chat_active_session_id")
-            for session in sessions:
-                if session.get("id") == active_session_id:
-                    messages = session.get("messages", [])
-                    for log_entry in manual_edit_log:
-                        messages.append({
-                            "id": str(uuid4()),
-                            "role": "system",
-                            "content": f"手动修改了大纲: {log_entry.get('summary', '')}",
-                            "created_at": log_entry.get("timestamp", ""),
-                            "meta": {"type": "manual_edit", "edit_log": log_entry},
-                        })
-                    session["messages"] = messages
-                    break
-            item["outline_chat_sessions"] = sessions
-            manifest[index] = item
         self._write_manifest(manifest_path, manifest)
         return item
 
@@ -2963,10 +2053,23 @@ class OutputV2Service:
         manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
         manifest = self._read_manifest(manifest_path)
         index, item = self._find_output(manifest, output_id)
-        if item.get("target_type") != "ppt":
-            raise HTTPException(status_code=400, detail="Only PPT outputs support outline refine")
+        if item.get("target_type") not in ("ppt", "video"):
+            raise HTTPException(status_code=400, detail="Only PPT or video outputs support outline refine")
         if not str(feedback or "").strip():
             raise HTTPException(status_code=400, detail="feedback is required")
+
+        if item.get("target_type") == "video":
+            prev_prompt = str(item.get("prompt") or "").strip()
+            merged = (prev_prompt + "\n\n[分镜反馈]\n" + str(feedback).strip()).strip() if prev_prompt else str(feedback).strip()
+            item["prompt"] = merged
+            item["updated_at"] = self._now()
+            manifest[index] = item
+            self._write_manifest(manifest_path, manifest)
+            self._write_json(
+                self._item_dir(notebook_id, notebook_title, user_id, output_id) / "outline.json",
+                {"outline": item.get("outline") or []},
+            )
+            return item
 
         from fastapi_app.schemas import OutlineRefineRequest
         from fastapi_app.services.paper2ppt_service import Paper2PPTService
@@ -3011,319 +2114,6 @@ class OutputV2Service:
         )
         return item
 
-    async def outline_chat(
-        self,
-        *,
-        notebook_id: str,
-        notebook_title: str,
-        user_id: str,
-        email: str,
-        output_id: str,
-        message: str,
-        active_slide_index: Optional[int],
-        conversation_history: Optional[List[Dict[str, Any]]],
-        api_url: Optional[str],
-        api_key: Optional[str],
-        model: Optional[str],
-    ) -> tuple[Dict[str, Any], str, str, Optional[int], str, Dict[str, Any]]:
-        cleaned_message = str(message or "").strip()
-        if not cleaned_message:
-            raise HTTPException(status_code=400, detail="message is required")
-
-        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
-        manifest = self._read_manifest(manifest_path)
-        index, item = self._find_output(manifest, output_id)
-        item, _ = self._sync_outline_chat_state(item)
-        if item.get("target_type") != "ppt":
-            raise HTTPException(status_code=400, detail="Only PPT outputs support outline chat")
-
-        current_stage = str(item.get("pipeline_stage") or item.get("status") or self.PPT_STAGE_OUTLINE)
-        if current_stage != self.PPT_STAGE_OUTLINE:
-            raise HTTPException(status_code=400, detail="PPT 大纲已确认，当前轮次不支持继续修改大纲")
-
-        outline = self._normalize_ppt_outline(item.get("outline") or [])
-        output_info = self._normalize_ppt_output_info(item.get("output_info"), item=item)
-        style_info = self._normalize_ppt_style_info(item.get("style_info"), guidance_text=str(item.get("guidance_snapshot_text") or ""), prompt=str(item.get("prompt") or ""))
-        outline_global_directives: List[Dict[str, Any]] = []
-        active_session_id = str(item.get("outline_chat_active_session_id") or "").strip()
-        active_session = next(
-            (
-                session
-                for session in item.get("outline_chat_sessions") or []
-                if str(session.get("id") or "").strip() == active_session_id
-            ),
-            None,
-        )
-        if active_session is None:
-            active_session = self._get_active_outline_chat_session(item.get("outline_chat_sessions") or [])
-        history = self._normalize_outline_chat_history((active_session or {}).get("messages") or [])
-        draft_outline = self._normalize_ppt_outline((active_session or {}).get("draft_outline") or outline)
-        draft_output_info = self._normalize_ppt_output_info((active_session or {}).get("draft_output_info") or output_info, item={**item, "outline": draft_outline})
-        draft_style_info = self._normalize_ppt_style_info((active_session or {}).get("draft_style_info") or style_info)
-        draft_global_directives: List[Dict[str, Any]] = []
-        document = self._maybe_load_document(
-            notebook_id=notebook_id,
-            notebook_title=notebook_title,
-            user_id=user_id,
-            document_id=str(item.get("document_id") or ""),
-        )
-        bound_documents = self._load_bound_documents(
-            notebook_id=notebook_id,
-            notebook_title=notebook_title,
-            user_id=user_id,
-            bound_document_ids=item.get("bound_document_ids") or [],
-        )
-        context_snapshot = self._build_outline_chat_context_snapshot(
-            item=item,
-            document=document,
-            bound_documents=bound_documents,
-        )
-        intent_summary = self._build_outline_chat_intent_summary(
-            message=cleaned_message,
-            active_slide_index=active_slide_index,
-            existing_directives=draft_global_directives,
-        )
-        mutation = await self._apply_outline_chat(
-            item=item,
-            outline=draft_outline,
-            output_info=draft_output_info,
-            style_info=draft_style_info,
-            global_directives=draft_global_directives,
-            intent_summary=intent_summary,
-            history=history,
-            conversation_history=None,
-            context_snapshot=context_snapshot,
-            message=cleaned_message,
-            active_slide_index=active_slide_index,
-            email=email,
-            api_url=api_url,
-            api_key=api_key,
-            model=model,
-        )
-        next_outline = self._normalize_ppt_outline(mutation.get("outline") or [])
-        next_output_info = self._normalize_ppt_output_info(mutation.get("draft_output_info") or draft_output_info, item={**item, "outline": next_outline})
-        next_style_info = self._normalize_ppt_style_info(mutation.get("draft_style_info") or draft_style_info)
-        next_global_directives: List[Dict[str, Any]] = []
-        applied_scope, applied_slide_index, assistant_message = self._summarize_outline_chat_change(
-            before_outline=draft_outline,
-            after_outline=next_outline,
-            before_global_directives=[],
-            after_global_directives=next_global_directives,
-            active_slide_index=active_slide_index,
-        )
-        if self._ppt_structured_signature(next_style_info) != self._ppt_structured_signature(draft_style_info):
-            applied_scope = "style"
-            applied_slide_index = None
-            assistant_message = str(mutation.get("assistant_message") or "").strip() or "已整理一版候选风格信息，当前不会改动页级大纲。"
-        assistant_message = str(assistant_message or "").strip() or "我先整理出一版候选大纲，你确认后再推送改动。"
-        change_summary = str(mutation.get("change_summary") or "").strip() or assistant_message
-        normalized_intent_summary = self._normalize_outline_chat_intent_summary(mutation.get("intent_summary") or intent_summary)
-
-        next_history = [
-            *history,
-            {
-                "id": uuid4().hex,
-                "role": "user",
-                "content": cleaned_message,
-                "created_at": self._now(),
-            },
-            {
-                "id": uuid4().hex,
-                "role": "assistant",
-                "content": assistant_message,
-                "created_at": self._now(),
-            },
-        ]
-
-        if active_session is None:
-            active_session = self._create_outline_chat_session(outline, output_info=output_info, style_info=style_info, status="active")
-            item["outline_chat_sessions"] = [*(item.get("outline_chat_sessions") or []), active_session]
-        for session in item.get("outline_chat_sessions") or []:
-            if str(session.get("id") or "") != str(active_session.get("id") or ""):
-                continue
-            session["draft_outline"] = next_outline
-            session["draft_output_info"] = next_output_info
-            session["draft_style_info"] = next_style_info
-            session["draft_global_directives"] = next_global_directives
-            session["messages"] = self._normalize_outline_chat_history(next_history)
-            session["updated_at"] = self._now()
-            session["change_summary"] = change_summary
-            session["intent_summary"] = normalized_intent_summary
-            session["has_pending_changes"] = self._has_pending_outline_changes(
-                outline=outline,
-                draft_outline=next_outline,
-                output_info=output_info,
-                draft_output_info=next_output_info,
-                style_info=style_info,
-                draft_style_info=next_style_info,
-                global_directives=[],
-                draft_global_directives=next_global_directives,
-            )
-            break
-
-        item["pipeline_stage"] = self.PPT_STAGE_OUTLINE
-        item["status"] = self.PPT_STAGE_OUTLINE
-        item["updated_at"] = self._now()
-        item, _ = self._sync_outline_chat_state(item)
-        manifest[index] = item
-        self._write_manifest(manifest_path, manifest)
-        return item, assistant_message, applied_scope, applied_slide_index, change_summary, normalized_intent_summary
-
-    async def apply_outline_chat(
-        self,
-        *,
-        notebook_id: str,
-        notebook_title: str,
-        user_id: str,
-        output_id: str,
-    ) -> tuple[Dict[str, Any], str]:
-        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
-        manifest = self._read_manifest(manifest_path)
-        index, item = self._find_output(manifest, output_id)
-        item, _ = self._sync_outline_chat_state(item)
-        if item.get("target_type") != "ppt":
-            raise HTTPException(status_code=400, detail="Only PPT outputs support outline chat apply")
-
-        current_stage = str(item.get("pipeline_stage") or item.get("status") or self.PPT_STAGE_OUTLINE)
-        if current_stage != self.PPT_STAGE_OUTLINE:
-            raise HTTPException(status_code=400, detail="PPT 大纲已确认，当前轮次不支持继续推送改动")
-
-        active_session_id = str(item.get("outline_chat_active_session_id") or "").strip()
-        sessions = list(item.get("outline_chat_sessions") or [])
-        active_session = next(
-            (session for session in sessions if str(session.get("id") or "").strip() == active_session_id),
-            None,
-        )
-        if active_session is None:
-            active_session = self._get_active_outline_chat_session(sessions)
-        if active_session is None:
-            raise HTTPException(status_code=400, detail="当前没有可推送的大纲会话")
-
-        current_outline = self._normalize_ppt_outline(item.get("outline") or [])
-        current_output_info = self._normalize_ppt_output_info(item.get("output_info"), item=item)
-        current_style_info = self._normalize_ppt_style_info(item.get("style_info"), guidance_text=str(item.get("guidance_snapshot_text") or ""), prompt=str(item.get("prompt") or ""))
-        current_global_directives: List[Dict[str, Any]] = []
-        draft_outline = self._normalize_ppt_outline(active_session.get("draft_outline") or current_outline)
-        draft_output_info = self._normalize_ppt_output_info(active_session.get("draft_output_info") or current_output_info, item={**item, "outline": draft_outline})
-        draft_style_info = self._normalize_ppt_style_info(active_session.get("draft_style_info") or current_style_info)
-        draft_global_directives: List[Dict[str, Any]] = []
-        has_pending_changes = self._has_pending_outline_changes(
-            outline=current_outline,
-            draft_outline=draft_outline,
-            output_info=current_output_info,
-            draft_output_info=draft_output_info,
-            style_info=current_style_info,
-            draft_style_info=draft_style_info,
-            global_directives=current_global_directives,
-            draft_global_directives=draft_global_directives,
-        )
-        if not has_pending_changes:
-            return item, "当前没有待推送的大纲改动。"
-
-        now = self._now()
-        archived_sessions: List[Dict[str, Any]] = []
-        for session in sessions:
-            next_session = dict(session)
-            if str(next_session.get("id") or "").strip() == str(active_session.get("id") or "").strip():
-                next_session["status"] = "applied"
-                next_session["has_pending_changes"] = False
-                next_session["applied_at"] = now
-                next_session["updated_at"] = now
-                next_session["draft_outline"] = draft_outline
-                next_session["draft_output_info"] = draft_output_info
-                next_session["draft_style_info"] = draft_style_info
-                next_session["draft_global_directives"] = draft_global_directives
-            archived_sessions.append(next_session)
-
-        item["outline"] = draft_outline
-        item["output_info"] = draft_output_info
-        item["style_info"] = draft_style_info
-        item["outline_global_directives"] = []
-        item = self._reset_ppt_generation_state(item)
-        item["outline_chat_sessions"] = [
-            *archived_sessions,
-            self._create_outline_chat_session(draft_outline, output_info=draft_output_info, style_info=draft_style_info, status="active"),
-        ]
-        item["pipeline_stage"] = self.PPT_STAGE_OUTLINE
-        item["status"] = self.PPT_STAGE_OUTLINE
-        item["updated_at"] = now
-        item, _ = self._sync_outline_chat_state(item)
-        manifest[index] = item
-        self._write_manifest(manifest_path, manifest)
-        self._write_json(
-            self._item_dir(notebook_id, notebook_title, user_id, output_id) / "outline.json",
-            {"outline": item["outline"]},
-        )
-        return item, "已应用候选修改到产出文档，并开始新一轮对话。"
-
-    def discard_outline_chat(
-        self,
-        *,
-        notebook_id: str,
-        notebook_title: str,
-        user_id: str,
-        output_id: str,
-    ) -> tuple[Dict[str, Any], str]:
-        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
-        manifest = self._read_manifest(manifest_path)
-        index, item = self._find_output(manifest, output_id)
-        item, _ = self._sync_outline_chat_state(item)
-        if item.get("target_type") != "ppt":
-            raise HTTPException(status_code=400, detail="Only PPT outputs support outline chat discard")
-
-        current_stage = str(item.get("pipeline_stage") or item.get("status") or self.PPT_STAGE_OUTLINE)
-        if current_stage != self.PPT_STAGE_OUTLINE:
-            raise HTTPException(status_code=400, detail="PPT 大纲已确认，当前轮次不支持放弃候选改动")
-
-        sessions = list(item.get("outline_chat_sessions") or [])
-        active_session_id = str(item.get("outline_chat_active_session_id") or "").strip()
-        active_session = next(
-            (session for session in sessions if str(session.get("id") or "").strip() == active_session_id),
-            None,
-        )
-        if active_session is None:
-            active_session = self._get_active_outline_chat_session(sessions)
-        if active_session is None:
-            raise HTTPException(status_code=400, detail="当前没有可放弃的大纲候选")
-
-        current_outline = self._normalize_ppt_outline(item.get("outline") or [])
-        current_output_info = self._normalize_ppt_output_info(item.get("output_info"), item=item)
-        current_style_info = self._normalize_ppt_style_info(item.get("style_info"), guidance_text=str(item.get("guidance_snapshot_text") or ""), prompt=str(item.get("prompt") or ""))
-        current_global_directives: List[Dict[str, Any]] = []
-        message = "已放弃上一版候选大纲，继续基于当前正式大纲讨论。"
-        now = self._now()
-        for session in sessions:
-            if str(session.get("id") or "").strip() != str(active_session.get("id") or "").strip():
-                continue
-            history = self._normalize_outline_chat_history(session.get("messages") or [])
-            history.append(
-                {
-                    "id": uuid4().hex,
-                    "role": "system",
-                    "content": message,
-                    "created_at": now,
-                }
-            )
-            session["draft_outline"] = current_outline
-            session["draft_output_info"] = current_output_info
-            session["draft_style_info"] = current_style_info
-            session["draft_global_directives"] = current_global_directives
-            session["messages"] = self._normalize_outline_chat_history(history)
-            session["has_pending_changes"] = False
-            session["updated_at"] = now
-            session["change_summary"] = message
-            session["intent_summary"] = {"mode": "none", "global_directives": [], "slide_targets": []}
-            break
-
-        item["outline_chat_sessions"] = sessions
-        item["pipeline_stage"] = self.PPT_STAGE_OUTLINE
-        item["status"] = self.PPT_STAGE_OUTLINE
-        item["updated_at"] = now
-        item, _ = self._sync_outline_chat_state(item)
-        manifest[index] = item
-        self._write_manifest(manifest_path, manifest)
-        return item, message
-
     def _build_generation_markdown(
         self,
         item: Dict[str, Any],
@@ -3332,28 +2122,6 @@ class OutputV2Service:
         bound_documents: Optional[List[Dict[str, Any]]] = None,
     ) -> str:
         lines = [f"# {item.get('title') or document.get('title') or '文档产出'}", ""]
-        if item.get("target_type") == "ppt":
-            output_info = self._normalize_ppt_output_info(item.get("output_info"), item=item)
-            style_info = self._normalize_ppt_style_info(item.get("style_info"), guidance_text=str(item.get("guidance_snapshot_text") or ""), prompt=str(item.get("prompt") or ""))
-            lines.extend(
-                [
-                    "## 产出信息",
-                    "",
-                    f"- 产出类型：PPT",
-                    f"- 产出标题：{output_info.get('title')}",
-                    f"- 目标页数：{output_info.get('page_count')} 页",
-                    f"- 面向对象：{output_info.get('audience') or '未指定'}",
-                    "",
-                    "## 风格信息",
-                    "",
-                    f"- 风格类型：{style_info.get('label') or style_info.get('preset') or '自定义'}",
-                    f"- 表达语气：{style_info.get('tone')}",
-                    f"- 视觉倾向：{style_info.get('visual_style')}",
-                ]
-            )
-            supplement_prompt = self._normalize_string_list(style_info.get("supplement_prompt"))
-            if supplement_prompt:
-                lines.extend(["- 补充提示词：", *[f"  - {item}" for item in supplement_prompt], ""])
         prompt = str(item.get("prompt") or "").strip()
         if prompt:
             lines.extend(["## 生成意图", "", prompt, ""])
@@ -3448,7 +2216,6 @@ class OutputV2Service:
         api_url: Optional[str],
         api_key: Optional[str],
         model: Optional[str],
-        source_paths: Optional[List[str]] = None,
     ) -> Dict[str, Any]:
         from fastapi_app.routers.kb import (
             generate_flashcards,
@@ -3457,24 +2224,18 @@ class OutputV2Service:
             generate_quiz,
         )
 
+        payload_model = model or settings.KB_CHAT_MODEL
         if target_type == "mindmap":
-            mindmap_paths = [str(path or "").strip() for path in source_paths or [] if str(path or "").strip()]
-            if not mindmap_paths:
-                mindmap_paths = [str(md_path)]
             return await generate_mindmap_from_kb(
-                file_paths=mindmap_paths,
+                file_paths=[str(md_path)],
                 user_id=user_id,
                 email=email,
                 notebook_id=notebook_id,
                 notebook_title=notebook_title,
                 api_url=api_url,
                 api_key=api_key,
-                model=model or "deepseek-v4-flash",
-                mindmap_style="default",
-                max_depth=10,
-                language="zh",
+                model=payload_model,
             )
-        payload_model = model or settings.KB_CHAT_MODEL
         if target_type == "podcast":
             return await generate_podcast_from_kb(
                 file_paths=[str(md_path)],
@@ -3641,6 +2402,17 @@ class OutputV2Service:
             )
             item["pipeline_stage"] = self.PPT_STAGE_PAGES
             item["status"] = self.PPT_STAGE_PAGES
+        elif item["target_type"] == "video":
+            result = dict(item.get("result") or {})
+            rp = str(item.get("result_path") or "").strip()
+            pipeline_dir = Path(rp) if rp else None
+            next_outline = self._attach_video_scene_images_from_disk(
+                item.get("outline") or [],
+                pipeline_dir=pipeline_dir,
+            )
+            item["outline"] = next_outline
+            item["page_reviews"] = self._build_ppt_page_reviews(next_outline, item.get("page_reviews") or [])
+            # 视频成片走 /paper2video/* 专用接口，不在此处将任务置为 pending，以免覆盖 subtitle/pages_ready 进度
         elif item["target_type"] == "report":
             result = await self._generate_report(
                 output_dir=output_dir,
@@ -3678,11 +2450,8 @@ class OutputV2Service:
                     api_url=resolved_api_url,
                     api_key=resolved_api_key,
                     model=model,
-                    source_paths=item.get("source_paths") or [],
                 ),
             )
-            if item["target_type"] == "mindmap":
-                self._materialize_mindmap_text_output(output_dir=output_dir, result=result)
             item["status"] = "generated"
 
         item["result"] = result
@@ -3918,6 +2687,679 @@ class OutputV2Service:
         )
         return item
 
+    def _paper2video_avatar_staging_dir(self, notebook_id: str, notebook_title: str, user_id: str) -> Path:
+        staging = self._base_dir(notebook_id, notebook_title, user_id) / "paper2video_avatar_staging"
+        staging.mkdir(parents=True, exist_ok=True)
+        return staging
+
+    def get_paper2video_options(self) -> Dict[str, Any]:
+        from workflow_engine.toolkits.p2vtool import presets as p2v_presets
+
+        avatars = []
+        for row in p2v_presets.list_system_avatars():
+            avatars.append(
+                {
+                    "id": row["id"],
+                    "label": row["label"],
+                    "preview_url": f"/api/v1/kb/outputs/paper2video/preset-asset?kind=avatar&id={row['id']}",
+                }
+            )
+        voices = []
+        for row in p2v_presets.list_cosyvoice_presets():
+            voices.append(
+                {
+                    "id": row["id"],
+                    "label": row["label"],
+                    "tts_model": row["tts_model"],
+                    "preview_url": f"/api/v1/kb/outputs/paper2video/preset-asset?kind=voice&id={row['id']}",
+                }
+            )
+        default_voice = voices[0]["id"] if voices else "longanyang"
+        return {
+            "avatars": avatars,
+            "voices": voices,
+            "tts_models": [p2v_presets.DEFAULT_TTS_MODEL],
+            "languages": [
+                {"id": "zh", "label": "中文"},
+                {"id": "en", "label": "English"},
+            ],
+            "defaults": {
+                "language": "zh",
+                "tts_model": p2v_presets.DEFAULT_TTS_MODEL,
+                "tts_voice_name": default_voice,
+                "avatar_mode": "none",
+                "avatar_id": avatars[0]["id"] if avatars else "",
+            },
+            "cosyvoice_voice_list_url": p2v_presets.COSYVOICE_VOICE_LIST_URL,
+        }
+
+    def resolve_paper2video_preset_asset(self, *, kind: str, asset_id: str) -> Path:
+        from workflow_engine.toolkits.p2vtool import presets as p2v_presets
+
+        return p2v_presets.resolve_preset_asset_path(kind=kind, asset_id=asset_id)
+
+    def save_paper2video_avatar_upload(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        filename: str,
+        content: bytes,
+    ) -> Dict[str, str]:
+        if not content:
+            raise HTTPException(status_code=400, detail="上传文件为空")
+        ext = Path(filename or "").suffix.lower()
+        if ext not in {".png", ".jpg", ".jpeg", ".webp"}:
+            raise HTTPException(status_code=400, detail="仅支持 PNG / JPG / WEBP 数字人图片")
+        token = uuid4().hex
+        staging = self._paper2video_avatar_staging_dir(notebook_id, notebook_title, user_id)
+        dest = staging / f"{token}{ext or '.png'}"
+        dest.write_bytes(content)
+        return {"upload_token": token, "staging_path": str(dest.resolve())}
+
+    @staticmethod
+    def _normalize_paper2video_config(raw: Optional[Dict[str, Any]], *, options: Optional[Dict[str, Any]] = None) -> Dict[str, str]:
+        defaults = (options or {}).get("defaults") or {}
+        cfg = dict(raw or {})
+        language = str(cfg.get("language") or defaults.get("language") or "zh").strip().lower()
+        if language.startswith("zh"):
+            language = "zh"
+        elif language.startswith("en"):
+            language = "en"
+        else:
+            language = "zh"
+        avatar_mode = str(cfg.get("avatar_mode") or defaults.get("avatar_mode") or "none").strip().lower()
+        if avatar_mode not in {"none", "system", "custom"}:
+            avatar_mode = "none"
+        tts_model = str(cfg.get("tts_model") or defaults.get("tts_model") or "cosyvoice-v3-flash").strip()
+        tts_voice_name = str(cfg.get("tts_voice_name") or defaults.get("tts_voice_name") or "longanyang").strip()
+        avatar_id = str(cfg.get("avatar_id") or defaults.get("avatar_id") or "").strip()
+        upload_token = str(cfg.get("avatar_upload_token") or "").strip()
+        return {
+            "language": language,
+            "tts_model": tts_model or "cosyvoice-v3-flash",
+            "tts_voice_name": tts_voice_name,
+            "avatar_mode": avatar_mode,
+            "avatar_id": avatar_id,
+            "avatar_upload_token": upload_token,
+        }
+
+    def _apply_custom_avatar_to_pipeline(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        pipeline_dir: Path,
+        upload_token: str,
+    ) -> None:
+        token = (upload_token or "").strip()
+        if not token:
+            return
+        staging = self._paper2video_avatar_staging_dir(notebook_id, notebook_title, user_id)
+        matches = list(staging.glob(f"{token}.*"))
+        if not matches:
+            raise HTTPException(status_code=400, detail="自定义数字人上传已过期，请重新上传")
+        avatar_dir = pipeline_dir / "avatar"
+        avatar_dir.mkdir(parents=True, exist_ok=True)
+        dest = avatar_dir / f"custom{matches[0].suffix.lower()}"
+        shutil.copy2(matches[0], dest)
+
+    def _resolve_ref_img_path_for_paper2video(
+        self,
+        *,
+        config: Dict[str, str],
+        pipeline_dir: Path,
+    ) -> str:
+        from workflow_engine.toolkits.p2vtool import presets as p2v_presets
+
+        mode = config.get("avatar_mode") or "none"
+        if mode == "none":
+            return ""
+        if mode == "system":
+            avatar_id = config.get("avatar_id") or "avatar1"
+            try:
+                return p2v_presets.resolve_system_avatar_path(avatar_id)
+            except FileNotFoundError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        avatar_dir = pipeline_dir / "avatar"
+        for name in ("custom.png", "custom.jpg", "custom.jpeg", "custom.webp"):
+            candidate = avatar_dir / name
+            if candidate.is_file():
+                return str(candidate.resolve())
+        raise HTTPException(status_code=400, detail="未找到已上传的自定义数字人，请重新上传")
+
+    def _merge_paper2video_request_overrides(
+        self,
+        item: Dict[str, Any],
+        *,
+        language: Optional[str] = None,
+        tts_model: Optional[str] = None,
+        tts_voice_name: Optional[str] = None,
+        avatar_mode: Optional[str] = None,
+        avatar_id: Optional[str] = None,
+        avatar_upload_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        cfg = dict(item.get("paper2video_config") or {})
+        pairs = {
+            "language": language,
+            "tts_model": tts_model,
+            "tts_voice_name": tts_voice_name,
+            "avatar_mode": avatar_mode,
+            "avatar_id": avatar_id,
+            "avatar_upload_token": avatar_upload_token,
+        }
+        touched = False
+        for key, value in pairs.items():
+            if value is None:
+                continue
+            text = str(value).strip()
+            if not text:
+                continue
+            cfg[key] = text
+            touched = True
+        if touched:
+            item["paper2video_config"] = self._normalize_paper2video_config(cfg)
+            item["language"] = item["paper2video_config"]["language"]
+        return item
+
+    def _build_paper2video_request(
+        self,
+        *,
+        item: Dict[str, Any],
+        pdf_path: Path,
+        api_url: str,
+        api_key: str,
+        model: Optional[str],
+        pipeline_dir: Path,
+        language: Optional[str] = None,
+        tts_model: Optional[str] = None,
+        tts_voice_name: Optional[str] = None,
+    ):
+        from workflow_engine.state import Paper2VideoRequest
+
+        cfg = self._normalize_paper2video_config(item.get("paper2video_config"))
+        lang_raw = (language or item.get("language") or cfg.get("language") or "").strip().lower()
+        if not lang_raw:
+            lang_raw = "zh" if any("\u4e00" <= ch <= "\u9fff" for ch in (item.get("title") or "")) else "en"
+        lang = "zh" if lang_raw.startswith("zh") else "en"
+        ref_img_path = self._resolve_ref_img_path_for_paper2video(config=cfg, pipeline_dir=pipeline_dir)
+        return Paper2VideoRequest(
+            paper_pdf_path=str(pdf_path),
+            language=lang,
+            chat_api_url=api_url or "",
+            api_key=api_key or "",
+            chat_api_key=api_key or "",
+            model=(model or "").strip() or "gpt-4o",
+            tts_model=(tts_model or cfg.get("tts_model") or "cosyvoice-v3-flash").strip(),
+            tts_voice_name=(tts_voice_name or cfg.get("tts_voice_name") or "").strip(),
+            ref_img_path=ref_img_path,
+        )
+
+    def _resolve_primary_pdf_for_paper2video(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        email: str,
+        item: Dict[str, Any],
+    ) -> Path:
+        """Require a local PDF plus MinerU markdown cache (parsed)."""
+        from pathlib import Path
+
+        from fastapi_app.routers.kb import _read_mineru_md_if_cached, _resolve_local_path
+
+        paths = [str(p or "").strip() for p in (item.get("source_paths") or []) if str(p or "").strip()]
+        if not paths:
+            raise HTTPException(
+                status_code=400,
+                detail="未找到源文件路径（source_paths）。请先在创建视频任务时绑定已上传的 PDF。",
+            )
+        pdf_path = None
+        for raw in paths:
+            if raw.startswith("http://") or raw.startswith("https://"):
+                continue
+            local_path = _resolve_local_path(raw)
+            if local_path.suffix.lower() == ".pdf" and local_path.is_file():
+                pdf_path = local_path
+                break
+        if pdf_path is None:
+            raise HTTPException(
+                status_code=400,
+                detail="未在 source_paths 中找到本地 PDF 文件。paper2video 仅支持已上传到知识库的 PDF。",
+            )
+        md_text = _read_mineru_md_if_cached(
+            pdf_path,
+            email,
+            notebook_id,
+            notebook_title=notebook_title,
+        )
+        if not (md_text or "").strip():
+            raise HTTPException(
+                status_code=400,
+                detail="该 PDF 尚未完成解析（无 MinerU Markdown 缓存）。请先在知识库中打开该文档并完成解析后再生成视频。",
+            )
+        return pdf_path
+
+    def _script_pages_from_video_outline(
+        self,
+        outline: List[Dict[str, Any]],
+        *,
+        slide_img_dir: Path,
+    ) -> List[Dict[str, Any]]:
+        outline = self._normalize_ppt_outline(outline)
+        pages: List[Dict[str, Any]] = []
+        for index, slide in enumerate(outline):
+            script_text = str(
+                slide.get("script_text")
+                or slide.get("layout_description")
+                or slide.get("summary")
+                or slide.get("title")
+                or "",
+            ).strip()
+            img = slide_img_dir / f"{index + 1}.png"
+            pages.append(
+                {
+                    "page_num": index,
+                    "image_path": str(img) if img.exists() else "",
+                    "script_text": script_text,
+                }
+            )
+        return pages
+
+    def _copy_slide_previews_to_video_scenes(self, pipeline_dir: Path) -> None:
+        import shutil
+
+        slide_dir = pipeline_dir / "slide_imgs"
+        scenes_dir = pipeline_dir / "video_scenes"
+        if not slide_dir.is_dir():
+            return
+        scenes_dir.mkdir(parents=True, exist_ok=True)
+        for png in sorted(slide_dir.glob("*.png")):
+            try:
+                n = int(png.stem)
+            except ValueError:
+                continue
+            idx0 = max(n - 1, 0)
+            for name in (f"page_{idx0:03d}.png", f"page_{n:03d}.png"):
+                try:
+                    shutil.copy2(png, scenes_dir / name)
+                except Exception:
+                    continue
+
+    async def run_paper2video_subtitle(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        email: str,
+        output_id: str,
+        api_url: Optional[str],
+        api_key: Optional[str],
+        model: Optional[str],
+        tts_model: Optional[str] = None,
+        tts_voice_name: Optional[str] = None,
+        language: Optional[str] = None,
+        avatar_mode: Optional[str] = None,
+        avatar_id: Optional[str] = None,
+        avatar_upload_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        from fastapi_app.routers.kb import _require_llm_config, _require_workflow_available
+        from workflow_engine.state import Paper2VideoState
+        from workflow_engine.workflow import run_workflow
+
+        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
+        manifest = self._read_manifest(manifest_path)
+        index, item = self._find_output(manifest, output_id)
+        if item.get("target_type") != "video":
+            raise HTTPException(status_code=400, detail="仅 video 类型输出可使用 paper2video 字幕接口")
+        item = self._merge_paper2video_request_overrides(
+            item,
+            language=language,
+            tts_model=tts_model,
+            tts_voice_name=tts_voice_name,
+            avatar_mode=avatar_mode,
+            avatar_id=avatar_id,
+            avatar_upload_token=avatar_upload_token,
+        )
+
+        pdf_path = self._resolve_primary_pdf_for_paper2video(
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            user_id=user_id,
+            email=email,
+            item=item,
+        )
+        _require_workflow_available("paper2video_subtitle", feature_label="paper2video 字幕")
+        api_url, api_key = _require_llm_config(api_url, api_key)
+
+        rp = str(item.get("result_path") or "").strip()
+        if not rp:
+            raise HTTPException(status_code=500, detail="视频任务缺少 result_path（video_pipeline）")
+        pipeline_dir = Path(rp).expanduser().resolve()
+        pipeline_dir.mkdir(parents=True, exist_ok=True)
+        cfg = self._normalize_paper2video_config(item.get("paper2video_config"))
+        if cfg.get("avatar_mode") == "custom" and cfg.get("avatar_upload_token"):
+            self._apply_custom_avatar_to_pipeline(
+                notebook_id=notebook_id,
+                notebook_title=notebook_title,
+                user_id=user_id,
+                pipeline_dir=pipeline_dir,
+                upload_token=cfg["avatar_upload_token"],
+            )
+
+        req = self._build_paper2video_request(
+            item=item,
+            pdf_path=pdf_path,
+            api_url=api_url or "",
+            api_key=api_key or "",
+            model=model,
+            pipeline_dir=pipeline_dir,
+            language=language,
+            tts_model=tts_model,
+            tts_voice_name=tts_voice_name,
+        )
+        cfg = self._normalize_paper2video_config(item.get("paper2video_config"))
+        item["language"] = req.language
+        item["paper2video_config"] = cfg
+        self._write_json(pipeline_dir / "paper2video_config.json", cfg)
+        state = Paper2VideoState(request=req, result_path=str(pipeline_dir))
+        # LangGraph 的 ainvoke 返回最终状态；未接收返回值时，传入的 state 不会带上节点内合并的 script_pages。
+        final_state = await run_workflow("paper2video_subtitle", state)
+        if isinstance(final_state, dict):
+            script_pages = list(final_state.get("script_pages") or [])
+        else:
+            script_pages = list(getattr(final_state, "script_pages", None) or [])
+        if not script_pages:
+            meta_json = pipeline_dir / "script_pages.json"
+            if meta_json.is_file():
+                try:
+                    script_pages = json.loads(meta_json.read_text(encoding="utf-8"))
+                    if not isinstance(script_pages, list):
+                        script_pages = []
+                except Exception:
+                    script_pages = []
+        (pipeline_dir / "script_pages.json").write_text(
+            json.dumps(script_pages, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        self._copy_slide_previews_to_video_scenes(pipeline_dir)
+
+        outline = self._normalize_ppt_outline(item.get("outline") or [])
+        # PDF 实际页数可能多于创建产出时的大纲页数；为与 script_pages 对齐，补齐分镜槽位。
+        while len(outline) < len(script_pages):
+            idx = len(outline)
+            outline.append(
+                self._normalize_ppt_outline_item(
+                    {"id": f"slide_{idx + 1}", "title": f"第 {idx + 1} 页", "layout_description": "", "key_points": []},
+                    idx,
+                )
+            )
+        for i, sp in enumerate(script_pages):
+            if i < len(outline):
+                outline[i]["script_text"] = str(sp.get("script_text") or "").strip()
+        outline = self._attach_video_scene_images_from_disk(outline, pipeline_dir=pipeline_dir)
+        item["outline"] = outline
+        item["page_count"] = len(outline)
+        item["page_reviews"] = self._build_ppt_page_reviews(outline, item.get("page_reviews") or [])
+        item["pipeline_stage"] = self.PPT_STAGE_PAGES
+        item["status"] = self.PPT_STAGE_PAGES
+        item["updated_at"] = self._now()
+
+        ctx = {
+            "status": "subtitle_ready",
+            "target_type": "video",
+            "paper_pdf_path": str(pdf_path),
+            "script_page_count": len(script_pages),
+        }
+        self._write_json(pipeline_dir / "context.json", ctx)
+
+        result = dict(item.get("result") or {})
+        result["result_path"] = str(pipeline_dir)
+        result["script_pages"] = script_pages
+        result["paper_pdf_path"] = str(pdf_path)
+        item["result"] = result
+
+        manifest[index] = item
+        self._write_manifest(manifest_path, manifest)
+        output_dir = self._item_dir(notebook_id, notebook_title, user_id, output_id)
+        self._write_json(output_dir / "outline.json", {"outline": outline})
+        self._write_json(output_dir / "result.json", result)
+        log.info("[outputs_v2] paper2video_subtitle output_id=%s pages=%s", output_id, len(script_pages))
+        return item
+
+    async def run_paper2video_continue_after_edit(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        email: str,
+        output_id: str,
+        api_url: Optional[str],
+        api_key: Optional[str],
+        model: Optional[str],
+        tts_model: Optional[str] = None,
+        tts_voice_name: Optional[str] = None,
+        language: Optional[str] = None,
+        avatar_mode: Optional[str] = None,
+        avatar_id: Optional[str] = None,
+        avatar_upload_token: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        from fastapi_app.routers.kb import _require_llm_config, _require_workflow_available
+        from workflow_engine.state import Paper2VideoState
+        from workflow_engine.workflow import run_workflow
+
+        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
+        manifest = self._read_manifest(manifest_path)
+        index, item = self._find_output(manifest, output_id)
+        if item.get("target_type") != "video":
+            raise HTTPException(status_code=400, detail="仅 video 类型输出可使用 paper2video 合成接口")
+        item = self._merge_paper2video_request_overrides(
+            item,
+            language=language,
+            tts_model=tts_model,
+            tts_voice_name=tts_voice_name,
+            avatar_mode=avatar_mode,
+            avatar_id=avatar_id,
+            avatar_upload_token=avatar_upload_token,
+        )
+
+        pdf_path = self._resolve_primary_pdf_for_paper2video(
+            notebook_id=notebook_id,
+            notebook_title=notebook_title,
+            user_id=user_id,
+            email=email,
+            item=item,
+        )
+        _require_workflow_available("paper2video_continue", feature_label="paper2video 合成")
+        api_url, api_key = _require_llm_config(api_url, api_key)
+
+        rp = str(item.get("result_path") or "").strip()
+        pipeline_dir = Path(rp).expanduser().resolve()
+        if not pipeline_dir.is_dir():
+            raise HTTPException(status_code=400, detail="video_pipeline 目录不存在，请先运行字幕阶段")
+
+        slide_img_dir = pipeline_dir / "slide_imgs"
+        outline = self._normalize_ppt_outline(item.get("outline") or [])
+        script_pages = self._script_pages_from_video_outline(outline, slide_img_dir=slide_img_dir)
+        if not script_pages:
+            raise HTTPException(status_code=400, detail="分镜/大纲为空，无法合成视频")
+
+        cfg = self._normalize_paper2video_config(item.get("paper2video_config"))
+        if cfg.get("avatar_mode") == "custom" and cfg.get("avatar_upload_token"):
+            self._apply_custom_avatar_to_pipeline(
+                notebook_id=notebook_id,
+                notebook_title=notebook_title,
+                user_id=user_id,
+                pipeline_dir=pipeline_dir,
+                upload_token=cfg["avatar_upload_token"],
+            )
+
+        req = self._build_paper2video_request(
+            item=item,
+            pdf_path=pdf_path,
+            api_url=api_url or "",
+            api_key=api_key or "",
+            model=model,
+            pipeline_dir=pipeline_dir,
+            language=language,
+            tts_model=tts_model,
+            tts_voice_name=tts_voice_name,
+        )
+        cfg = self._normalize_paper2video_config(item.get("paper2video_config"))
+        item["language"] = req.language
+        item["paper2video_config"] = cfg
+        self._write_json(pipeline_dir / "paper2video_config.json", cfg)
+        state = Paper2VideoState(
+            request=req,
+            result_path=str(pipeline_dir),
+            script_pages=script_pages,
+            slide_img_dir=str(slide_img_dir),
+            subtitle_and_cursor_path=str(pipeline_dir / "subtitle_w_cursor.txt"),
+        )
+        final_state = await run_workflow("paper2video_continue", state)
+        if isinstance(final_state, dict):
+            video_path = str(final_state.get("video_path") or "").strip()
+        else:
+            video_path = str(getattr(final_state, "video_path", "") or "").strip()
+        if not video_path or not Path(video_path).is_file():
+            fallback_mp4 = pipeline_dir / "paper2video.mp4"
+            if fallback_mp4.is_file():
+                video_path = str(fallback_mp4)
+        if not video_path or not Path(video_path).is_file():
+            raise HTTPException(status_code=500, detail="视频生成失败：未找到输出文件 paper2video.mp4")
+
+        from fastapi_app.utils import _to_outputs_url
+
+        mp4_url = _to_outputs_url(video_path)
+        result = dict(item.get("result") or {})
+        result["result_path"] = str(pipeline_dir)
+        result["video_mp4_path"] = mp4_url
+        result["download_url"] = mp4_url
+        result["script_pages"] = script_pages
+        item["result"] = result
+        item["pipeline_stage"] = self.PPT_STAGE_GENERATED
+        item["status"] = self.PPT_STAGE_GENERATED
+        item["updated_at"] = self._now()
+
+        ctx = {
+            "status": "completed",
+            "target_type": "video",
+            "paper_pdf_path": str(pdf_path),
+            "video_mp4_path": mp4_url,
+        }
+        self._write_json(pipeline_dir / "context.json", ctx)
+
+        manifest[index] = item
+        self._write_manifest(manifest_path, manifest)
+        output_dir = self._item_dir(notebook_id, notebook_title, user_id, output_id)
+        self._write_json(output_dir / "result.json", result)
+        log.info("[outputs_v2] paper2video_continue output_id=%s video=%s", output_id, video_path)
+        return item
+
+    async def regenerate_video_scene(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        email: str,
+        output_id: str,
+        scene_index: int,
+        prompt: str,
+        api_url: Optional[str],
+        api_key: Optional[str],
+        model: Optional[str],
+    ) -> Dict[str, Any]:
+        """Placeholder until paper2video workflow is implemented."""
+        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
+        manifest = self._read_manifest(manifest_path)
+        index, item = self._find_output(manifest, output_id)
+        if item.get("target_type") != "video":
+            raise HTTPException(status_code=400, detail="Only video outputs support scene regenerate")
+        outline = self._normalize_ppt_outline(item.get("outline") or [])
+        if scene_index < 0 or scene_index >= len(outline):
+            raise HTTPException(status_code=400, detail="Invalid video scene index")
+        if not str(prompt or "").strip():
+            raise HTTPException(status_code=400, detail="prompt is required")
+        log.info(
+            "[outputs_v2] regenerate_video_scene placeholder output_id=%s scene_index=%s",
+            output_id,
+            scene_index,
+        )
+        item["updated_at"] = self._now()
+        manifest[index] = item
+        self._write_manifest(manifest_path, manifest)
+        return item
+
+    def confirm_video_scene(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        output_id: str,
+        scene_index: int,
+    ) -> Dict[str, Any]:
+        """Confirm a storyboard scene; preview optional until video generation is wired."""
+        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
+        manifest = self._read_manifest(manifest_path)
+        base_dir = self._base_dir(notebook_id, notebook_title, user_id)
+        index, item = self._find_output(manifest, output_id)
+        item, item_changed = self._hydrate_video_item_from_disk(item, base_dir)
+        if item_changed:
+            manifest[index] = item
+            self._write_manifest(manifest_path, manifest)
+        if item.get("target_type") != "video":
+            raise HTTPException(status_code=400, detail="Only video outputs support scene confirm")
+        outline = self._normalize_ppt_outline(item.get("outline") or [])
+        if scene_index < 0 or scene_index >= len(outline):
+            raise HTTPException(status_code=400, detail="Invalid video scene index")
+        page_reviews = self._build_ppt_page_reviews(outline, item.get("page_reviews") or [])
+        page_reviews = self._set_ppt_page_confirmed(page_reviews, page_index=scene_index, confirmed=True)
+        item["page_reviews"] = page_reviews
+        # 视频：逐镜「确认」只表示用户锁定该镜口播稿；成片需再调 paper2video/continue-after-edit，故始终保持 pages_ready
+        item["pipeline_stage"] = self.PPT_STAGE_PAGES
+        item["status"] = self.PPT_STAGE_PAGES
+        item["updated_at"] = self._now()
+        manifest[index] = item
+        self._write_manifest(manifest_path, manifest)
+        return item
+
+    def select_video_scene_version(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        output_id: str,
+        scene_index: int,
+        version_id: str,
+    ) -> Dict[str, Any]:
+        """Placeholder until per-scene version assets are produced."""
+        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
+        manifest = self._read_manifest(manifest_path)
+        index, item = self._find_output(manifest, output_id)
+        if item.get("target_type") != "video":
+            raise HTTPException(status_code=400, detail="Only video outputs support scene version select")
+        outline = self._normalize_ppt_outline(item.get("outline") or [])
+        if scene_index < 0 or scene_index >= len(outline):
+            raise HTTPException(status_code=400, detail="Invalid video scene index")
+        log.info(
+            "[outputs_v2] select_video_scene_version placeholder output_id=%s scene_index=%s version_id=%s",
+            output_id,
+            scene_index,
+            version_id,
+        )
+        item["updated_at"] = self._now()
+        manifest[index] = item
+        self._write_manifest(manifest_path, manifest)
+        return item
+
     async def import_output_to_source(
         self,
         *,
@@ -3930,7 +3372,6 @@ class OutputV2Service:
         manifest = self._read_manifest(manifest_path)
         index, item = self._find_output(manifest, output_id)
         result = item.get("result") or {}
-        output_dir = self._item_dir(notebook_id, notebook_title, user_id, output_id)
         candidate_paths: List[str] = []
         for key in (
             "markdown_path",
@@ -3938,6 +3379,7 @@ class OutputV2Service:
             "pptx_path",
             "ppt_pdf_path",
             "ppt_pptx_path",
+            "video_mp4_path",
             "mindmap_path",
             "audio_path",
             "result_path",
@@ -3956,10 +3398,6 @@ class OutputV2Service:
             if maybe_path.exists() and maybe_path.is_file():
                 local_file = maybe_path
                 break
-        if local_file is None and str(item.get("target_type") or "").strip() == "mindmap":
-            local_file = self._materialize_mindmap_text_output(output_dir=output_dir, result=result)
-            if local_file is not None:
-                item["result"] = result
         if local_file is None:
             raise HTTPException(status_code=400, detail="No generated file can be imported as source")
         paths = get_notebook_paths(notebook_id, notebook_title, user_id)
@@ -3975,54 +3413,3 @@ class OutputV2Service:
             "source_path": str(source_info.original_path),
             "source_url": _to_outputs_url(str(source_info.original_path)),
         }
-
-    def revert_to_outline_stage(self, notebook_id: str, output_id: str, user_id: str) -> Dict[str, Any]:
-        """Revert pipeline stage from pages_ready to outline_ready, preserving history."""
-        import uuid
-        from datetime import datetime
-
-        manifest_path = self._manifest_path(notebook_id, "", user_id)
-        manifest = self._read_manifest(manifest_path)
-        index, item = self._find_output(manifest, output_id)
-
-        if not item:
-            raise HTTPException(status_code=404, detail="Output not found")
-
-        # Snapshot current state
-        snapshot = {
-            "id": str(uuid.uuid4()),
-            "stage": item.get("pipeline_stage", "pages_ready"),
-            "page_reviews": item.get("page_reviews", []),
-            "result": item.get("result"),
-            "reverted_at": datetime.utcnow().isoformat(),
-        }
-
-        # Append to stage_history
-        history = item.get("stage_history", [])
-        history.append(snapshot)
-
-        # Revert stage
-        item["pipeline_stage"] = "outline_ready"
-        item["page_reviews"] = []
-        item["stage_history"] = history
-
-        # Create new chat session
-        new_session_id = str(uuid.uuid4())
-        new_session = {
-            "id": new_session_id,
-            "status": "active",
-            "messages": [],
-            "created_at": datetime.utcnow().isoformat(),
-        }
-        sessions = item.get("outline_chat_sessions", [])
-        for s in sessions:
-            if s.get("status") == "active":
-                s["status"] = "archived"
-        sessions.append(new_session)
-        item["outline_chat_sessions"] = sessions
-        item["outline_chat_active_session_id"] = new_session_id
-        item["updated_at"] = self._now()
-
-        manifest[index] = item
-        self._write_manifest(manifest_path, manifest)
-        return {"status": "ok", "pipeline_stage": "outline_ready", "snapshot_id": snapshot["id"]}

@@ -4,7 +4,7 @@ import { Eye, FolderOpen, Loader2, MessageCircle, MessageSquarePlus, Package, Pl
 import type { KnowledgeFile } from '../types';
 import { formatThinkFlowDateTime } from './thinkflow-document-utils';
 
-type OutputType = 'ppt' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
+type OutputType = 'ppt' | 'video' | 'report' | 'mindmap' | 'podcast' | 'flashcard' | 'quiz';
 
 type SidebarOutput = {
   id: string;

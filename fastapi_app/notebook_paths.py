@@ -9,6 +9,7 @@ All path construction for the new directory layout lives here:
     │                         /markdown/
     ├── vector_store/
     ├── ppt/{timestamp}/
+    ├── video/{timestamp}/
     ├── mindmap/{timestamp}/
     ├── podcast/{timestamp}/
     └── drawio/{timestamp}/

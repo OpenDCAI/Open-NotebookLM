@@ -1829,24 +1829,42 @@ The compilation error message is:
 
   system_prompt_for_p2v_subtitle_and_cursor = '''
 You are an academic researcher presenting your own work at a research conference. You are provided with a slide. 
-Your task: Generate a smooth, engaging, and coherent first-person presentation script for each slide. Each sentence must include one cursor position description (from the current slide content) in order.
+Your task: Generate a smooth, engaging, and coherent first-person presentation script for each slide.
 '''
   task_prompt_for_p2v_subtitle_and_cursor = '''
 Generate a smooth, engaging, and coherent presentation script for a slide, focusing only on the content of the current slide.
+The output content language must be {language}.
 Requirements:
 1. Clearly explain the content of the current slide with academic clarity, brevity, and completeness. Use a professional, formal tone suitable for a research conference. 
 2. Keep the script concise and professional. Do not explain content unrelated to the paper. 
-3. Each sentence must include exactly one cursor position description in the format:
-   script | cursor description
-   If no cursor is needed for a sentence, write "no".
-4. The total script for each slide must not exceed 50 words. 
+3. The total script for each slide must not exceed 50 words, and each slide must contain no more than five sentences. Each sentence should not exceed 10 words.
+4. It is best to avoid using numbers.
 
 Output Format (strict):
-Return a JSON object with a single key "subtitle_and_cursor"
-{{
-  "subtitle_and_cursor": 
-  "sentence 1 | cursor description\nsentence 2 | cursor description\n..."
-}}
+Return a JSON object with a single key "subtitle_and_cursor", and the output content language is {language}.
+{{"subtitle_and_cursor": "sentence 1 sentence 2..."}}
+
+'''
+
+  system_prompt_for_p2v_refine_subtitle_and_cursor = '''
+You are an academic researcher presenting your own work at a research conference. You are provided with a slide image and one long sentence (the script for this slide).
+Your task:
+(1) Split the given long sentence into several complete, short sentences. You must keep the content exactly unchanged—do not add, delete, paraphrase, or modify any wording; only decide where to break the sentence.
+(2) For each short sentence, refer to the slide content and assign exactly one cursor position description indicating where the cursor should point on the slide when that sentence is spoken.
+'''
+  task_prompt_for_p2v_refine_subtitle_and_cursor = '''
+You are given one long sentence (the script for the current slide) and the corresponding slide image.
+
+Task:
+1. Split the long sentence into several complete, short sentences. CRITICAL: The content must remain exactly the same—do not add, delete, change, or paraphrase any word. Only segment the long sentence by deciding where to break it (e.g., at clause boundaries or natural pauses). You may decide how many short sentences to produce and where to break; just ensure each short sentence is complete and the concatenation of all short sentences preserves the original long sentence exactly.
+2. For each short sentence, look at the slide image and give exactly one cursor position description (where the cursor should point on the slide when this sentence is spoken). Use the format:
+   short sentence | cursor description
+   If no cursor is needed for a sentence, use "no" for the cursor description.
+3. The output content language must be {language}. The given long sentence is: {sentence}
+
+Output Format (strict):
+Return a JSON object with a single key "refine_subtitle_and_cursor". The value is a string: multiple lines, each line is "short sentence | cursor description", separated by newline. Language of the content must be {language}.
+{{"refine_subtitle_and_cursor": "sentence 1 | cursor description\\nsentence 2 | cursor description\\n..."}}
 
 '''
 

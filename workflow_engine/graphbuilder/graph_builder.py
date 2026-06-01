@@ -123,8 +123,9 @@ class GenericGraphBuilder:
             # 执行原始节点函数
             if asyncio.iscoroutinefunction(node_func):
                 return await node_func(state)
-            else:
-                return node_func(state)
+            # 同步节点（TTS 合并、ffmpeg、多进程 cursor 等）若直接跑会占满事件循环，
+            # /health 无响应 → monitor 误判宕机 pkill → 前端 Failed to fetch。
+            return await asyncio.to_thread(node_func, state)
         
         return wrapped_node
 

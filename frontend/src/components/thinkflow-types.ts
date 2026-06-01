@@ -15,6 +15,13 @@ export type CitationReference = {
 
 export type PushDestinationType = 'summary' | 'document' | 'guidance';
 
+export type RetrievalMode = 'text' | 'vlm';
+export type ChatAttachment = {
+  id: string;
+  dataUrl: string;
+  fileName: string;
+};
+
 export type ThinkFlowMessage = {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -27,6 +34,7 @@ export type ThinkFlowMessage = {
   sourcePreviewMapping?: Record<string, string>;
   sourceReferenceMapping?: Record<string, CitationReference>;
   meta?: Record<string, any>;
+  attachments?: ChatAttachment[];
 };
 
 export type OutlineDirective = {

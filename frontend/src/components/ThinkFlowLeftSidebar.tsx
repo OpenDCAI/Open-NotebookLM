@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Eye, FolderOpen, Loader2, MessageCircle, MessageSquarePlus, Package, Plus, RefreshCw, Trash2, Upload } from 'lucide-react';
+import { Eye, FolderOpen, ImageIcon, Loader2, MessageCircle, MessageSquarePlus, Package, Plus, RefreshCw, Trash2, Upload } from 'lucide-react';
 
 import type { KnowledgeFile } from '../types';
 import { formatThinkFlowDateTime } from './thinkflow-document-utils';
@@ -36,6 +36,8 @@ type Props = {
   onRefreshFiles: () => void | Promise<void>;
   onToggleSource: (fileId: string) => void;
   onReEmbedSource: (file: KnowledgeFile) => Promise<void> | void;
+  onReindexPdfImages?: () => Promise<void> | void;
+  onExtractPdfImages?: (file: KnowledgeFile) => Promise<void> | void;
   outputs: SidebarOutput[];
   selectedIds: Set<string>;
   uploading: boolean;
@@ -88,6 +90,8 @@ export function ThinkFlowLeftSidebar({
   onRefreshFiles,
   onToggleSource,
   onReEmbedSource,
+  onReindexPdfImages,
+  onExtractPdfImages,
   outputs,
   selectedIds,
   uploading,
@@ -100,8 +104,19 @@ export function ThinkFlowLeftSidebar({
 }: Props) {
   const pendingCount = files.filter((file) => file.vectorStatus === 'pending').length;
   const selectedCount = selectedIds.size;
-  // 正在重新入库的文件 ID 集合（本地 loading 状态）
   const [embeddingIds, setEmbeddingIds] = useState<Set<string>>(new Set());
+  const [reindexing, setReindexing] = useState(false);
+  const [extractingIds, setExtractingIds] = useState<Set<string>>(new Set());
+
+  const handleReindexPdfImages = async () => {
+    if (reindexing || !onReindexPdfImages) return;
+    setReindexing(true);
+    try {
+      await onReindexPdfImages();
+    } finally {
+      setReindexing(false);
+    }
+  };
 
   const handleReEmbed = async (file: KnowledgeFile) => {
     if (embeddingIds.has(file.id)) return;
@@ -110,6 +125,20 @@ export function ThinkFlowLeftSidebar({
       await onReEmbedSource(file);
     } finally {
       setEmbeddingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(file.id);
+        return next;
+      });
+    }
+  };
+
+  const handleExtractImages = async (file: KnowledgeFile) => {
+    if (extractingIds.has(file.id) || !onExtractPdfImages) return;
+    setExtractingIds((prev) => new Set([...prev, file.id]));
+    try {
+      await onExtractPdfImages(file);
+    } finally {
+      setExtractingIds((prev) => {
         const next = new Set(prev);
         next.delete(file.id);
         return next;
@@ -195,6 +224,17 @@ export function ThinkFlowLeftSidebar({
             >
               <RefreshCw size={14} className={loadingFiles ? 'is-spinning' : ''} />
             </button>
+            {onReindexPdfImages && (
+              <button
+                type="button"
+                className="thinkflow-left-refresh-btn"
+                onClick={() => void handleReindexPdfImages()}
+                disabled={reindexing}
+                title={reindexing ? '图片索引重建中…' : '重建 PDF 图片索引（VLM 模式）'}
+              >
+                {reindexing ? <Loader2 size={14} className="is-spinning" /> : <ImageIcon size={14} />}
+              </button>
+            )}
           </div>
 
           <div className="thinkflow-left-scroll">
@@ -250,6 +290,20 @@ export function ThinkFlowLeftSidebar({
                         {isReEmbedding
                           ? <Loader2 size={12} className="is-spinning" />
                           : <Upload size={12} />}
+                      </button>
+                    )}
+                    {/* 提取PDF图片按钮：仅对已入库的 doc 类型文件显示 */}
+                    {onExtractPdfImages && isEmbedded && file.type === 'doc' && (
+                      <button
+                        type="button"
+                        className="thinkflow-file-action-icon"
+                        onClick={(e) => { e.stopPropagation(); void handleExtractImages(file); }}
+                        disabled={extractingIds.has(file.id)}
+                        title={extractingIds.has(file.id) ? '提取中…' : '查看PDF图片'}
+                      >
+                        {extractingIds.has(file.id)
+                          ? <Loader2 size={12} className="is-spinning" />
+                          : <ImageIcon size={12} />}
                       </button>
                     )}
                     <button

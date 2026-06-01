@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
@@ -59,7 +60,7 @@ import {
   type StructuredPushTransform,
   type ThinkFlowFocusState,
 } from './thinkflow-document-utils';
-import type { ChatMode } from './thinkflow-types';
+import type { ChatMode, RetrievalMode, ChatAttachment } from './thinkflow-types';
 import { splitSummaryCards } from './summaryCards';
 import type { NotebookContext } from './TableAnalysisPanel';
 import { usePptPageReviewManager } from './usePptPageReviewManager';
@@ -104,6 +105,8 @@ type ThinkFlowMessage = {
   sourcePreviewMapping?: Record<string, string>;
   sourceReferenceMapping?: Record<string, CitationReference>;
   meta?: Record<string, any>;
+  attachments?: ChatAttachment[];
+  retrievedImages?: string[];
 };
 
 type OutlineDirective = {
@@ -258,6 +261,7 @@ type ConversationMessageDraft = {
   sourceMapping?: Record<string, string>;
   sourcePreviewMapping?: Record<string, string>;
   sourceReferenceMapping?: Record<string, CitationReference>;
+  retrievedImages?: string[];
 };
 
 type OutlineChatSession = {
@@ -855,6 +859,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
 
   // ─── 表格分析模式状态 ──────────────────────────────────────────────────────
   const [chatMode, setChatMode] = useState<ChatMode>('chat');
+  const [retrievalMode, setRetrievalMode] = useState<RetrievalMode>('text');
+  const [chatAttachments, setChatAttachments] = useState<ChatAttachment[]>([]);
   const [activeDataset, setActiveDataset] = useState<KnowledgeFile | null>(null);
   const [dataSessionId, setDataSessionId] = useState<string | null>(null);
   // ref 防重注册：fileId → datasource_id (int)，不触发重渲染
@@ -1748,6 +1754,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             sourceMapping: item.sourceMapping,
             sourcePreviewMapping: item.sourcePreviewMapping,
             sourceReferenceMapping: item.sourceReferenceMapping,
+            retrievedImages: (item as any).retrievedImages,
           }))
         : welcomeMessages,
     );
@@ -1809,10 +1816,30 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     return nextId;
   };
 
+  // Creates a conversation ID silently without resetting the chat UI.
+  // Used internally when a conversation must exist before sending the first message.
+  const createConversationSilent = async (): Promise<string> => {
+    const response = await apiFetch('/api/v1/kb/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: effectiveUser?.email || effectiveUser?.id || 'local',
+        user_id: effectiveUser?.id || 'local',
+        notebook_id: notebook.id,
+      }),
+    });
+    const data = await parseJson<{ conversation_id?: string; conversation?: ConversationListItem }>(response);
+    const nextId = String(data?.conversation_id || '').trim();
+    if (!nextId) throw new Error('创建新对话失败');
+    setConversationId(nextId);
+    void refreshConversationList().catch(() => {});
+    return nextId;
+  };
+
   const ensureConversationId = async () => {
     if (conversationId) return conversationId;
     try {
-      return await createConversation();
+      return await createConversationSilent();
     } catch {}
     return '';
   };
@@ -1826,6 +1853,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         sourceMapping: item.sourceMapping,
         sourcePreviewMapping: item.sourcePreviewMapping,
         sourceReferenceMapping: item.sourceReferenceMapping,
+        retrievedImages: item.retrievedImages,
       }))
       .filter((item) => item.content);
     if (rows.length === 0) return;
@@ -1915,6 +1943,62 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       await refreshFiles();
     } catch {
       pushToast('入库失败，请稍后重试', 'error', 4000);
+    }
+  };
+
+  const handleReindexPdfImages = async () => {
+    try {
+      await apiFetch('/api/v1/kb/reindex-pdf-images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || effectiveUser?.id || 'local',
+        }),
+      });
+      pushToast('PDF 图片索引已重建，VLM 模式可以检索图片了', 'success', 4000);
+    } catch {
+      pushToast('图片索引重建失败，请稍后重试', 'error', 4000);
+    }
+  };
+
+  const handleExtractPdfImages = async (file: KnowledgeFile) => {
+    const fileId = file.kbFileId || file.id;
+    try {
+      const params = new URLSearchParams({
+        notebook_id: notebook.id,
+        email: effectiveUser?.email || effectiveUser?.id || 'local',
+        file_id: fileId,
+      });
+      const response = await apiFetch(`/api/v1/kb/pdf-images?${params.toString()}`);
+      const data = await parseJson<{ figures: Array<{ url: string; content: string }>; pages: Array<{ url: string; page_num: number }> }>(response);
+      const figures = data.figures || [];
+      const pages = data.pages || [];
+      const allImages = [
+        ...figures.map((f) => f.url),
+        ...pages.map((p) => p.url),
+      ];
+      if (allImages.length === 0) {
+        pushToast('该 PDF 暂无提取到的图片，请先点击"重建图片索引"', 'warning', 4000);
+        return;
+      }
+      const figureCount = figures.length;
+      const pageCount = pages.length;
+      const summary = [
+        figureCount > 0 ? `${figureCount} 张插图` : '',
+        pageCount > 0 ? `${pageCount} 张页面截图` : '',
+      ].filter(Boolean).join('、');
+      const galleryMessage: ThinkFlowMessage = {
+        id: `gallery-${Date.now()}`,
+        role: 'assistant',
+        content: `📄 **${file.name}** 的图片提取结果（${summary}）：`,
+        time: new Date().toISOString(),
+        retrievedImages: allImages,
+      };
+      setChatMessages((prev) => [...prev, galleryMessage]);
+    } catch {
+      pushToast('获取 PDF 图片失败，请稍后重试', 'error', 4000);
     }
   };
 
@@ -2154,6 +2238,19 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       >
         {message.content}
       </ReactMarkdown>
+      {message.retrievedImages && message.retrievedImages.length > 0 && (
+        <div className="thinkflow-retrieved-images">
+          {message.retrievedImages.map((url, index) => (
+            <img
+              key={index}
+              src={url}
+              alt={`检索图片 ${index + 1}`}
+              className="thinkflow-retrieved-image"
+              loading="lazy"
+            />
+          ))}
+        </div>
+      )}
       {message.meta?.type === 'ppt_outline_draft' ? (
         <div className="thinkflow-inline-outline-card" data-testid="ppt-outline-inline-card">
           <div className="thinkflow-inline-outline-card-head">
@@ -3284,6 +3381,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       role: 'user',
       content: query,
       time: formatThinkFlowTime(new Date()),
+      attachments: chatAttachments.length > 0 ? [...chatAttachments] : undefined,
     };
     const assistantMessage: ThinkFlowMessage = {
       id: `assistant_${Date.now()}`,
@@ -3294,6 +3392,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
 
     setChatMessages((previous) => [...previous, userMessage, assistantMessage]);
     setChatInput('');
+    setChatAttachments([]);
 
     try {
       const targetConversationId = await ensureConversationId();
@@ -3331,6 +3430,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           email: effectiveUser?.email || '',
           user_id: effectiveUser?.id || 'local',
           notebook_id: notebook.id,
+          retrieval_mode: retrievalMode,
+          image_attachments: chatAttachments.map((a) => a.dataUrl),
         }),
       });
 
@@ -3344,6 +3445,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       let sourceMapping: ThinkFlowMessage['sourceMapping'];
       let sourcePreviewMapping: ThinkFlowMessage['sourcePreviewMapping'];
       let sourceReferenceMapping: ThinkFlowMessage['sourceReferenceMapping'];
+      let retrievedImages: ThinkFlowMessage['retrievedImages'];
 
       const syncAssistantMessage = (nextContent = fullAnswer) => {
         setChatMessages((previous) =>
@@ -3356,6 +3458,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   sourceMapping,
                   sourcePreviewMapping,
                   sourceReferenceMapping,
+                  retrievedImages,
                 }
               : item,
           ),
@@ -3378,9 +3481,12 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             sourcePreviewMapping = payload.source_preview_mapping || undefined;
             sourceReferenceMapping = payload.source_reference_mapping || undefined;
             syncAssistantMessage();
+          } else if (payload.type === 'images') {
+            retrievedImages = payload.images || undefined;
+            syncAssistantMessage();
           } else if (payload.type === 'delta') {
             fullAnswer += payload.delta || '';
-            syncAssistantMessage();
+            flushSync(() => syncAssistantMessage());
           } else if (payload.type === 'done') {
             fullAnswer = payload.answer || fullAnswer;
             syncAssistantMessage();
@@ -3398,6 +3504,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           sourceMapping = payload.source_mapping || undefined;
           sourcePreviewMapping = payload.source_preview_mapping || undefined;
           sourceReferenceMapping = payload.source_reference_mapping || undefined;
+          syncAssistantMessage();
+        } else if (payload.type === 'images') {
+          retrievedImages = payload.images || undefined;
           syncAssistantMessage();
         } else if (payload.type === 'delta') {
           fullAnswer += payload.delta || '';
@@ -3418,6 +3527,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           sourceMapping,
           sourcePreviewMapping,
           sourceReferenceMapping,
+          retrievedImages,
         },
       ]);
       if (targetConversationId) {
@@ -4593,6 +4703,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           onUpload={handleUpload}
           onAddSource={() => setShowAddSourceModal(true)}
           onReEmbedSource={handleReEmbedSource}
+          onReindexPdfImages={handleReindexPdfImages}
+          onExtractPdfImages={handleExtractPdfImages}
           conversationList={conversationList}
           activeConversationId={conversationId}
           onSelectConversation={(id) => void loadConversationMessages(id)}
@@ -4652,6 +4764,10 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             userEmail: effectiveUser?.email || '',
           }}
           onSetActivePptSlideIndex={setActivePptSlideIndex}
+          retrievalMode={retrievalMode}
+          onRetrievalModeChange={setRetrievalMode}
+          chatAttachments={chatAttachments}
+          onAttachmentsChange={setChatAttachments}
         />
 
         {rightPanelOpen ? (

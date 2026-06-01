@@ -1,4 +1,5 @@
 import type { MutableRefObject, ReactNode, RefObject } from 'react';
+import { useRef, useCallback } from 'react';
 import { Check, FileText, MessageSquarePlus, Plus } from 'lucide-react';
 
 import type {
@@ -8,6 +9,8 @@ import type {
   OutlineSection,
   WorkspaceMode,
   ChatMode,
+  RetrievalMode,
+  ChatAttachment,
 } from './thinkflow-types';
 import type { KnowledgeFile } from '../types';
 import { TableAnalysisPanel, type NotebookContext } from './TableAnalysisPanel';
@@ -52,6 +55,10 @@ type ThinkFlowCenterPanelProps = {
   dataSessionId: string | null;
   notebookContext: NotebookContext;
   chatDisabled?: boolean;
+  retrievalMode: RetrievalMode;
+  onRetrievalModeChange: (mode: RetrievalMode) => void;
+  chatAttachments: ChatAttachment[];
+  onAttachmentsChange: (attachments: ChatAttachment[]) => void;
 };
 
 export function ThinkFlowCenterPanel({
@@ -92,7 +99,49 @@ export function ThinkFlowCenterPanel({
   activeDataset,
   dataSessionId,
   notebookContext,
+  retrievalMode,
+  onRetrievalModeChange,
+  chatAttachments,
+  onAttachmentsChange,
 }: ThinkFlowCenterPanelProps) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileSelect = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    files.forEach((file) => {
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const dataUrl = ev.target?.result as string;
+        onAttachmentsChange([
+          ...chatAttachments,
+          { id: `${Date.now()}_${Math.random()}`, dataUrl, fileName: file.name },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+    e.target.value = '';
+  }, [chatAttachments, onAttachmentsChange]);
+
+  const handlePaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = Array.from(e.clipboardData.items);
+    const imageItems = items.filter((item) => item.type.startsWith('image/'));
+    if (imageItems.length === 0) return;
+    e.preventDefault();
+    imageItems.forEach((item) => {
+      const file = item.getAsFile();
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const dataUrl = ev.target?.result as string;
+        onAttachmentsChange([
+          ...chatAttachments,
+          { id: `${Date.now()}_${Math.random()}`, dataUrl, fileName: 'pasted-image.png' },
+        ]);
+      };
+      reader.readAsDataURL(file);
+    });
+  }, [chatAttachments, onAttachmentsChange]);
+
   const formatReferenceDocumentLabel = (doc: ThinkFlowDocument) => {
     const focusState = doc.focus_state;
     if (focusState?.type === 'sections' && Array.isArray(focusState.section_ids) && focusState.section_ids.length > 0) {
@@ -255,6 +304,19 @@ export function ThinkFlowCenterPanel({
                     <span>{message.role === 'assistant' ? 'AI' : '你'}</span>
                     <span>{message.time}</span>
                   </div>
+                  {message.attachments && message.attachments.length > 0 && (
+                    <div className="thinkflow-bubble-attachments">
+                      {message.attachments.map((att) => (
+                        <img
+                          key={att.id}
+                          src={att.dataUrl}
+                          alt={att.fileName}
+                          className="thinkflow-bubble-attachment-img"
+                          title={att.fileName}
+                        />
+                      ))}
+                    </div>
+                  )}
                   {renderMessageMarkdown(message)}
                 </div>
                 {!isOutlineChatMode && (message.role === 'assistant' || message.role === 'user') ? (
@@ -316,7 +378,7 @@ export function ThinkFlowCenterPanel({
             className="thinkflow-multi-select-input"
             value={multiSelectPrompt}
             onChange={(event) => setMultiSelectPrompt(event.target.value)}
-            placeholder="可选：补充你希望这组内容如何被整理，例如‘沉淀成产出指导，强调结论和边界条件’"
+            placeholder="可选：补充你希望这组内容如何被整理，例如'沉淀成产出指导，强调结论和边界条件'"
             rows={2}
           />
         </div>
@@ -326,6 +388,23 @@ export function ThinkFlowCenterPanel({
       {chatMode !== 'table-analysis' && (
       <div className="thinkflow-chat-input-area">
         <div className="thinkflow-chat-input-box">
+          {/* 附件缩略图区 */}
+          {chatAttachments.length > 0 && (
+            <div className="thinkflow-attach-strip">
+              {chatAttachments.map((att) => (
+                <div key={att.id} className="thinkflow-attach-thumb">
+                  <img src={att.dataUrl} alt={att.fileName} />
+                  <button
+                    type="button"
+                    className="thinkflow-attach-thumb-remove"
+                    onClick={() => onAttachmentsChange(chatAttachments.filter((a) => a.id !== att.id))}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
           <textarea
             value={chatInput}
             onChange={(event) => setChatInput(event.target.value)}
@@ -335,13 +414,26 @@ export function ThinkFlowCenterPanel({
                 void handleSendMessage();
               }
             }}
-            placeholder={chatPlaceholder || '输入消息，围绕当前素材梳理你真正想要的结论...'}
+            onPaste={handlePaste}
+            placeholder={
+              retrievalMode === 'vlm'
+                ? '👁 VLM 模式：输入文字，或粘贴 / 附加图片进行多模态检索...'
+                : (chatPlaceholder || '输入消息，围绕当前素材梳理你真正想要的结论...')
+            }
             className="thinkflow-chat-input"
             rows={2}
           />
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            style={{ display: 'none' }}
+            onChange={handleFileSelect}
+          />
           <div className="thinkflow-chat-toolbar">
             {isOutlineChatMode ? (
-              <span className="thinkflow-doc-check-tip">当前消息会综合来源、梳理文档、产出指导和当前产出文档，先整理这份 PPT 的候选修改；只有点击“应用候选修改”后才会覆盖正式产出文档，也不会写入普通问答历史。</span>
+              <span className="thinkflow-doc-check-tip">当前消息会综合来源、梳理文档、产出指导和当前产出文档，先整理这份 PPT 的候选修改；只有点击"应用候选修改"后才会覆盖正式产出文档，也不会写入普通问答历史。</span>
             ) : (
               <>
                 <button type="button" className="thinkflow-toolbar-btn">
@@ -372,10 +464,29 @@ export function ThinkFlowCenterPanel({
                     + 新建梳理
                   </button>
                 ) : null}
+                <div className="thinkflow-toolbar-divider" />
+                <button
+                  type="button"
+                  className={`thinkflow-retrieval-mode-btn${retrievalMode === 'vlm' ? ' is-active' : ''}`}
+                  onClick={() => onRetrievalModeChange(retrievalMode === 'vlm' ? 'text' : 'vlm')}
+                  title={retrievalMode === 'vlm' ? '当前：VLM 多模态检索，点击切换为文本检索' : '当前：文本检索，点击切换为 VLM 多模态检索'}
+                >
+                  {retrievalMode === 'vlm' ? '👁 VLM' : '📝 文本'}
+                </button>
+                {retrievalMode === 'vlm' && (
+                  <button
+                    type="button"
+                    className="thinkflow-toolbar-btn"
+                    onClick={() => fileInputRef.current?.click()}
+                    title="附加图片"
+                  >
+                    📎
+                  </button>
+                )}
               </>
             )}
             <div className="thinkflow-toolbar-spacer" />
-            <button type="button" className="thinkflow-send-btn" onClick={() => void handleSendMessage()} disabled={!chatInput.trim() || chatLoading}>
+            <button type="button" className="thinkflow-send-btn" onClick={() => void handleSendMessage()} disabled={(!chatInput.trim() && chatAttachments.length === 0) || chatLoading}>
               {chatLoading ? '...' : '↑'}
             </button>
           </div>

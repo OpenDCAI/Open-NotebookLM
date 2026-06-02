@@ -86,11 +86,15 @@ export function ThinkFlowAddSourceModal({
   // ── File Upload ──
   const uploadFiles = useCallback(
     async (fileList: FileList) => {
-      if (fileList.length === 0) return;
+      // Snapshot files immediately — FileList (and DataTransfer.files) is a live
+      // object that gets cleared as soon as the input is reset or the drag event
+      // ends, so we can't rely on fileList.length after the first await.
+      const files = Array.from(fileList);
+      if (files.length === 0) return;
       setLoading(true);
       resetMessages();
       try {
-        for (const file of Array.from(fileList)) {
+        for (const file of files) {
           const formData = new FormData();
           formData.append('file', file);
           formData.append('email', effectiveEmail);
@@ -100,7 +104,7 @@ export function ThinkFlowAddSourceModal({
           const res = await apiFetch('/api/v1/kb/upload', { method: 'POST', body: formData });
           await parseJson(res);
         }
-        setSuccess(`已上传 ${fileList.length} 个文件`);
+        setSuccess(`已上传 ${files.length} 个文件`);
         onSourceAdded();
       } catch (err: any) {
         setError(err?.message || '上传失败');
@@ -334,7 +338,7 @@ export function ThinkFlowAddSourceModal({
             >
               {loading ? <Loader2 size={22} className="is-spinning" /> : <Upload size={22} />}
               <span>{loading ? '上传中...' : '拖拽文件到此处，或点击选择文件'}</span>
-              <small>支持 PDF / Word / 图片 / CSV 等格式，可多选</small>
+              <small>支持 PDF / Word / 图片 / 音频 / 视频 / CSV 等格式，可多选</small>
               <input ref={fileInputRef} type="file" multiple hidden onChange={handleFileChange} disabled={loading} />
             </div>
           ) : null}

@@ -122,6 +122,10 @@ type ThinkFlowDocument = {
   content?: string;
   created_at: string;
   updated_at: string;
+  document_type?: 'summary_doc' | 'output_doc';
+  focus_state?: Partial<ThinkFlowFocusState>;
+  stash_items?: DocumentStashItem[];
+  change_logs?: DocumentChangeLog[];
   version_count?: number;
   status_tokens?: Record<string, number>;
   push_traces?: DocumentPushTrace[];
@@ -151,6 +155,19 @@ type DocumentPushTrace = {
   text_preview?: string;
   block_text?: string;
   source_refs?: DocumentSourceRef[];
+};
+
+type DocumentStashItem = {
+  id: string;
+  content: string;
+  created_at?: string;
+};
+
+type DocumentChangeLog = {
+  id: string;
+  summary: string;
+  timestamp: string;
+  type: string;
 };
 
 type ThinkFlowVersion = {
@@ -877,6 +894,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const [conversationActiveDocumentId, setConversationActiveDocumentId] = useState('');
   const [documentTitle, setDocumentTitle] = useState('');
   const [documentContent, setDocumentContent] = useState('');
+  const [documentFocusState, setDocumentFocusState] = useState<ThinkFlowFocusState>(() => normalizeFocusState());
+  const [documentStashItems, setDocumentStashItems] = useState<DocumentStashItem[]>([]);
+  const [documentChangeLogs, setDocumentChangeLogs] = useState<DocumentChangeLog[]>([]);
   const [documentSaving, setDocumentSaving] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [showVersionPanel, setShowVersionPanel] = useState(false);
@@ -1025,6 +1045,10 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const activeDocument = useMemo(
     () => documents.find((item) => item.id === activeDocumentId) || null,
     [activeDocumentId, documents],
+  );
+  const conversationActiveDocument = useMemo(
+    () => documents.find((item) => item.id === conversationActiveDocumentId) || null,
+    [conversationActiveDocumentId, documents],
   );
 
   const summaryItems = useMemo(
@@ -1292,8 +1316,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     const versionData = await parseJson<{ versions: ThinkFlowVersion[] }>(versionResponse);
     setDocumentTitle(detailData.document.title || '');
     setDocumentContent(detailData.document.content || '');
+    setDocumentFocusState(normalizeFocusState(detailData.document.focus_state));
+    setDocumentStashItems(Array.isArray(detailData.document.stash_items) ? detailData.document.stash_items : []);
+    setDocumentChangeLogs(Array.isArray(detailData.document.change_logs) ? detailData.document.change_logs : []);
     setVersions(versionData.versions || []);
-      setDocuments((previous) =>
+    setDocuments((previous) =>
       previous.map((item) => (item.id === documentId ? { ...item, ...detailData.document } : item)),
     );
     return detailData.document;
@@ -1313,6 +1340,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         setActiveDocumentId('');
         setDocumentTitle('');
         setDocumentContent('');
+        setDocumentFocusState(normalizeFocusState());
+        setDocumentStashItems([]);
+        setDocumentChangeLogs([]);
         setVersions([]);
         setEditMode(false);
         setShowVersionPanel(false);
@@ -1672,6 +1702,12 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       setGlobalError(error?.message || '加载对话工作区状态失败');
       return null;
     }
+  };
+
+  const setConversationActiveDocument = async (documentId: string) => {
+    if (!documentId) return;
+    setConversationActiveDocumentId(documentId);
+    await persistConversationWorkspaceState({ activeDocId: documentId });
   };
 
   const loadConversationMessages = async (targetConversationId: string) => {
@@ -3044,9 +3080,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     setMultiSelectPrompt('');
   };
 
-  const createDocument = async (title?: string) => {
+  const createDocument = async (
+    title?: string,
+    options?: { documentType?: 'summary_doc' | 'output_doc'; metadata?: Record<string, any>; content?: string },
+  ) => {
     try {
-      const nextTitle = (title || '').trim() || `梳理摘要 ${documents.length + 1}`;
+      const isOutputDoc = options?.documentType === 'output_doc';
+      const nextTitle = (title || '').trim() || (isOutputDoc ? `PPT 产出文档 ${documents.length + 1}` : `梳理摘要 ${documents.length + 1}`);
       const response = await apiFetch('/api/v1/kb/documents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3056,7 +3096,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           user_id: effectiveUser?.id || 'local',
           email: effectiveUser?.email || '',
           title: nextTitle,
-          content: '',
+          content: options?.content ?? '',
+          document_type: options?.documentType || 'summary_doc',
+          metadata: options?.metadata || {},
         }),
       });
       const data = await parseJson<{ document: ThinkFlowDocument }>(response);
@@ -3067,6 +3109,66 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     } catch (error: any) {
       setGlobalError(error?.message || '创建文档失败');
       return '';
+    }
+  };
+
+  const createOutputDocument = async (params?: {
+    title?: string;
+    sourceRefs?: Array<{ id: string; type: 'document' | 'output_document'; title: string; metadata?: Record<string, any> }>;
+  }) => {
+    const sourceRefs = [
+      ...(params?.sourceRefs || conversationSourceRefs),
+      ...(activeDocumentId && !(params?.sourceRefs || []).some((ref) => ref.id === activeDocumentId)
+        ? [{
+            id: activeDocumentId,
+            type: activeDocument?.document_type === 'output_doc' ? 'output_document' : 'document',
+            title: activeDocument?.title || documentTitle || '当前文档',
+            metadata: { range: 'body' },
+          } as ConversationSourceRef]
+        : []),
+    ];
+    const id = await createDocument(params?.title || 'PPT 产出文档', {
+      documentType: 'output_doc',
+      metadata: {
+        output_type: 'ppt',
+        source_refs: sourceRefs,
+        audience: '',
+        style: '',
+        goal: '',
+      },
+      content: '# PPT 产出文档\n\n## 产出目标\n\n[待补充]\n\n## 大纲方向\n\n[待补充]',
+    });
+    if (id) {
+      await setConversationActiveDocument(id);
+      setRightMode('doc');
+      setCaptureFeedback('已创建 PPT 产出文档，可继续编辑后进入 PPT 工作台。');
+    }
+  };
+
+  const updateDisplayedDocumentFocus = async (nextFocus: ThinkFlowFocusState) => {
+    if (!activeDocumentId) return;
+    setDocumentFocusState(nextFocus);
+    try {
+      const response = await apiFetch(`/api/v1/kb/documents/${activeDocumentId}/focus`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+          focus_state: nextFocus,
+        }),
+      });
+      const data = await parseJson<{ focus_state: ThinkFlowFocusState }>(response);
+      const normalized = normalizeFocusState(data.focus_state);
+      setDocumentFocusState(normalized);
+      setDocuments((previous) =>
+        previous.map((item) => (item.id === activeDocumentId ? { ...item, focus_state: normalized } : item)),
+      );
+    } catch (error: any) {
+      setGlobalError(error?.message || '更新文档焦点失败');
+      await loadDocumentDetail(activeDocumentId);
     }
   };
 
@@ -5447,7 +5549,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const documentPanelProps = {
     documents: documents.map((doc) => ({ id: doc.id, title: doc.title })),
     activeDocumentId,
-    activeDocument: activeDocument ? { id: activeDocument.id, title: activeDocument.title } : null,
+    activeDocument: activeDocument ? { id: activeDocument.id, title: activeDocument.title, document_type: activeDocument.document_type } : null,
+    pendingDocument: null,
     documentTitle,
     documentContent,
     editMode,
@@ -5457,6 +5560,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     documentSections,
     renderDocumentSection,
     docBodyRef,
+    focusState: documentFocusState,
+    stashItems: documentStashItems,
+    changeLogs: documentChangeLogs,
+    conversationActiveDocumentId,
+    conversationActiveDocument: conversationActiveDocument
+      ? { id: conversationActiveDocument.id, title: conversationActiveDocument.title }
+      : null,
     guidanceItems: guidanceItems.map((item) => ({ id: item.id, title: item.title })),
     selectedGuidanceIds,
     outputButtons,
@@ -5467,7 +5577,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       setRightMode('doc');
       await loadDocumentDetail(id);
     },
+    onActivateDisplayedDocument: async () => {
+      if (!activeDocumentId) return;
+      await setConversationActiveDocument(activeDocumentId);
+    },
+    onClearFocus: async () => updateDisplayedDocumentFocus(normalizeFocusState()),
     onCreateDocument: createDocument,
+    onCreateOutputDocument: createOutputDocument,
     onToggleDocumentEdit: () => setEditMode((previous) => !previous),
     onToggleVersionPanel: () => setShowVersionPanel((previous) => !previous),
     onDeleteDocument: deleteDocument,

@@ -51,7 +51,13 @@ fi
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" >> logs/monitor.log; }
 
-is_port_up()   { ss -tlnH "sport = :$1" 2>/dev/null | grep -q LISTEN; }
+is_port_up()   {
+    if command -v ss >/dev/null 2>&1; then
+        ss -tlnH "sport = :$1" 2>/dev/null | grep -q LISTEN
+    else
+        lsof -iTCP:"$1" -sTCP:LISTEN -P -n >/dev/null 2>&1
+    fi
+}
 # paper2video / MinerU 等重任务可能短暂占用线程池；过短超时易误判为宕机并杀死正在跑的长请求。
 http_ok()       { curl --max-time 25 -fsS -o /dev/null "$1"; }
 proc_age()      { ps -o etimes= -p "$1" 2>/dev/null | awk '{print $1}'; }

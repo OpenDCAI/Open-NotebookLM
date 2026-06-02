@@ -33,6 +33,7 @@ from fastapi_app.services.deep_research_report_service import generate_report_fr
 from workflow_engine.toolkits.research_tools import fetch_page_text
 from workflow_engine.workflow.wf_intelligent_qa import prepare_parallel_file_analyses, build_intelligent_qa_prompt
 from workflow_engine.promptstemplates.resources.pt_qa_agent_repo import KbPromptAgent as KbPromptAgentPrompts
+from workflow_engine.promptstemplates.resources.pt_qa_agent_repo import KbVlmPromptAgent as KbVlmPromptAgentPrompts
 
 router = APIRouter(prefix="/kb", tags=["Knowledge Base"])
 
@@ -51,6 +52,7 @@ MESSAGE_METADATA_FIELDS = (
     "sourceMapping",
     "sourcePreviewMapping",
     "sourceReferenceMapping",
+    "retrievedImages",
 )
 
 
@@ -242,7 +244,8 @@ def _unwrap_fastapi_body_default(value: Any, fallback: Any = None) -> Any:
     return value
 
 
-ALLOWED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".png", ".jpg", ".jpeg", ".mp4", ".md", ".csv"}
+ALLOWED_EXTENSIONS = {".pdf", ".docx", ".pptx", ".png", ".jpg", ".jpeg", ".mp4", ".md", ".csv",
+                      ".mp3", ".wav", ".m4a", ".ogg"}
 
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg"}
 DOC_EXTENSIONS = {".pdf", ".docx", ".doc", ".pptx", ".ppt", ".md", ".markdown"}
@@ -654,6 +657,207 @@ async def reembed_source(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/pdf-images")
+async def get_pdf_images_for_file(
+    notebook_id: str,
+    email: str,
+    file_id: str,
+    user_id: Optional[str] = None,
+):
+    """Return all extracted image URLs (pdf_image + pdf_page) for a specific file.
+
+    Used by the frontend to display a PDF image gallery in the chat.
+    """
+    if not notebook_id or not file_id:
+        raise HTTPException(status_code=400, detail="notebook_id and file_id are required")
+
+    try:
+        paths = get_notebook_paths(notebook_id, "", email or user_id or "")
+        vector_base = str(paths.vector_store_dir)
+        manager = VectorStoreManager(base_dir=vector_base)
+
+        figures = []
+        pages = []
+        for meta in manager.meta_data:
+            t = meta.get("type", "")
+            if t not in ("pdf_image", "pdf_page"):
+                continue
+            if meta.get("source_file_id") != file_id:
+                continue
+            img_path_str = meta.get("img_path", "")
+            if not img_path_str or not Path(img_path_str).exists():
+                continue
+            try:
+                url = _to_outputs_url(img_path_str)
+            except Exception:
+                continue
+            entry = {
+                "url": url,
+                "type": t,
+                "content": meta.get("content", ""),
+                "page_num": meta.get("page_num"),
+            }
+            if t == "pdf_image":
+                figures.append(entry)
+            else:
+                pages.append(entry)
+
+        # Sort pages by page number
+        pages.sort(key=lambda x: x.get("page_num") or 0)
+
+        return {
+            "file_id": file_id,
+            "figures": figures,
+            "pages": pages,
+            "total": len(figures) + len(pages),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("[get-pdf-images] failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/reindex-pdf-images")
+async def reindex_pdf_images(
+    notebook_id: str = Body(..., embed=True),
+    email: str = Body(..., embed=True),
+    user_id: Optional[str] = Body(None, embed=True),
+):
+    """Scan already-extracted MinerU images for all PDFs in this notebook and embed them.
+
+    This endpoint is idempotent and safe to call on existing notebooks.  It does NOT
+    re-run MinerU or re-embed text chunks — it only processes image files that live in
+    already-extracted `images/` directories.
+    """
+    from workflow_engine.toolkits.multimodaltool.req_understanding import call_image_understanding_async
+    from workflow_engine.toolkits.ragtool.vector_store_tool import _image_path_to_data_url
+
+    if not notebook_id:
+        raise HTTPException(status_code=400, detail="notebook_id is required")
+
+    try:
+        paths = get_notebook_paths(notebook_id, "", email or user_id or "")
+        vector_base = str(paths.vector_store_dir)
+        manager = VectorStoreManager(base_dir=vector_base)
+
+        image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+        total_processed = 0
+        total_skipped = 0
+
+        for file_record in manager.manifest.get("files", []):
+            file_id = file_record.get("id")
+            if not file_id:
+                continue
+
+            images_dir_str = file_record.get("images_dir") or (
+                (file_record.get("parsers") or {}).get("mineru") or {}
+            ).get("images_dir") or ""
+            if not images_dir_str:
+                continue
+
+            images_dir = Path(images_dir_str)
+            if not images_dir.exists():
+                continue
+
+            # Check which img_paths are already indexed to avoid duplicates
+            already_indexed = {
+                m.get("img_path")
+                for m in manager.meta_data
+                if m.get("type") == "pdf_image" and m.get("source_file_id") == file_id
+            }
+
+            pdf_images = sorted([p for p in images_dir.iterdir() if p.suffix.lower() in image_exts])
+            for img_path in pdf_images:
+                if str(img_path) in already_indexed:
+                    total_skipped += 1
+                    continue
+                try:
+                    img_desc = await call_image_understanding_async(
+                        model=manager.image_model,
+                        messages=[{"role": "user", "content": "请详细描述这张图片的内容，包括图表类型、主要信息、数据趋势等，用于知识库检索。"}],
+                        api_url=manager.multimodal_api_url,
+                        api_key=manager.api_key,
+                        image_path=str(img_path),
+                    )
+                except Exception as exc:
+                    log.warning("[reindex-pdf-images] description failed for %s: %s", img_path.name, exc)
+                    img_desc = None
+
+                content = img_desc or f"[PDF图片] {img_path.name}"
+                img_meta = {
+                    "source_file_id": file_id,
+                    "type": "pdf_image",
+                    "content": content,
+                    "img_path": str(img_path),
+                }
+                text_vecs = manager._call_embedding_api([content])
+                manager._add_vectors(text_vecs, [img_meta])
+
+                if manager._visual_embed_svc is not None:
+                    try:
+                        data_url = _image_path_to_data_url(img_path)
+                        visual_vecs = manager._call_visual_embedding_api(data_url, is_image=True)
+                        manager._add_visual_vectors(visual_vecs, [img_meta])
+                        omni_vecs = manager._call_omni_embedding_api(data_url, is_image=True)
+                        manager._add_omni_vectors(omni_vecs, [img_meta])
+                    except Exception as exc:
+                        log.warning("[reindex-pdf-images] visual embed failed for %s: %s", img_path.name, exc)
+
+                total_processed += 1
+                log.info("[reindex-pdf-images] indexed %s", img_path.name)
+
+            # Also scan _pages/ for full-page renders (MinerU always produces these)
+            pages_dir = images_dir.parent.parent / "_pages"
+            already_pages_indexed = {
+                m.get("img_path")
+                for m in manager.meta_data
+                if m.get("type") == "pdf_page" and m.get("source_file_id") == file_id
+            }
+            if pages_dir.exists():
+                page_imgs = sorted([p for p in pages_dir.iterdir() if p.suffix.lower() == ".png"])
+                for img_path in page_imgs:
+                    if str(img_path) in already_pages_indexed:
+                        total_skipped += 1
+                        continue
+                    try:
+                        page_num = int(img_path.stem.split("_")[-1])
+                    except ValueError:
+                        page_num = 0
+                    content = f"[PDF第{page_num}页]"
+                    page_meta = {
+                        "source_file_id": file_id,
+                        "type": "pdf_page",
+                        "content": content,
+                        "img_path": str(img_path),
+                        "page_num": page_num,
+                    }
+                    text_vecs = manager._call_embedding_api([content])
+                    manager._add_vectors(text_vecs, [page_meta])
+
+                    if manager._visual_embed_svc is not None:
+                        try:
+                            data_url = _image_path_to_data_url(img_path)
+                            visual_vecs = manager._call_visual_embedding_api(data_url, is_image=True)
+                            manager._add_visual_vectors(visual_vecs, [page_meta])
+                            omni_vecs = manager._call_omni_embedding_api(data_url, is_image=True)
+                            manager._add_omni_vectors(omni_vecs, [page_meta])
+                        except Exception as exc:
+                            log.warning("[reindex-pdf-images] visual embed failed for page %s: %s", img_path.name, exc)
+
+                    total_processed += 1
+                    log.info("[reindex-pdf-images] indexed page %s", img_path.name)
+
+        manager.save()
+        log.info("[reindex-pdf-images] done: %d new, %d already indexed", total_processed, total_skipped)
+        return {"success": True, "processed": total_processed, "skipped": total_skipped}
+    except HTTPException:
+        raise
+    except Exception as e:
+        log.error("[reindex-pdf-images] failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _sanitize_md_filename(title: str, prefix: str = "doc") -> str:
     """生成安全的 .md 文件名，避免路径注入与非法字符。"""
     safe = re.sub(r'[^\w\u4e00-\u9fff\s\-.]', "", (title or "").strip())
@@ -1048,6 +1252,48 @@ def _resolve_vector_store_dir(email: Optional[str], notebook_id: Optional[str]) 
     return vector_store_base_dir
 
 
+async def _vlm_describe_base64_image(
+    data_url: str,
+    api_url: str,
+    api_key: str,
+    model: str,
+) -> str:
+    """Call VLM to describe an image supplied as a base64 data URL."""
+    client = AsyncOpenAI(api_key=api_key, base_url=api_url)
+    try:
+        resp = await client.chat.completions.create(
+            model=model,
+            messages=[{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "请详细描述这张图片的内容，包括文字、图表、结构和关键信息，用于知识库检索增强。"},
+                    {"type": "image_url", "image_url": {"url": data_url}},
+                ],
+            }],
+            max_tokens=512,
+            temperature=0.1,
+        )
+        return (resp.choices[0].message.content or "").strip()
+    except Exception as exc:
+        log.warning(f"[VLM describe] failed: {exc}")
+        return ""
+
+
+def _load_image_as_data_url(path: str) -> str:
+    """Load a local image file and return it as a base64 data URL."""
+    import base64
+    import mimetypes
+    try:
+        p = Path(path)
+        if not p.exists():
+            return ""
+        mime = mimetypes.guess_type(str(p))[0] or "image/png"
+        b64 = base64.b64encode(p.read_bytes()).decode()
+        return f"data:{mime};base64,{b64}"
+    except Exception:
+        return ""
+
+
 def _build_chat_request(
     files: List[str],
     query: str,
@@ -1058,6 +1304,8 @@ def _build_chat_request(
     api_key: Optional[str],
     model: str,
     rag_query: Optional[str] = None,
+    retrieval_mode: str = "text",
+    image_attachments: Optional[List[str]] = None,
 ) -> IntelligentQARequest:
     local_files = _resolve_chat_files(files)
     if not local_files:
@@ -1077,6 +1325,8 @@ def _build_chat_request(
         chat_api_url=resolved_api_url,
         api_key=resolved_api_key,
         model=model,
+        retrieval_mode=retrieval_mode,
+        query_image_data_urls=list(image_attachments or []),
     )
 
 
@@ -1274,13 +1524,39 @@ async def chat_with_kb_stream(
     api_url: Optional[str] = Body(None, embed=True),
     api_key: Optional[str] = Body(None, embed=True),
     model: str = Body(settings.KB_CHAT_MODEL, embed=True),
+    retrieval_mode: str = Body("text", embed=True),
+    image_attachments: List[str] = Body([], embed=True),
 ):
     log.info("[chat_with_kb_stream] === Request received ===")
+    log.info(f"[chat_with_kb_stream] retrieval_mode={retrieval_mode}, image_attachments count={len(image_attachments)}")
 
     async def event_generator():
         full_answer = ""
         try:
-            req = _build_chat_request(files, query, history, email, notebook_id, api_url, api_key, model, rag_query)
+            req = _build_chat_request(files, query, history, email, notebook_id, api_url, api_key, model, rag_query, retrieval_mode, image_attachments)
+
+            # Describe attached images and augment rag_query for retrieval.
+            # Always generate an LLM description so the text index can also surface
+            # relevant text chunks (useful even when the visual embedding service is
+            # available, since not all text chunks may be in the omni index).
+            image_descriptions: List[str] = []
+            if image_attachments:
+                yield _jsonl_line({
+                    "type": "stage",
+                    "stage": "analyzing_images",
+                    "message": "正在分析图片内容",
+                    "message_en": "Analyzing attached images",
+                })
+                descs = await asyncio.gather(*[
+                    _vlm_describe_base64_image(url, req.chat_api_url, req.api_key, req.model)
+                    for url in image_attachments
+                ])
+                image_descriptions = [d for d in descs if d]
+                if image_descriptions:
+                    augmented = (req.rag_query or req.query) + "\n\n图片内容：\n" + "\n".join(image_descriptions)
+                    req.rag_query = augmented
+                    log.info(f"[chat_with_kb_stream] augmented rag_query with {len(image_descriptions)} image descriptions")
+
             state = IntelligentQAState(request=req)
             yield _jsonl_line({
                 "type": "stage",
@@ -1329,11 +1605,63 @@ async def chat_with_kb_stream(
                 base_url=req.chat_api_url,
             )
 
+            # Build user message content — multimodal when images are attached
+            user_content: Any = prompt
+            if image_attachments:
+                user_content = [{"type": "text", "text": prompt}]
+                for url in image_attachments:
+                    user_content.append({"type": "image_url", "image_url": {"url": url}})
+
+            # VLM mode: also inject retrieved media-chunk images into the context
+            retrieved_image_urls: list[str] = []
+            if retrieval_mode == "vlm":
+                retrieved = getattr(state, "retrieved_chunks", None) or []
+                for chunk in retrieved:
+                    chunk_type = chunk.get("type", "")
+                    if chunk_type in ("media_desc", "visual", "pdf_image", "pdf_page"):
+                        meta = chunk.get("metadata", {})
+                        # pdf_image/pdf_page chunks store the path in img_path; others use path
+                        media_path = meta.get("img_path") or meta.get("path") or ""
+                        if media_path:
+                            data_url = _load_image_as_data_url(media_path)
+                            if data_url:
+                                if not isinstance(user_content, list):
+                                    user_content = [{"type": "text", "text": user_content}]
+                                user_content.append({"type": "image_url", "image_url": {"url": data_url}})
+                                img_url = _to_outputs_url(media_path)
+                                if img_url:
+                                    retrieved_image_urls.append(img_url)
+
+            if retrieved_image_urls:
+                yield _jsonl_line({"type": "images", "images": retrieved_image_urls})
+
+            # When the context contains images, the chat model must be multimodal.
+            # Switch from the default text model (e.g. deepseek) to the configured
+            # multimodal model (e.g. gemini-2.5-flash) automatically.
+            has_images = isinstance(user_content, list) and any(
+                item.get("type") == "image_url" for item in user_content if isinstance(item, dict)
+            )
+            chat_model = req.model
+            if has_images:
+                vlm_model = (
+                    (getattr(settings, "KB_VLM_MODEL", "") or "").strip()
+                    or (getattr(settings, "LLM_MODEL", "") or "").strip()
+                )
+                if vlm_model:
+                    chat_model = vlm_model
+                    log.info(f"[VLM] Switching to multimodal model: {chat_model}")
+
+            system_prompt = (
+                KbVlmPromptAgentPrompts.system_prompt_for_kb_vlm_prompt_agent.strip()
+                if has_images
+                else KbPromptAgentPrompts.system_prompt_for_kb_prompt_agent.strip()
+            )
+
             stream = await client.chat.completions.create(
-                model=req.model,
+                model=chat_model,
                 messages=[
-                    {"role": "system", "content": KbPromptAgentPrompts.system_prompt_for_kb_prompt_agent.strip()},
-                    {"role": "user", "content": prompt},
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_content},
                 ],
                 temperature=0.7,
                 stream=True,
@@ -1415,10 +1743,14 @@ async def create_conversation(
     notebook_id: Optional[str] = Body(None, embed=True),
 ) -> Dict[str, Any]:
     """Always create a new conversation for this user+notebook. Returns conversation id."""
+    import uuid as _uuid
     conv = _supabase_create_conversation(email, user_id, notebook_id)
     if conv:
         return {"success": True, "conversation_id": conv.get("id"), "conversation": conv}
-    return {"success": False, "conversation_id": None}
+    # Supabase 未配置或写入失败时，退回本地 UUID，确保前端流程不中断
+    local_id = str(_uuid.uuid4())
+    log.info("[create_conversation] Supabase not available, using local id: %s", local_id)
+    return {"success": True, "conversation_id": local_id, "conversation": {"id": local_id, "title": "新对话"}}
 
 
 @router.get("/conversations/{conversation_id}/messages")

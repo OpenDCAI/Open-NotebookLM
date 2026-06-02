@@ -381,6 +381,19 @@ class SourceService:
                     return {"content": content, "from_mineru": True}
                 except Exception:
                     pass
+
+            parts: list[str] = []
+            desc_path = file_record.get("description_text_path")
+            if desc_path and Path(desc_path).exists():
+                parts.append(Path(desc_path).read_text(encoding="utf-8", errors="replace").strip())
+            ocr_path = file_record.get("ocr_text_path")
+            if ocr_path and Path(ocr_path).exists():
+                parts.append("## OCR 识别文本\n\n" + Path(ocr_path).read_text(encoding="utf-8", errors="replace").strip())
+            transcript_path = file_record.get("transcript_path")
+            if transcript_path and Path(transcript_path).exists():
+                parts.append("## 语音转录文本\n\n" + Path(transcript_path).read_text(encoding="utf-8", errors="replace").strip())
+            if parts:
+                return {"content": "\n\n".join(parts), "from_mineru": False}
             break
 
         return {"content": None, "from_mineru": False}
@@ -452,9 +465,18 @@ class SourceService:
                 log.warning("parse_local_file read text failed: %s", exc)
                 raise HTTPException(status_code=500, detail=str(exc)) from exc
 
+        if suffix in (".png", ".jpg", ".jpeg", ".gif", ".webp",
+                       ".mp4", ".avi", ".mov",
+                       ".mp3", ".wav", ".m4a", ".ogg"):
+            return {
+                "success": True,
+                "content": f"[{path.name}] 媒体文件已上传，OCR/转录内容请通过来源预览查看。",
+                "format": "text",
+            }
+
         raise HTTPException(
             status_code=400,
-            detail="Unsupported file type for preview (only .pdf, .md, .txt)",
+            detail="Unsupported file type for preview",
         )
 
     def fetch_page_content(self, url: str) -> Dict[str, Any]:

@@ -15,9 +15,16 @@ export type CitationReference = {
 
 export type PushDestinationType = 'summary' | 'document' | 'guidance';
 
+export type RetrievalMode = 'text' | 'vlm';
+export type ChatAttachment = {
+  id: string;
+  dataUrl: string;
+  fileName: string;
+};
+
 export type ThinkFlowMessage = {
   id: string;
-  role: 'user' | 'assistant';
+  role: 'user' | 'assistant' | 'system';
   content: string;
   time: string;
   pushed?: boolean;
@@ -26,6 +33,26 @@ export type ThinkFlowMessage = {
   sourceMapping?: Record<string, string>;
   sourcePreviewMapping?: Record<string, string>;
   sourceReferenceMapping?: Record<string, CitationReference>;
+  meta?: Record<string, any>;
+  attachments?: ChatAttachment[];
+  retrievedImages?: string[];
+};
+
+export type OutlineDirective = {
+  id: string;
+  scope?: 'global' | 'slide';
+  type?: string;
+  label: string;
+  instruction?: string;
+  action?: 'set' | 'remove';
+  value?: string;
+  page_num?: number | null;
+};
+
+export type OutlineIntentSummary = {
+  mode?: 'global' | 'slide' | 'mixed' | 'none';
+  global_directives?: OutlineDirective[];
+  slide_targets?: { page_num: number; instruction: string }[];
 };
 
 export type DocumentSourceRef = {
@@ -60,6 +87,12 @@ export type ThinkFlowDocument = {
   content?: string;
   created_at: string;
   updated_at: string;
+  document_type?: 'summary_doc' | 'output_doc';
+  focus_state?: {
+    type?: string;
+    section_ids?: string[];
+    description?: string;
+  };
   version_count?: number;
   status_tokens?: Record<string, number>;
   push_traces?: DocumentPushTrace[];
@@ -84,13 +117,16 @@ export type OutlineSection = {
   asset_ref?: string | null;
   ppt_img_path?: string;
   generated_img_path?: string;
+  generation_failed?: boolean;
+  generation_error?: string;
+  mode?: string;
   /** 视频分镜：逐页/逐镜口播稿（subtitle 阶段写入，可在 pages_ready 继续编辑） */
   script_text?: string;
 };
 
 export type WorkspaceItemType = 'summary' | 'guidance';
 export type PanelGuideKey = 'summary' | 'doc' | 'guidance';
-export type ThinkFlowLeftTab = 'materials' | 'outputs';
+export type ThinkFlowLeftTab = 'conversations' | 'materials' | 'outputs';
 export type ThinkFlowRightMode = 'summary' | 'doc' | 'guidance' | 'outline';
 export type WorkspaceMode = 'normal' | 'output_focus' | 'output_immersive';
 export type ChatMode = 'chat' | 'table-analysis';
@@ -101,6 +137,11 @@ export type ConversationHistoryMessage = {
   role: 'user' | 'assistant';
   content: string;
   created_at?: string;
+  fileAnalyses?: any[];
+  sourceMapping?: Record<string, string>;
+  sourcePreviewMapping?: Record<string, string>;
+  sourceReferenceMapping?: Record<string, CitationReference>;
+  retrievedImages?: string[];
 };
 
 export type ThinkFlowWorkspaceItem = {

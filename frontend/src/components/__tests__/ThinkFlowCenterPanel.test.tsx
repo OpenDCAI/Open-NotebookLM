@@ -70,6 +70,10 @@ function renderPptWorkbenchCenterPanel() {
       activeDataset={null}
       dataSessionId={null}
       notebookContext={{ notebookId: 'nb_1', notebookTitle: 'test427', userId: 'user_1', userEmail: 'u@example.com' }}
+      retrievalMode="text"
+      onRetrievalModeChange={noop}
+      chatAttachments={[]}
+      onAttachmentsChange={noop}
     />,
   );
   return { setActivePptSlideIndex };

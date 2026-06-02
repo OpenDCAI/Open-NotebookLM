@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 import ReactMarkdown from 'react-markdown';
 import {
   ArrowRight,
@@ -39,8 +40,30 @@ import { ThinkFlowOutputContextModal } from './ThinkFlowOutputContextModal';
 import { ThinkFlowQuizStudy } from './ThinkFlowQuizStudy';
 import { ThinkFlowTopBar } from './ThinkFlowTopBar';
 import { ThinkFlowRightPanel } from './ThinkFlowRightPanel';
-import type { ChatMode } from './thinkflow-types';
+import { PptOutlinePanel, PptLockedOutlinePreview } from './PptOutlinePanel';
+import { PptPageReviewPanel, PptGeneratedResultPanel } from './PptPageReviewPanel';
+import {
+  diffPptOutline,
+  getPptOutlineDiffKindLabel,
+} from './pptOutlineDiff';
+import {
+  buildPushSourceSummary,
+  canUsePushTransform,
+  coercePushTransform,
+  detectMarkdownModuleHeadingLevel,
+  formatThinkFlowDateTime,
+  formatThinkFlowTime,
+  getDefaultPushTarget,
+  normalizeFocusState,
+  parseMarkdownSections,
+  type StructuredPushTargetType,
+  type StructuredPushTransform,
+  type ThinkFlowFocusState,
+} from './thinkflow-document-utils';
+import type { ChatMode, RetrievalMode, ChatAttachment } from './thinkflow-types';
+import { splitSummaryCards } from './summaryCards';
 import type { NotebookContext } from './TableAnalysisPanel';
+import { useConversationSourceRefs, type ConversationSourceRef } from './useConversationSourceRefs';
 
 import './ThinkFlowWorkspace.css';
 
@@ -64,6 +87,26 @@ type ThinkFlowMessage = {
   sourceMapping?: Record<string, string>;
   sourcePreviewMapping?: Record<string, string>;
   sourceReferenceMapping?: Record<string, CitationReference>;
+  meta?: Record<string, any>;
+  attachments?: ChatAttachment[];
+  retrievedImages?: string[];
+};
+
+type OutlineDirective = {
+  id: string;
+  scope?: 'global' | 'slide';
+  type?: string;
+  label: string;
+  instruction?: string;
+  action?: 'set' | 'remove';
+  value?: string;
+  page_num?: number | null;
+};
+
+type OutlineIntentSummary = {
+  mode?: 'global' | 'slide' | 'mixed' | 'none';
+  global_directives?: OutlineDirective[];
+  slide_targets?: { page_num: number; instruction: string }[];
 };
 
 type CitationReference = {
@@ -79,6 +122,10 @@ type ThinkFlowDocument = {
   content?: string;
   created_at: string;
   updated_at: string;
+  document_type?: 'summary_doc' | 'output_doc';
+  focus_state?: Partial<ThinkFlowFocusState>;
+  stash_items?: DocumentStashItem[];
+  change_logs?: DocumentChangeLog[];
   version_count?: number;
   status_tokens?: Record<string, number>;
   push_traces?: DocumentPushTrace[];
@@ -108,6 +155,19 @@ type DocumentPushTrace = {
   text_preview?: string;
   block_text?: string;
   source_refs?: DocumentSourceRef[];
+};
+
+type DocumentStashItem = {
+  id: string;
+  content: string;
+  created_at?: string;
+};
+
+type DocumentChangeLog = {
+  id: string;
+  summary: string;
+  timestamp: string;
+  type: string;
 };
 
 type ThinkFlowVersion = {
@@ -142,6 +202,45 @@ type ConversationHistoryMessage = {
   role: 'user' | 'assistant';
   content: string;
   created_at?: string;
+  fileAnalyses?: any[];
+  sourceMapping?: Record<string, string>;
+  sourcePreviewMapping?: Record<string, string>;
+  sourceReferenceMapping?: Record<string, CitationReference>;
+};
+
+type ConversationMessageDraft = {
+  role: 'user' | 'assistant';
+  content: string;
+  fileAnalyses?: any[];
+  sourceMapping?: Record<string, string>;
+  sourcePreviewMapping?: Record<string, string>;
+  sourceReferenceMapping?: Record<string, CitationReference>;
+  retrievedImages?: string[];
+};
+
+type OutlineChatSession = {
+  id: string;
+  status?: 'active' | 'applied' | 'archived';
+  messages?: ConversationHistoryMessage[];
+  draft_outline?: OutlineSection[];
+  draft_output_info?: PptOutputInfo;
+  draft_style_info?: PptStyleInfo;
+  draft_global_directives?: OutlineDirective[];
+  intent_summary?: OutlineIntentSummary;
+  summary?: string;
+  has_pending_changes?: boolean;
+  change_summary?: string;
+  created_at?: string;
+  updated_at?: string;
+  applied_at?: string;
+};
+
+type ConversationListItem = {
+  id: string;
+  title: string;
+  notebook_id?: string;
+  created_at?: string;
+  updated_at?: string;
 };
 
 type ThinkFlowWorkspaceItem = {
@@ -783,6 +882,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
 
   // ─── 表格分析模式状态 ──────────────────────────────────────────────────────
   const [chatMode, setChatMode] = useState<ChatMode>('chat');
+  const [retrievalMode, setRetrievalMode] = useState<RetrievalMode>('text');
+  const [chatAttachments, setChatAttachments] = useState<ChatAttachment[]>([]);
   const [activeDataset, setActiveDataset] = useState<KnowledgeFile | null>(null);
   const [dataSessionId, setDataSessionId] = useState<string | null>(null);
   // ref 防重注册：fileId → datasource_id (int)，不触发重渲染
@@ -790,8 +891,12 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
 
   const [documents, setDocuments] = useState<ThinkFlowDocument[]>([]);
   const [activeDocumentId, setActiveDocumentId] = useState('');
+  const [conversationActiveDocumentId, setConversationActiveDocumentId] = useState('');
   const [documentTitle, setDocumentTitle] = useState('');
   const [documentContent, setDocumentContent] = useState('');
+  const [documentFocusState, setDocumentFocusState] = useState<ThinkFlowFocusState>(() => normalizeFocusState());
+  const [documentStashItems, setDocumentStashItems] = useState<DocumentStashItem[]>([]);
+  const [documentChangeLogs, setDocumentChangeLogs] = useState<DocumentChangeLog[]>([]);
   const [documentSaving, setDocumentSaving] = useState(false);
   const [editMode, setEditMode] = useState(false);
   const [showVersionPanel, setShowVersionPanel] = useState(false);
@@ -854,13 +959,18 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [boundDocIds, setBoundDocIds] = useState<string[]>([]);
+  const {
+    conversationSourceRefs,
+    setConversationSourceRefs,
+    clearConversationSourceRefs,
+  } = useConversationSourceRefs();
   const [selectedMessageIds, setSelectedMessageIds] = useState<string[]>([]);
   const [multiSelectPrompt, setMultiSelectPrompt] = useState('');
   const [globalError, setGlobalErrorRaw] = useState('');
   const [captureFeedback, setCaptureFeedback] = useState('');
 
   // ── Toast system ──────────────────────────────────────────────────────────
-  type ToastKind = 'error' | 'success' | 'info';
+  type ToastKind = 'error' | 'success' | 'info' | 'warning';
   const [toasts, setToasts] = useState<Array<{ id: number; kind: ToastKind; message: string }>>([]);
   const toastIdRef = useRef(0);
 
@@ -880,6 +990,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const [pushStatusText, setPushStatusText] = useState('');
   const [pushError, setPushError] = useState('');
   const [conversationId, setConversationId] = useState('');
+  const [conversationList, setConversationList] = useState<ConversationListItem[]>([]);
+  const [, setConversationListLoading] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historyMessages, setHistoryMessages] = useState<ConversationHistoryMessage[]>([]);
@@ -918,6 +1030,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const docBodyRef = useRef<HTMLDivElement | null>(null);
   const messageRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const layoutRef = useRef<HTMLDivElement | null>(null);
+  const ensureDocumentContentRef = useRef<(documentId: string) => Promise<ThinkFlowDocument | null>>(async () => null);
 
   const notebookQuery = useMemo(() => {
     const query = new URLSearchParams({
@@ -932,6 +1045,10 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const activeDocument = useMemo(
     () => documents.find((item) => item.id === activeDocumentId) || null,
     [activeDocumentId, documents],
+  );
+  const conversationActiveDocument = useMemo(
+    () => documents.find((item) => item.id === conversationActiveDocumentId) || null,
+    [conversationActiveDocumentId, documents],
   );
 
   const summaryItems = useMemo(
@@ -1199,8 +1316,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     const versionData = await parseJson<{ versions: ThinkFlowVersion[] }>(versionResponse);
     setDocumentTitle(detailData.document.title || '');
     setDocumentContent(detailData.document.content || '');
+    setDocumentFocusState(normalizeFocusState(detailData.document.focus_state));
+    setDocumentStashItems(Array.isArray(detailData.document.stash_items) ? detailData.document.stash_items : []);
+    setDocumentChangeLogs(Array.isArray(detailData.document.change_logs) ? detailData.document.change_logs : []);
     setVersions(versionData.versions || []);
-      setDocuments((previous) =>
+    setDocuments((previous) =>
       previous.map((item) => (item.id === documentId ? { ...item, ...detailData.document } : item)),
     );
     return detailData.document;
@@ -1220,6 +1340,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
         setActiveDocumentId('');
         setDocumentTitle('');
         setDocumentContent('');
+        setDocumentFocusState(normalizeFocusState());
+        setDocumentStashItems([]);
+        setDocumentChangeLogs([]);
         setVersions([]);
         setEditMode(false);
         setShowVersionPanel(false);
@@ -1505,31 +1628,207 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       return existing || null;
     }
   };
+  ensureDocumentContentRef.current = ensureDocumentContent;
+
+  const resetOutputWorkspaceForConversation = () => {
+    setPptSourceLockIntent(null);
+    setDirectOutputIntent(null);
+    setPptOutlinePendingMessages([]);
+    setActiveOutputId('');
+    setWorkspaceMode('normal');
+    setRightMode('doc');
+    setRightPanelOpen(true);
+  };
+
+  const persistConversationWorkspaceState = async ({
+    targetConversationId = conversationId,
+    sourceRefs = conversationSourceRefs,
+    activeDocId = conversationActiveDocumentId,
+  }: {
+    targetConversationId?: string;
+    sourceRefs?: ConversationSourceRef[];
+    activeDocId?: string;
+  }) => {
+    if (!targetConversationId) return null;
+    const response = await apiFetch(`/api/v1/kb/conversations/${targetConversationId}/workspace-state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        notebook_id: notebook.id,
+        notebook_title: notebookTitle,
+        user_id: effectiveUser?.id || 'local',
+        email: effectiveUser?.email || '',
+        source_refs: sourceRefs,
+        active_document_id: activeDocId || '',
+      }),
+    });
+    const data = await parseJson<{ state: { source_refs?: ConversationSourceRef[]; active_document_id?: string } }>(response);
+    const refs = data.state.source_refs || [];
+    setConversationSourceRefs(refs);
+    setSelectedIds(new Set(refs.filter((ref) => ref.type === 'material').map((ref) => ref.id)));
+    setBoundDocIds(refs.filter((ref) => ref.type === 'document' || ref.type === 'output_document').map((ref) => ref.id));
+    setConversationActiveDocumentId(data.state.active_document_id || '');
+    return data.state;
+  };
+
+  const loadConversationWorkspaceState = async (targetConversationId: string) => {
+    if (!targetConversationId) return null;
+    try {
+      const response = await apiFetch(`/api/v1/kb/conversations/${targetConversationId}/workspace-state?${notebookQuery}`);
+      const data = await parseJson<{ state: { source_refs?: ConversationSourceRef[]; active_document_id?: string } }>(response);
+      const refs = data.state.source_refs || [];
+      const storedActiveId = String(data.state.active_document_id || '').trim();
+      const fallbackActiveId =
+        storedActiveId ||
+        activeDocumentId ||
+        documents[0]?.id ||
+        '';
+      setConversationSourceRefs(refs);
+      setConversationActiveDocumentId(fallbackActiveId);
+      setSelectedIds(new Set(refs.filter((ref) => ref.type === 'material').map((ref) => ref.id)));
+      setBoundDocIds(refs.filter((ref) => ref.type === 'document' || ref.type === 'output_document').map((ref) => ref.id));
+      if (!storedActiveId && fallbackActiveId) {
+        void persistConversationWorkspaceState({
+          targetConversationId,
+          sourceRefs: refs,
+          activeDocId: fallbackActiveId,
+        }).catch(() => {});
+      }
+      return { source_refs: refs, active_document_id: fallbackActiveId };
+    } catch (error: any) {
+      setConversationSourceRefs([]);
+      setBoundDocIds([]);
+      setConversationActiveDocumentId(activeDocumentId || documents[0]?.id || '');
+      setGlobalError(error?.message || '加载对话工作区状态失败');
+      return null;
+    }
+  };
+
+  const setConversationActiveDocument = async (documentId: string) => {
+    if (!documentId) return;
+    setConversationActiveDocumentId(documentId);
+    await persistConversationWorkspaceState({ activeDocId: documentId });
+  };
+
+  const loadConversationMessages = async (targetConversationId: string) => {
+    resetOutputWorkspaceForConversation();
+    setConversationId(targetConversationId);
+    const response = await apiFetch(`/api/v1/kb/conversations/${targetConversationId}/messages`);
+    const data = await parseJson<{ messages?: ConversationHistoryMessage[] }>(response);
+    const rows = Array.isArray(data?.messages) ? data.messages : [];
+    setChatMessages(
+      rows.length > 0
+        ? rows.map((item, index) => ({
+            id: item.id || `history_${index}`,
+            role: item.role === 'assistant' ? 'assistant' : 'user',
+            content: item.content || '',
+            time: formatThinkFlowTime(item.created_at),
+            fileAnalyses: item.fileAnalyses,
+            sourceMapping: item.sourceMapping,
+            sourcePreviewMapping: item.sourcePreviewMapping,
+            sourceReferenceMapping: item.sourceReferenceMapping,
+            retrievedImages: (item as any).retrievedImages,
+          }))
+        : welcomeMessages,
+    );
+    await loadConversationWorkspaceState(targetConversationId);
+  };
+
+  const refreshConversationList = async () => {
+    setConversationListLoading(true);
+    try {
+      const params = new URLSearchParams({
+        email: effectiveUser?.email || effectiveUser?.id || 'local',
+        user_id: effectiveUser?.id || 'local',
+        notebook_id: notebook.id,
+      });
+      const response = await apiFetch(`/api/v1/kb/conversations?${params.toString()}`);
+      const data = await parseJson<{ conversations?: ConversationListItem[] }>(response);
+      const rows = Array.isArray(data?.conversations) ? data.conversations : [];
+      setConversationList(rows);
+      return rows;
+    } catch {
+      setConversationList([]);
+      return [] as ConversationListItem[];
+    } finally {
+      setConversationListLoading(false);
+    }
+  };
+
+  const createConversation = async () => {
+    const response = await apiFetch('/api/v1/kb/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: effectiveUser?.email || effectiveUser?.id || 'local',
+        user_id: effectiveUser?.id || 'local',
+        notebook_id: notebook.id,
+      }),
+    });
+    const data = await parseJson<{ conversation_id?: string; conversation?: ConversationListItem }>(response);
+    const nextId = String(data?.conversation_id || '').trim();
+    if (!nextId) {
+      throw new Error('创建新对话失败');
+    }
+    resetOutputWorkspaceForConversation();
+    await refreshConversationList();
+    setConversationId(nextId);
+    setChatMessages(welcomeMessages);
+    setChatInput('');
+    setSelectedMessageIds([]);
+    setMultiSelectPrompt('');
+    setBoundDocIds([]);
+    clearConversationSourceRefs();
+    const nextActiveDocId = activeDocumentId || documents[0]?.id || '';
+    setConversationActiveDocumentId(nextActiveDocId);
+    await persistConversationWorkspaceState({
+      targetConversationId: nextId,
+      sourceRefs: [],
+      activeDocId: nextActiveDocId,
+    });
+    return nextId;
+  };
+
+  // Creates a conversation ID silently without resetting the chat UI.
+  // Used internally when a conversation must exist before sending the first message.
+  const createConversationSilent = async (): Promise<string> => {
+    const response = await apiFetch('/api/v1/kb/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: effectiveUser?.email || effectiveUser?.id || 'local',
+        user_id: effectiveUser?.id || 'local',
+        notebook_id: notebook.id,
+      }),
+    });
+    const data = await parseJson<{ conversation_id?: string; conversation?: ConversationListItem }>(response);
+    const nextId = String(data?.conversation_id || '').trim();
+    if (!nextId) throw new Error('创建新对话失败');
+    setConversationId(nextId);
+    void refreshConversationList().catch(() => {});
+    return nextId;
+  };
 
   const ensureConversationId = async () => {
     if (conversationId) return conversationId;
     try {
-      const response = await apiFetch('/api/v1/kb/conversations', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: effectiveUser?.email || effectiveUser?.id || 'local',
-          user_id: effectiveUser?.id || 'local',
-          notebook_id: notebook.id,
-        }),
-      });
-      const data = await parseJson<{ conversation_id?: string }>(response);
-      const nextId = String(data?.conversation_id || '').trim();
-      if (nextId) {
-        setConversationId(nextId);
-        return nextId;
-      }
+      return await createConversationSilent();
     } catch {}
     return '';
   };
 
-  const appendConversationMessages = async (messages: Array<{ role: 'user' | 'assistant'; content: string }>) => {
-    const rows = messages.map((item) => ({ role: item.role, content: String(item.content || '').trim() })).filter((item) => item.content);
+  const appendConversationMessages = async (messages: ConversationMessageDraft[]) => {
+    const rows = messages
+      .map((item) => ({
+        role: item.role,
+        content: String(item.content || '').trim(),
+        fileAnalyses: item.fileAnalyses,
+        sourceMapping: item.sourceMapping,
+        sourcePreviewMapping: item.sourcePreviewMapping,
+        sourceReferenceMapping: item.sourceReferenceMapping,
+        retrievedImages: item.retrievedImages,
+      }))
+      .filter((item) => item.content);
     if (rows.length === 0) return;
     const targetConversationId = await ensureConversationId();
     if (!targetConversationId) return;
@@ -1616,6 +1915,62 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       await refreshFiles();
     } catch {
       pushToast('入库失败，请稍后重试', 'error', 4000);
+    }
+  };
+
+  const handleReindexPdfImages = async () => {
+    try {
+      await apiFetch('/api/v1/kb/reindex-pdf-images', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || effectiveUser?.id || 'local',
+        }),
+      });
+      pushToast('PDF 图片索引已重建，VLM 模式可以检索图片了', 'success', 4000);
+    } catch {
+      pushToast('图片索引重建失败，请稍后重试', 'error', 4000);
+    }
+  };
+
+  const handleExtractPdfImages = async (file: KnowledgeFile) => {
+    const fileId = file.kbFileId || file.id;
+    try {
+      const params = new URLSearchParams({
+        notebook_id: notebook.id,
+        email: effectiveUser?.email || effectiveUser?.id || 'local',
+        file_id: fileId,
+      });
+      const response = await apiFetch(`/api/v1/kb/pdf-images?${params.toString()}`);
+      const data = await parseJson<{ figures: Array<{ url: string; content: string }>; pages: Array<{ url: string; page_num: number }> }>(response);
+      const figures = data.figures || [];
+      const pages = data.pages || [];
+      const allImages = [
+        ...figures.map((f) => f.url),
+        ...pages.map((p) => p.url),
+      ];
+      if (allImages.length === 0) {
+        pushToast('该 PDF 暂无提取到的图片，请先点击"重建图片索引"', 'warning', 4000);
+        return;
+      }
+      const figureCount = figures.length;
+      const pageCount = pages.length;
+      const summary = [
+        figureCount > 0 ? `${figureCount} 张插图` : '',
+        pageCount > 0 ? `${pageCount} 张页面截图` : '',
+      ].filter(Boolean).join('、');
+      const galleryMessage: ThinkFlowMessage = {
+        id: `gallery-${Date.now()}`,
+        role: 'assistant',
+        content: `📄 **${file.name}** 的图片提取结果（${summary}）：`,
+        time: new Date().toISOString(),
+        retrievedImages: allImages,
+      };
+      setChatMessages((prev) => [...prev, galleryMessage]);
+    } catch {
+      pushToast('获取 PDF 图片失败，请稍后重试', 'error', 4000);
     }
   };
 
@@ -2179,6 +2534,101 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       >
         {message.content}
       </ReactMarkdown>
+      {message.retrievedImages && message.retrievedImages.length > 0 && (
+        <div className="thinkflow-retrieved-images">
+          {message.retrievedImages.map((url, index) => (
+            <img
+              key={index}
+              src={url}
+              alt={`检索图片 ${index + 1}`}
+              className="thinkflow-retrieved-image"
+              loading="lazy"
+            />
+          ))}
+        </div>
+      )}
+      {message.meta?.type === 'ppt_outline_draft' ? (
+        <div className="thinkflow-inline-outline-card" data-testid="ppt-outline-inline-card">
+          <div className="thinkflow-inline-outline-card-head">
+            <div>
+              <span className="thinkflow-output-workspace-kicker">候选修改</span>
+              <h4>候选改动对比</h4>
+            </div>
+            <div className="thinkflow-inline-outline-card-actions">
+              <button type="button" className="thinkflow-generate-btn" onClick={() => void applyPptOutlineDraft()} disabled={outlineSaving}>
+                {outlineSaving ? '应用中...' : '应用候选修改'}
+              </button>
+            </div>
+          </div>
+          {message.meta.changeSummary ? (
+            <div className="thinkflow-inline-outline-card-summary">{message.meta.changeSummary}</div>
+          ) : null}
+          {(message.meta.intentSummary?.mode && message.meta.intentSummary.mode !== 'none') ? (
+            <div className="thinkflow-inline-outline-card-intent">
+              <strong>本轮意图：</strong>
+              <span>
+                {message.meta.intentSummary.mode === 'mixed'
+                  ? '风格信息 + 页级修改'
+                  : message.meta.intentSummary.mode === 'global'
+                    ? '风格信息'
+                    : '页级修改'}
+              </span>
+            </div>
+          ) : null}
+          {(message.meta.outlineDiff?.totalCount || 0) > 0 ? (
+            <div className="thinkflow-inline-outline-rule-list">
+              {message.meta.outlineDiff.modifiedCount > 0 ? (
+                <span className="thinkflow-inline-outline-chip">
+                  {`修改 ${message.meta.outlineDiff.modifiedCount} 页`}
+                </span>
+              ) : null}
+              {message.meta.outlineDiff.addedCount > 0 ? (
+                <span className="thinkflow-inline-outline-chip">
+                  {`新增 ${message.meta.outlineDiff.addedCount} 页`}
+                </span>
+              ) : null}
+              {message.meta.outlineDiff.removedCount > 0 ? (
+                <span className="thinkflow-inline-outline-chip">
+                  {`删除 ${message.meta.outlineDiff.removedCount} 页`}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
+          {(message.meta.styleDiff?.totalCount || 0) > 0 ? (
+            <div className="thinkflow-inline-outline-style-diff">
+              <div className="thinkflow-inline-outline-rule-title">风格信息改动</div>
+              {message.meta.styleDiff.entries.map((entry: any) => (
+                <div key={entry.field} className="thinkflow-inline-outline-style-row">
+                  <strong>{entry.label}</strong>
+                  <span className="thinkflow-inline-outline-style-before">{entry.before}</span>
+                  <span className="thinkflow-inline-outline-style-arrow">→</span>
+                  <span className="thinkflow-inline-outline-style-after">{entry.after}</span>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          {(message.meta.outlineDiff?.totalCount || 0) > 0 ? (
+            <div className="thinkflow-inline-outline-diff-list">
+              {message.meta.outlineDiff.entries.map((entry: any) => (
+                <article key={entry.key} className={`thinkflow-inline-outline-diff-item is-${entry.kind}`}>
+                  <div className="thinkflow-inline-outline-diff-item-head">
+                    <span>{getPptOutlineDiffKindLabel(entry.kind)}</span>
+                    <strong>第 {entry.pageNum} 页</strong>
+                    <span>{entry.title}</span>
+                  </div>
+                  {entry.detailLines?.length > 0 ? (
+                    <ul>
+                      {entry.detailLines.map((line: string) => (
+                        <li key={`${entry.key}_${line}`}>{line}</li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 
@@ -2630,9 +3080,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     setMultiSelectPrompt('');
   };
 
-  const createDocument = async (title?: string) => {
+  const createDocument = async (
+    title?: string,
+    options?: { documentType?: 'summary_doc' | 'output_doc'; metadata?: Record<string, any>; content?: string },
+  ) => {
     try {
-      const nextTitle = (title || '').trim() || `梳理摘要 ${documents.length + 1}`;
+      const isOutputDoc = options?.documentType === 'output_doc';
+      const nextTitle = (title || '').trim() || (isOutputDoc ? `PPT 产出文档 ${documents.length + 1}` : `梳理摘要 ${documents.length + 1}`);
       const response = await apiFetch('/api/v1/kb/documents', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2642,7 +3096,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           user_id: effectiveUser?.id || 'local',
           email: effectiveUser?.email || '',
           title: nextTitle,
-          content: '',
+          content: options?.content ?? '',
+          document_type: options?.documentType || 'summary_doc',
+          metadata: options?.metadata || {},
         }),
       });
       const data = await parseJson<{ document: ThinkFlowDocument }>(response);
@@ -2653,6 +3109,66 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     } catch (error: any) {
       setGlobalError(error?.message || '创建文档失败');
       return '';
+    }
+  };
+
+  const createOutputDocument = async (params?: {
+    title?: string;
+    sourceRefs?: Array<{ id: string; type: 'document' | 'output_document'; title: string; metadata?: Record<string, any> }>;
+  }) => {
+    const sourceRefs = [
+      ...(params?.sourceRefs || conversationSourceRefs),
+      ...(activeDocumentId && !(params?.sourceRefs || []).some((ref) => ref.id === activeDocumentId)
+        ? [{
+            id: activeDocumentId,
+            type: activeDocument?.document_type === 'output_doc' ? 'output_document' : 'document',
+            title: activeDocument?.title || documentTitle || '当前文档',
+            metadata: { range: 'body' },
+          } as ConversationSourceRef]
+        : []),
+    ];
+    const id = await createDocument(params?.title || 'PPT 产出文档', {
+      documentType: 'output_doc',
+      metadata: {
+        output_type: 'ppt',
+        source_refs: sourceRefs,
+        audience: '',
+        style: '',
+        goal: '',
+      },
+      content: '# PPT 产出文档\n\n## 产出目标\n\n[待补充]\n\n## 大纲方向\n\n[待补充]',
+    });
+    if (id) {
+      await setConversationActiveDocument(id);
+      setRightMode('doc');
+      setCaptureFeedback('已创建 PPT 产出文档，可继续编辑后进入 PPT 工作台。');
+    }
+  };
+
+  const updateDisplayedDocumentFocus = async (nextFocus: ThinkFlowFocusState) => {
+    if (!activeDocumentId) return;
+    setDocumentFocusState(nextFocus);
+    try {
+      const response = await apiFetch(`/api/v1/kb/documents/${activeDocumentId}/focus`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          notebook_id: notebook.id,
+          notebook_title: notebookTitle,
+          user_id: effectiveUser?.id || 'local',
+          email: effectiveUser?.email || '',
+          focus_state: nextFocus,
+        }),
+      });
+      const data = await parseJson<{ focus_state: ThinkFlowFocusState }>(response);
+      const normalized = normalizeFocusState(data.focus_state);
+      setDocumentFocusState(normalized);
+      setDocuments((previous) =>
+        previous.map((item) => (item.id === activeDocumentId ? { ...item, focus_state: normalized } : item)),
+      );
+    } catch (error: any) {
+      setGlobalError(error?.message || '更新文档焦点失败');
+      await loadDocumentDetail(activeDocumentId);
     }
   };
 
@@ -2906,7 +3422,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       id: `user_${Date.now()}`,
       role: 'user',
       content: query,
-      time: new Date().toLocaleTimeString(),
+      time: formatThinkFlowTime(new Date()),
+      attachments: chatAttachments.length > 0 ? [...chatAttachments] : undefined,
     };
     const assistantMessage: ThinkFlowMessage = {
       id: `assistant_${Date.now()}`,
@@ -2917,6 +3434,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
 
     setChatMessages((previous) => [...previous, userMessage, assistantMessage]);
     setChatInput('');
+    setChatAttachments([]);
 
     try {
       const boundDocs = await Promise.all(boundDocIds.map((id) => ensureDocumentContent(id)));
@@ -2940,6 +3458,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           email: effectiveUser?.email || '',
           user_id: effectiveUser?.id || 'local',
           notebook_id: notebook.id,
+          retrieval_mode: retrievalMode,
+          image_attachments: chatAttachments.map((a) => a.dataUrl),
         }),
       });
 
@@ -2953,6 +3473,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       let sourceMapping: ThinkFlowMessage['sourceMapping'];
       let sourcePreviewMapping: ThinkFlowMessage['sourcePreviewMapping'];
       let sourceReferenceMapping: ThinkFlowMessage['sourceReferenceMapping'];
+      let retrievedImages: ThinkFlowMessage['retrievedImages'];
 
       const syncAssistantMessage = (nextContent = fullAnswer) => {
         setChatMessages((previous) =>
@@ -2965,6 +3486,7 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
                   sourceMapping,
                   sourcePreviewMapping,
                   sourceReferenceMapping,
+                  retrievedImages,
                 }
               : item,
           ),
@@ -2987,9 +3509,12 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             sourcePreviewMapping = payload.source_preview_mapping || undefined;
             sourceReferenceMapping = payload.source_reference_mapping || undefined;
             syncAssistantMessage();
+          } else if (payload.type === 'images') {
+            retrievedImages = payload.images || undefined;
+            syncAssistantMessage();
           } else if (payload.type === 'delta') {
             fullAnswer += payload.delta || '';
-            syncAssistantMessage();
+            flushSync(() => syncAssistantMessage());
           } else if (payload.type === 'done') {
             fullAnswer = payload.answer || fullAnswer;
             syncAssistantMessage();
@@ -3008,6 +3533,9 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           sourcePreviewMapping = payload.source_preview_mapping || undefined;
           sourceReferenceMapping = payload.source_reference_mapping || undefined;
           syncAssistantMessage();
+        } else if (payload.type === 'images') {
+          retrievedImages = payload.images || undefined;
+          syncAssistantMessage();
         } else if (payload.type === 'delta') {
           fullAnswer += payload.delta || '';
           syncAssistantMessage();
@@ -3020,7 +3548,15 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       }
       await appendConversationMessages([
         { role: 'user', content: query },
-        { role: 'assistant', content: fullAnswer },
+        {
+          role: 'assistant',
+          content: fullAnswer,
+          fileAnalyses,
+          sourceMapping,
+          sourcePreviewMapping,
+          sourceReferenceMapping,
+          retrievedImages,
+        },
       ]);
     } catch (error: any) {
       setGlobalError(error?.message || '发送消息失败');
@@ -5013,7 +5549,8 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
   const documentPanelProps = {
     documents: documents.map((doc) => ({ id: doc.id, title: doc.title })),
     activeDocumentId,
-    activeDocument: activeDocument ? { id: activeDocument.id, title: activeDocument.title } : null,
+    activeDocument: activeDocument ? { id: activeDocument.id, title: activeDocument.title, document_type: activeDocument.document_type } : null,
+    pendingDocument: null,
     documentTitle,
     documentContent,
     editMode,
@@ -5023,6 +5560,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
     documentSections,
     renderDocumentSection,
     docBodyRef,
+    focusState: documentFocusState,
+    stashItems: documentStashItems,
+    changeLogs: documentChangeLogs,
+    conversationActiveDocumentId,
+    conversationActiveDocument: conversationActiveDocument
+      ? { id: conversationActiveDocument.id, title: conversationActiveDocument.title }
+      : null,
     guidanceItems: guidanceItems.map((item) => ({ id: item.id, title: item.title })),
     selectedGuidanceIds,
     outputButtons,
@@ -5033,7 +5577,13 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
       setRightMode('doc');
       await loadDocumentDetail(id);
     },
+    onActivateDisplayedDocument: async () => {
+      if (!activeDocumentId) return;
+      await setConversationActiveDocument(activeDocumentId);
+    },
+    onClearFocus: async () => updateDisplayedDocumentFocus(normalizeFocusState()),
     onCreateDocument: createDocument,
+    onCreateOutputDocument: createOutputDocument,
     onToggleDocumentEdit: () => setEditMode((previous) => !previous),
     onToggleVersionPanel: () => setShowVersionPanel((previous) => !previous),
     onDeleteDocument: deleteDocument,
@@ -5111,9 +5661,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
           onUpload={handleUpload}
           onAddSource={() => setShowAddSourceModal(true)}
           onReEmbedSource={handleReEmbedSource}
-          conversationList={[]}
+          onReindexPdfImages={handleReindexPdfImages}
+          onExtractPdfImages={handleExtractPdfImages}
+          conversationList={conversationList}
           activeConversationId={conversationId}
-          onSelectConversation={setConversationId}
+          onSelectConversation={(id) => void loadConversationMessages(id)}
           onNewConversation={handleNewConversation}
         />
 
@@ -5165,6 +5717,11 @@ const ThinkFlowWorkspace = ({ notebook, onBack }: { notebook: Notebook; onBack: 
             userId: effectiveUser?.id || 'local',
             userEmail: effectiveUser?.email || '',
           }}
+          onSetActivePptSlideIndex={setActivePptSlideIndex}
+          retrievalMode={retrievalMode}
+          onRetrievalModeChange={setRetrievalMode}
+          chatAttachments={chatAttachments}
+          onAttachmentsChange={setChatAttachments}
         />
 
         {rightPanelOpen ? (

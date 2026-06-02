@@ -320,6 +320,64 @@ def try_rag_retrieve(state: IntelligentQAState) -> None:
             top_k=RAG_TOP_K,
             file_ids=file_ids,
         )
+
+        retrieval_mode = getattr(state.request, "retrieval_mode", "text") or "text"
+        query_images = getattr(state.request, "query_image_data_urls", None) or []
+        query_img = query_images[0] if query_images else None
+
+        # Use visual/omni search when:
+        #   1. VLM mode is explicitly set, OR
+        #   2. User attached an image and visual embedding service is configured (pixel-level matching)
+        use_visual = retrieval_mode == "vlm" or (query_img and manager._visual_embed_svc is not None)
+        if use_visual:
+            omni_results = manager.search_omni(
+                query=retrieval_query,
+                top_k=RAG_TOP_K,
+                file_ids=file_ids,
+                query_image_data_url=query_img,
+            )
+            if omni_results:
+                if retrieval_mode == "vlm":
+                    # VLM 模式：用 omni 结果替换文本结果（视觉优先）
+                    results = omni_results
+                    log.info(f"[Omni] 使用 omni 索引检索到 {len(omni_results)} 个片段")
+                else:
+                    # 图片附件触发：与文本结果合并，保留跨模态文本 + 图片搜索两路结果
+                    seen_content = {r.get("content") for r in results}
+                    added = 0
+                    for r in omni_results:
+                        if r.get("content") not in seen_content:
+                            results.append(r)
+                            seen_content.add(r.get("content"))
+                            added += 1
+                    log.info(f"[Omni] 跨模态检索合并 {added} 个片段，共 {len(results)} 个")
+            else:
+                # Fallback: merge visual results into text results
+                visual_results = manager.search_visual(
+                    query_desc=retrieval_query,
+                    top_k=RAG_TOP_K,
+                    file_ids=file_ids,
+                    query_image_data_url=query_img,
+                )
+                if visual_results:
+                    seen_content = {r.get("content") for r in results}
+                    for vr in visual_results:
+                        if vr.get("content") not in seen_content:
+                            results.append(vr)
+                            seen_content.add(vr.get("content"))
+                    log.info(f"[Visual] 视觉索引额外检索到 {len(visual_results)} 个片段，融合后共 {len(results)} 个")
+
+            matched_file_ids = list({r.get("source_file_id") for r in results if r.get("source_file_id")})
+            if matched_file_ids:
+                pdf_images = manager.get_pdf_images(file_ids=matched_file_ids, limit=8)
+                if pdf_images:
+                    seen_content = {r.get("content") for r in results}
+                    for pi in pdf_images:
+                        if pi.get("content") not in seen_content:
+                            results.append(pi)
+                            seen_content.add(pi.get("content"))
+                    log.info(f"[Visual] 追加 {len(pdf_images)} 个 PDF 图片到检索结果")
+
         state.retrieved_chunks = results
         log.info(f"RAG 检索到 {len(results)} 个片段")
     except Exception as e:
@@ -785,6 +843,65 @@ def create_intelligent_qa_graph() -> GenericGraphBuilder:
                 top_k=RAG_TOP_K,
                 file_ids=file_ids,
             )
+
+            # VLM 模式：优先用 omni index 做全模态检索；omni index 无内容时回退到 text+visual 双索引融合
+            retrieval_mode = getattr(state.request, "retrieval_mode", "text") or "text"
+            query_images = getattr(state.request, "query_image_data_urls", None) or []
+            query_img = query_images[0] if query_images else None
+
+            # Use visual/omni search when:
+            #   1. VLM mode is explicitly set, OR
+            #   2. User attached an image and visual embedding service is configured (pixel-level matching)
+            use_visual = retrieval_mode == "vlm" or (query_img and manager._visual_embed_svc is not None)
+            if use_visual:
+                omni_results = manager.search_omni(
+                    query=retrieval_query,
+                    top_k=RAG_TOP_K,
+                    file_ids=file_ids,
+                    query_image_data_url=query_img,
+                )
+                if omni_results:
+                    if retrieval_mode == "vlm":
+                        # VLM 模式：用 omni 结果替换文本结果（视觉优先）
+                        results = omni_results
+                        log.info(f"[Omni] 使用 omni 索引检索到 {len(omni_results)} 个片段")
+                    else:
+                        # 图片附件触发：与文本结果合并，保留跨模态文本 + 图片搜索两路结果
+                        seen_content = {r.get("content") for r in results}
+                        added = 0
+                        for r in omni_results:
+                            if r.get("content") not in seen_content:
+                                results.append(r)
+                                seen_content.add(r.get("content"))
+                                added += 1
+                        log.info(f"[Omni] 跨模态检索合并 {added} 个片段，共 {len(results)} 个")
+                else:
+                    visual_results = manager.search_visual(
+                        query_desc=retrieval_query,
+                        top_k=RAG_TOP_K,
+                        file_ids=file_ids,
+                        query_image_data_url=query_img,
+                    )
+                    if visual_results:
+                        seen_content = {r.get("content") for r in results}
+                        for vr in visual_results:
+                            if vr.get("content") not in seen_content:
+                                results.append(vr)
+                                seen_content.add(vr.get("content"))
+                        log.info(f"[Visual] 视觉索引额外检索到 {len(visual_results)} 个片段，融合后共 {len(results)} 个")
+
+                # Always include all pdf_image entries from the matched source files.
+                matched_file_ids = list({r.get("source_file_id") for r in results if r.get("source_file_id")})
+                if matched_file_ids:
+                    pdf_images = manager.get_pdf_images(file_ids=matched_file_ids, limit=8)
+                    if pdf_images:
+                        seen_content = {r.get("content") for r in results}
+                        for pi in pdf_images:
+                            if pi.get("content") not in seen_content:
+                                results.append(pi)
+                                seen_content.add(pi.get("content"))
+                        log.info(f"[Visual] 追加 {len(pdf_images)} 个 PDF 图片到检索结果")
+
             state.retrieved_chunks = results
             log.info(f"RAG 检索到 {len(results)} 个片段")
         except Exception as e:

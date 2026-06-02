@@ -43,6 +43,95 @@ def _chunk_text(text: str, chunk_size: int = 1500, chunk_overlap: int = 150) -> 
     chunks = splitter.split_text(text.strip())
     return [c.strip() for c in chunks if len(c.strip()) > 10]
 
+def _image_path_to_data_url(img_path: Path) -> str:
+    """Read an image file and return a base64 data URL."""
+    import base64
+    import mimetypes
+    mime = mimetypes.guess_type(str(img_path))[0] or "image/jpeg"
+    b64 = base64.b64encode(img_path.read_bytes()).decode()
+    return f"data:{mime};base64,{b64}"
+
+
+async def _transcribe_media_audio(
+    file_path: Path,
+    api_url: str,
+    api_key: str,
+    model: str,
+) -> str:
+    """Extract audio (from video via ffmpeg, or use audio directly) and transcribe via LLM input_audio.
+
+    Returns the transcript text, or empty string on failure.
+    """
+    import base64
+    import subprocess
+    import tempfile
+
+    ext = file_path.suffix.lower()
+    audio_path = file_path
+
+    # For video files, extract audio to a temp MP3 first
+    if ext in {".mp4", ".avi", ".mov", ".mkv", ".webm"}:
+        tmp_mp3 = Path(tempfile.mktemp(suffix=".mp3"))
+        try:
+            subprocess.run(
+                ["ffmpeg", "-i", str(file_path), "-vn", "-acodec", "libmp3lame", "-y", str(tmp_mp3)],
+                check=True, capture_output=True,
+            )
+            audio_path = tmp_mp3
+        except Exception as exc:
+            log.warning(f"[Transcribe] ffmpeg audio extraction failed: {exc}")
+            return ""
+
+    try:
+        audio_b64 = base64.b64encode(audio_path.read_bytes()).decode()
+        audio_mime = {
+            ".mp3": "mp3", ".wav": "wav", ".m4a": "m4a", ".ogg": "ogg",
+        }.get(audio_path.suffix.lower(), "mp3")
+
+        messages = [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "请完整转录这段音频的所有内容，保留原始语言。只输出转录文字，不要加任何解释或标注。"},
+                {
+                    "type": "input_audio",
+                    "input_audio": {
+                        "data": f"data:audio/{audio_mime};base64,{audio_b64}",
+                        "format": audio_mime,
+                    },
+                },
+            ],
+        }]
+
+        import httpx
+        url = f"{api_url.rstrip('/')}/chat/completions"
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+        payload = {
+            "model": model,
+            "messages": messages,
+            "temperature": 0.1,
+            "max_tokens": 16384,
+        }
+
+        async with httpx.AsyncClient(timeout=httpx.Timeout(300.0)) as client:
+            resp = await client.post(url, headers=headers, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+            transcript = (data.get("choices", [{}])[0].get("message", {}).get("content", "") or "").strip()
+            log.info(f"[Transcribe] Got {len(transcript)} chars from {file_path.name}")
+            return transcript
+    except Exception as exc:
+        log.error(f"[Transcribe] Failed for {file_path.name}: {exc}")
+        return ""
+    finally:
+        if audio_path != file_path and audio_path.exists():
+            try:
+                audio_path.unlink()
+            except Exception:
+                pass
+
+
 def _default_embedding_api_url() -> str:
     return os.getenv("EMBEDDING_API_URL", "http://123.129.219.111:3000/v1/embeddings")
 
@@ -77,6 +166,19 @@ class VectorStoreManager:
         if self.video_model == "gemini-2.5-flash" and self.multimodal_model != "gemini-2.5-flash":
              self.video_model = self.multimodal_model
         self.multimodal_api_url = os.getenv("DEFAULT_LLM_API_URL", "http://123.129.219.111:3000/v1/")
+
+        # Visual embedding service (Qwen3-VL-Embedding or any multimodal embedding API).
+        # Only initialised when VISUAL_EMBEDDING_API_URL is explicitly set; otherwise all
+        # omni/visual embedding paths are skipped and we fall back to text-only retrieval.
+        try:
+            from fastapi_app.services.visual_embedding_service import VisualEmbeddingService
+            from fastapi_app.config.settings import settings as _svc_settings
+            if (_svc_settings.VISUAL_EMBEDDING_API_URL or "").strip():
+                self._visual_embed_svc: Optional[Any] = VisualEmbeddingService()
+            else:
+                self._visual_embed_svc = None
+        except Exception:
+            self._visual_embed_svc = None
         
         # Directories
         self.processed_dir = self.base_dir / "processed"
@@ -88,11 +190,19 @@ class VectorStoreManager:
         self.manifest_path = self.base_dir / "knowledge_manifest.json"
         self.faiss_index_path = self.vector_store_dir / f"{project_name}.index"
         self.faiss_meta_path = self.vector_store_dir / f"{project_name}.meta"
-        
+        self.visual_faiss_index_path = self.vector_store_dir / f"{project_name}_visual.index"
+        self.visual_faiss_meta_path = self.vector_store_dir / f"{project_name}_visual.meta"
+        self.omni_faiss_index_path = self.vector_store_dir / f"{project_name}_omni.index"
+        self.omni_faiss_meta_path  = self.vector_store_dir / f"{project_name}_omni.meta"
+
         # State
         self.manifest = self._load_manifest()
         self.index = None
         self.meta_data = [] # List corresponding to index vectors
+        self._visual_index = None
+        self._visual_meta_data: list = []
+        self._omni_index = None
+        self._omni_meta_data: list = []
         self._load_index()
 
     def _load_manifest(self) -> Dict[str, Any]:
@@ -118,18 +228,48 @@ class VectorStoreManager:
             self.index = None # Will be initialized on first add
             self.meta_data = []
 
+        if self.visual_faiss_index_path.exists() and self.visual_faiss_meta_path.exists():
+            log.info(f"Loading existing visual index from {self.visual_faiss_index_path}")
+            self._visual_index = faiss.read_index(str(self.visual_faiss_index_path))
+            with open(self.visual_faiss_meta_path, 'rb') as f:
+                self._visual_meta_data = pickle.load(f)
+        else:
+            self._visual_index = None
+            self._visual_meta_data = []
+
+        if self.omni_faiss_index_path.exists() and self.omni_faiss_meta_path.exists():
+            log.info(f"Loading existing omni index from {self.omni_faiss_index_path}")
+            self._omni_index = faiss.read_index(str(self.omni_faiss_index_path))
+            with open(self.omni_faiss_meta_path, 'rb') as f:
+                self._omni_meta_data = pickle.load(f)
+        else:
+            self._omni_index = None
+            self._omni_meta_data = []
+
     def save(self):
         """Save Manifest, Index and Meta data to disk."""
         # Save Manifest
         with open(self.manifest_path, 'w', encoding='utf-8') as f:
             json.dump(self.manifest, f, ensure_ascii=False, indent=2)
-            
-        # Save Index & Meta
+
+        # Save text Index & Meta
         if self.index is not None:
             faiss.write_index(self.index, str(self.faiss_index_path))
             with open(self.faiss_meta_path, 'wb') as f:
                 pickle.dump(self.meta_data, f)
-        
+
+        # Save visual Index & Meta
+        if self._visual_index is not None:
+            faiss.write_index(self._visual_index, str(self.visual_faiss_index_path))
+            with open(self.visual_faiss_meta_path, 'wb') as f:
+                pickle.dump(self._visual_meta_data, f)
+
+        # Save omni Index & Meta
+        if self._omni_index is not None:
+            faiss.write_index(self._omni_index, str(self.omni_faiss_index_path))
+            with open(self.omni_faiss_meta_path, 'wb') as f:
+                pickle.dump(self._omni_meta_data, f)
+
         log.info(f"Saved vector store to {self.vector_store_dir}")
 
     def remove_file(self, file_id: str) -> bool:
@@ -172,8 +312,53 @@ class VectorStoreManager:
             self.index.add(arr)
             self.meta_data = new_meta
         self.manifest["files"] = [f for f in self.manifest.get("files", []) if f.get("id") != file_id]
+        self._rebuild_visual_index_without(file_id)
+        self._rebuild_omni_index_without(file_id)
         self.save()
         return True
+
+    def _rebuild_visual_index_without(self, file_id: str) -> None:
+        """Rebuild visual index excluding all vectors for the given file_id."""
+        keep = [i for i in range(len(self._visual_meta_data)) if self._visual_meta_data[i].get("source_file_id") != file_id]
+        if len(keep) == len(self._visual_meta_data):
+            return
+        if not keep:
+            self._visual_index = None
+            self._visual_meta_data = []
+            if self.visual_faiss_index_path.exists():
+                self.visual_faiss_index_path.unlink()
+            if self.visual_faiss_meta_path.exists():
+                self.visual_faiss_meta_path.unlink()
+            return
+        if self._visual_index is not None:
+            dim = self._visual_index.d
+            vecs = [self._visual_index.reconstruct(i) for i in keep]
+            arr = np.asarray(vecs, dtype=np.float32)
+            self._visual_index = faiss.IndexFlatIP(dim)
+            self._visual_index.add(arr)
+        self._visual_meta_data = [self._visual_meta_data[i] for i in keep]
+
+    def _rebuild_omni_index_without(self, file_id: str) -> None:
+        """Rebuild omni index excluding all vectors for the given file_id."""
+        if self._omni_index is None:
+            return
+        keep = [i for i in range(len(self._omni_meta_data)) if self._omni_meta_data[i].get("source_file_id") != file_id]
+        if len(keep) == len(self._omni_meta_data):
+            return
+        if not keep:
+            self._omni_index = None
+            self._omni_meta_data = []
+            if self.omni_faiss_index_path.exists():
+                self.omni_faiss_index_path.unlink()
+            if self.omni_faiss_meta_path.exists():
+                self.omni_faiss_meta_path.unlink()
+            return
+        dim = self._omni_index.d
+        vecs = [self._omni_index.reconstruct(i) for i in keep]
+        arr = np.asarray(vecs, dtype=np.float32)
+        self._omni_index = faiss.IndexFlatIP(dim)
+        self._omni_index.add(arr)
+        self._omni_meta_data = [self._omni_meta_data[i] for i in keep]
 
     def search(self, query: str, top_k: int = 5, file_ids: Optional[List[str]] = None) -> List[Dict]:
         """
@@ -237,6 +422,195 @@ class VectorStoreManager:
                 break
                 
         return results
+
+    def _add_visual_vectors(self, vectors: np.ndarray, meta_list: List[Dict]) -> None:
+        """Add vectors and meta to the visual-only FAISS index."""
+        if len(vectors) == 0:
+            return
+        if self._visual_index is None:
+            self._visual_index = faiss.IndexFlatIP(vectors.shape[1])
+        self._visual_index.add(vectors)
+        self._visual_meta_data.extend(meta_list)
+
+    def _add_omni_vectors(self, vectors: np.ndarray, meta_list: List[Dict]) -> None:
+        """Add vectors and meta to the unified omni FAISS index."""
+        if len(vectors) == 0:
+            return
+        if self._omni_index is None:
+            self._omni_index = faiss.IndexFlatIP(vectors.shape[1])
+        self._omni_index.add(vectors)
+        self._omni_meta_data.extend(meta_list)
+
+    def search_visual(
+        self,
+        query_desc: str,
+        top_k: int = 5,
+        file_ids: Optional[List[str]] = None,
+        query_image_data_url: Optional[str] = None,
+    ) -> List[Dict]:
+        """Search the visual-only index.
+
+        If query_image_data_url is provided, embed it with the visual embedding model
+        (Qwen3-VL-Embedding) for true image-to-image search.
+        Otherwise fall back to text embedding of query_desc.
+        """
+        if self._visual_index is None or self._visual_index.ntotal == 0:
+            return []
+
+        if query_image_data_url and self._visual_embed_svc is not None:
+            query_vecs = self._call_visual_embedding_api(query_image_data_url, is_image=True)
+        else:
+            query_vecs = self._call_visual_embedding_api(query_desc, is_image=False)
+
+        if len(query_vecs) == 0:
+            return []
+        query_arr = query_vecs if query_vecs.ndim == 2 else query_vecs.reshape(1, -1)
+        search_k = max(top_k * 20, 100) if file_ids else top_k
+        search_k = min(search_k, self._visual_index.ntotal)
+        D, I = self._visual_index.search(query_arr, search_k)
+        results = []
+        target_file_ids = set(file_ids) if file_ids else None
+        for rank, idx in enumerate(I[0]):
+            if idx < 0 or idx >= len(self._visual_meta_data):
+                continue
+            meta = self._visual_meta_data[idx]
+            if target_file_ids and meta.get("source_file_id") not in target_file_ids:
+                continue
+            results.append({
+                "score": float(D[0][rank]),
+                "content": meta.get("content"),
+                "source_file_id": meta.get("source_file_id"),
+                "type": "visual",
+                "metadata": meta,
+            })
+            if len(results) >= top_k:
+                break
+        return results
+
+    def search_omni(
+        self,
+        query: str,
+        top_k: int = 5,
+        file_ids: Optional[List[str]] = None,
+        query_image_data_url: Optional[str] = None,
+    ) -> List[Dict]:
+        """Search the unified omni-embedding index.
+
+        All content (text chunks, PDF-extracted images, media files) lives in the
+        same Qwen3-VL-Embedding vector space, so text and image queries work uniformly.
+        Returns an empty list if the omni index is not available.
+        """
+        if self._omni_index is None or self._omni_index.ntotal == 0:
+            return []
+
+        if query_image_data_url and self._visual_embed_svc is not None:
+            query_vecs = self._call_omni_embedding_api(query_image_data_url, is_image=True)
+        else:
+            query_vecs = self._call_omni_embedding_api(query, is_image=False)
+
+        if len(query_vecs) == 0:
+            return []
+        query_arr = query_vecs if query_vecs.ndim == 2 else query_vecs.reshape(1, -1)
+        search_k = max(top_k * 20, 100) if file_ids else top_k
+        search_k = min(search_k, self._omni_index.ntotal)
+        D, I = self._omni_index.search(query_arr, search_k)
+        results = []
+        target_file_ids = set(file_ids) if file_ids else None
+        for rank, idx in enumerate(I[0]):
+            if idx < 0 or idx >= len(self._omni_meta_data):
+                continue
+            meta = self._omni_meta_data[idx]
+            if target_file_ids and meta.get("source_file_id") not in target_file_ids:
+                continue
+            results.append({
+                "score": float(D[0][rank]),
+                "content": meta.get("content"),
+                "source_file_id": meta.get("source_file_id"),
+                "type": meta.get("type", "omni"),
+                "metadata": meta,
+            })
+            if len(results) >= top_k:
+                break
+        return results
+
+    def get_pdf_images(
+        self,
+        file_ids: Optional[List[str]] = None,
+        limit: int = 10,
+    ) -> List[Dict]:
+        """Return all pdf_image and pdf_page entries for the given file IDs.
+
+        Used in VLM mode to always surface extracted PDF images alongside text results,
+        regardless of whether their descriptions match the query semantically.
+        pdf_image entries (extracted figures) take priority; pdf_page entries (full-page
+        renders) fill the remainder up to the limit.
+        """
+        target_file_ids = set(file_ids) if file_ids else None
+        figures = []
+        pages = []
+        for meta in self.meta_data:
+            t = meta.get("type", "")
+            if t not in ("pdf_image", "pdf_page"):
+                continue
+            if target_file_ids and meta.get("source_file_id") not in target_file_ids:
+                continue
+            entry = {
+                "score": 0.0,
+                "content": meta.get("content", ""),
+                "source_file_id": meta.get("source_file_id"),
+                "type": t,
+                "metadata": meta,
+            }
+            if t == "pdf_image":
+                figures.append(entry)
+            else:
+                pages.append(entry)
+
+        # Figures first, then pages; honour the limit
+        combined = figures[:limit] + pages[: max(0, limit - len(figures))]
+        return combined[:limit]
+
+    def _call_omni_embedding_api(self, content: str, is_image: bool = False) -> np.ndarray:
+        """Embed content using the unified Qwen3-VL-Embedding model (omni space).
+
+        Delegates to _call_visual_embedding_api which already handles both modalities.
+        """
+        return self._call_visual_embedding_api(content, is_image=is_image)
+
+    def _call_omni_embedding_api_batch(self, texts: List[str]) -> np.ndarray:
+        """Batch embed texts using the unified VLM embedding model.
+
+        Sends all texts in a single API call for efficiency.
+        Falls back to the text embedding model if visual service is unavailable.
+        """
+        if not texts:
+            return np.array([])
+        if self._visual_embed_svc is not None:
+            try:
+                vecs = self._visual_embed_svc.embed_texts_batch_sync(texts)
+                arr = np.array(vecs, dtype=np.float32)
+                faiss.normalize_L2(arr)
+                return arr
+            except Exception as exc:
+                log.warning(f"[Omni] Batch text embed failed, falling back to text model: {exc}")
+        return self._call_embedding_api(texts)
+
+    def _call_visual_embedding_api(self, data_url_or_text: str, is_image: bool = False) -> np.ndarray:
+        """Call Qwen3-VL-Embedding API for an image or text, return L2-normalised float32 array."""
+        if self._visual_embed_svc is not None:
+            try:
+                if is_image:
+                    vec = self._visual_embed_svc.embed_image_sync(data_url_or_text)
+                else:
+                    vec = self._visual_embed_svc.embed_text_sync(data_url_or_text)
+                arr = np.array([vec], dtype=np.float32)
+                faiss.normalize_L2(arr)
+                return arr
+            except Exception as exc:
+                log.warning(f"[VisualEmbedding] failed, falling back to text embedding: {exc}")
+        # Fallback: use text embedding (for backward-compat when no visual model is configured)
+        text = data_url_or_text if not is_image else "(image)"
+        return self._call_embedding_api([text])
 
     def _call_embedding_api(self, texts: List[str]) -> np.ndarray:
         """调用 Embedding API"""
@@ -332,7 +706,8 @@ class VectorStoreManager:
                 await self._process_ppt(file_path, file_record, file_id)
             elif ext in ['.md', '.markdown', '.txt']:
                 await self._process_text(file_path, file_record, file_id)
-            elif ext in ['.png', '.jpg', '.jpeg', '.mp4', '.avi', '.mov']:
+            elif ext in ['.png', '.jpg', '.jpeg', '.mp4', '.avi', '.mov',
+                         '.mp3', '.wav', '.m4a', '.ogg']:
                 await self._process_media(file_path, description, file_record, file_id)
             else:
                 log.warning(f"Unsupported file type: {ext}")
@@ -502,6 +877,15 @@ class VectorStoreManager:
             self._add_vectors(vectors, meta_list)
             record["chunks_count"] = len(chunks)
 
+            # Also embed text chunks into omni index (unified VLM vector space)
+            if self._visual_embed_svc is not None:
+                try:
+                    omni_vecs = self._call_omni_embedding_api_batch(chunks)
+                    self._add_omni_vectors(omni_vecs, meta_list)
+                    log.info(f"[Omni] Added {len(chunks)} text chunks to omni index")
+                except Exception as exc:
+                    log.warning(f"[Omni] Text chunk embed failed, omni index skipped: {exc}")
+
             # 在 MinerU 输出目录写入 chunks_info.json，便于确认是否做了分块及每块预览
             chunks_info_path = output_subdir / "chunks_info.json"
             try:
@@ -517,6 +901,89 @@ class VectorStoreManager:
                 record["chunks_info_path"] = str(chunks_info_path)
             except Exception as e:
                 log.warning(f"Could not write chunks_info.json: {e}")
+
+        # Phase 1: embed PDF-extracted images into text/visual/omni indices
+        images_dir = Path(record.get("images_dir", ""))
+        if images_dir.exists():
+            image_exts = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+            pdf_images = sorted([p for p in images_dir.iterdir() if p.suffix.lower() in image_exts])
+            pdf_image_count = 0
+            for img_path in pdf_images:
+                try:
+                    # Generate a semantic description so text search can find this image
+                    img_desc = None
+                    try:
+                        img_desc = await call_image_understanding_async(
+                            model=self.image_model,
+                            messages=[{"role": "user", "content": "请详细描述这张图片的内容，包括图表类型、主要信息、数据趋势等，用于知识库检索。"}],
+                            api_url=self.multimodal_api_url,
+                            api_key=self.api_key,
+                            image_path=str(img_path),
+                        )
+                        log.info(f"[PDFImage] Generated description for {img_path.name}: {(img_desc or '')[:80]}")
+                    except Exception as exc:
+                        log.warning(f"[PDFImage] Description generation failed for {img_path.name}: {exc}")
+
+                    content = img_desc or f"[PDF图片] {img_path.name}"
+                    img_meta = {
+                        "source_file_id": file_id,
+                        "type": "pdf_image",
+                        "content": content,
+                        "img_path": str(img_path),
+                    }
+
+                    # Text index: embed description for semantic text retrieval
+                    text_vecs = self._call_embedding_api([content])
+                    self._add_vectors(text_vecs, [img_meta])
+
+                    # Visual/omni indices: embed actual image pixels (only when VLM configured)
+                    if self._visual_embed_svc is not None:
+                        data_url = _image_path_to_data_url(img_path)
+                        visual_vecs = self._call_visual_embedding_api(data_url, is_image=True)
+                        self._add_visual_vectors(visual_vecs, [img_meta])
+                        omni_vecs = self._call_omni_embedding_api(data_url, is_image=True)
+                        self._add_omni_vectors(omni_vecs, [img_meta])
+
+                    pdf_image_count += 1
+                except Exception as exc:
+                    log.warning(f"[PDFImage] Failed to process {img_path.name}: {exc}")
+            if pdf_image_count:
+                log.info(f"[PDFImage] Processed {pdf_image_count} PDF images")
+                record["pdf_image_count"] = pdf_image_count
+
+        # Phase 1b: index _pages/ full-page renders (MinerU always produces these)
+        # These are the primary visual source for VLM mode when figures aren't extracted.
+        if images_dir.exists():
+            pages_dir = images_dir.parent.parent / "_pages"
+        else:
+            mineru_auto = Path(record.get("processed_md_path", "")).parent
+            pages_dir = mineru_auto / "_pages"
+        if pages_dir.exists():
+            page_imgs = sorted([p for p in pages_dir.iterdir() if p.suffix.lower() == ".png"])
+            pdf_page_count = 0
+            for img_path in page_imgs:
+                # Parse page number from filename (page_0001.png → 1)
+                try:
+                    page_num = int(img_path.stem.split("_")[-1])
+                except ValueError:
+                    page_num = 0
+                content = f"[PDF第{page_num}页]"
+                page_meta = {
+                    "source_file_id": file_id,
+                    "type": "pdf_page",
+                    "content": content,
+                    "img_path": str(img_path),
+                    "page_num": page_num,
+                }
+                try:
+                    text_vecs = self._call_embedding_api([content])
+                    self._add_vectors(text_vecs, [page_meta])
+                    pdf_page_count += 1
+                except Exception as exc:
+                    log.warning(f"[PDFPage] Failed to index {img_path.name}: {exc}")
+            if pdf_page_count:
+                log.info(f"[PDFPage] Indexed {pdf_page_count} full-page renders")
+                record["pdf_page_count"] = pdf_page_count
 
     async def _process_word(self, file_path: Path, record: Dict, file_id: str):
         # Convert to PDF first
@@ -561,71 +1028,201 @@ class VectorStoreManager:
             ]
             self._add_vectors(vectors, meta_list)
             record["chunks_count"] = len(chunks)
+            # Also embed into omni index (unified VLM vector space)
+            if self._visual_embed_svc is not None:
+                try:
+                    omni_vecs = self._call_omni_embedding_api_batch(chunks)
+                    self._add_omni_vectors(omni_vecs, meta_list)
+                except Exception as exc:
+                    log.warning(f"[Omni] Text chunk omni embed failed: {exc}")
         else:
             log.warning(f"No valid chunks from text file: {file_path}")
             record["status"] = "skipped"
 
     async def _process_media(self, file_path: Path, description: Optional[str], record: Dict, file_id: str):
+        ext = file_path.suffix.lower()
+        is_image = ext in {'.png', '.jpg', '.jpeg', '.gif', '.webp'}
+        is_video = ext in {'.mp4', '.avi', '.mov'}
+        is_audio = ext in {'.mp3', '.wav', '.m4a', '.ogg'}
+
         desc_text = description
-        
-        # If no description provided, generate one using multimodal API
-        if not desc_text:
-            log.info(f"No description for {file_path.name}, calling Multimodal API...")
-            try:
-                ext = file_path.suffix.lower()
-                messages = []
-                
-                # Check file type
-                if ext in ['.png', '.jpg', '.jpeg']:
-                    # Image Understanding
-                    log.info(f"Using image model: {self.image_model}")
+        ocr_text = None
+        transcript_text = None
+
+        out_dir = self.processed_dir / file_id
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # ── Image: generate description + OCR ──
+        if is_image:
+            if not desc_text:
+                try:
                     desc_text = await call_image_understanding_async(
                         model=self.image_model,
                         messages=[{"role": "user", "content": "Please describe this image in detail for knowledge base retrieval."}],
                         api_url=self.multimodal_api_url,
                         api_key=self.api_key,
-                        image_path=str(file_path)
+                        image_path=str(file_path),
                     )
-                    log.critical(f'Image Understanding desc_text : {desc_text}')
-                elif ext in ['.mp4', '.avi', '.mov']:
-                    # Video Understanding
-                    log.info(f"Using video model: {self.video_model}")
+                    log.info(f"[Image] description: {(desc_text or '')[:80]}")
+                except Exception as e:
+                    log.error(f"[Image] description failed: {e}")
+
+            try:
+                ocr_text = await call_image_understanding_async(
+                    model=self.image_model,
+                    messages=[{"role": "user", "content": (
+                        "请识别并完整输出这张图片中的所有文字内容。保留原始格式（包括换行、缩进、表格结构）。"
+                        "如果图片中没有文字，返回空字符串。只输出提取的文字，不要加任何解释。"
+                    )}],
+                    api_url=self.multimodal_api_url,
+                    api_key=self.api_key,
+                    image_path=str(file_path),
+                )
+                log.info(f"[OCR] got {len(ocr_text or '')} chars from {file_path.name}")
+            except Exception as e:
+                log.warning(f"[OCR] failed for {file_path.name}: {e}")
+
+        # ── Video: generate visual description + transcribe audio ──
+        elif is_video:
+            if not desc_text:
+                try:
                     desc_text = await call_video_understanding_async(
                         model=self.video_model,
                         messages=[{"role": "user", "content": "Please analyze this video and provide a detailed description of its content, events, and any text visible, for knowledge base retrieval."}],
                         api_url=self.multimodal_api_url,
                         api_key=self.api_key,
-                        video_path=str(file_path)
+                        video_path=str(file_path),
                     )
-                    log.critical(f'Video Understanding desc_text : {desc_text}')
-                
-                if desc_text:
-                    log.info(f"Generated description: {desc_text[:100]}...")
+                    log.info(f"[Video] description: {(desc_text or '')[:80]}")
+                except Exception as e:
+                    log.error(f"[Video] description failed: {e}")
+
+            try:
+                from fastapi_app.config.settings import settings as _ts
+                transcript_text = await _transcribe_media_audio(
+                    file_path,
+                    api_url=(_ts.LLM_API_URL or "").strip() or self.multimodal_api_url,
+                    api_key=(_ts.LLM_API_KEY or "").strip() or self.api_key,
+                    model=(_ts.LLM_MODEL or "").strip() or self.video_model,
+                )
             except Exception as e:
-                log.error(f"Failed to generate description: {e}")
-                # Fallback or just skip embedding
-        
+                log.warning(f"[Transcribe] video audio failed: {e}")
+
+        # ── Audio: transcribe directly ──
+        elif is_audio:
+            try:
+                from fastapi_app.config.settings import settings as _ts
+                transcript_text = await _transcribe_media_audio(
+                    file_path,
+                    api_url=(_ts.LLM_API_URL or "").strip() or self.multimodal_api_url,
+                    api_key=(_ts.LLM_API_KEY or "").strip() or self.api_key,
+                    model=(_ts.LLM_MODEL or "").strip() or self.image_model,
+                )
+            except Exception as e:
+                log.error(f"[Transcribe] audio failed: {e}")
+            if transcript_text:
+                desc_text = transcript_text[:500]
+
+        # ── Store description (existing logic, preserved) ──
         if desc_text:
-            # Save description to file
-            desc_path = self.processed_dir / file_id / "description.txt"
-            desc_path.parent.mkdir(parents=True, exist_ok=True)
-            with open(desc_path, 'w', encoding='utf-8') as f:
-                f.write(desc_text)
-                
+            desc_path = out_dir / "description.txt"
+            desc_path.write_text(desc_text, encoding="utf-8")
             record["description_text_path"] = str(desc_path)
-            
-            # Embed description
+
             vectors = self._call_embedding_api([desc_text])
             meta_list = [{
                 "source_file_id": file_id,
                 "type": "media_desc",
                 "content": desc_text,
-                "path": str(file_path)
+                "path": str(file_path),
             }]
             self._add_vectors(vectors, meta_list)
+
+            if is_image or is_video:
+                import base64 as _b64
+                import mimetypes as _mt
+                try:
+                    mime = _mt.guess_type(str(file_path))[0] or "image/jpeg"
+                    b64 = _b64.b64encode(file_path.read_bytes()).decode()
+                    img_data_url = f"data:{mime};base64,{b64}"
+                    visual_vecs = self._call_visual_embedding_api(img_data_url, is_image=True)
+                except Exception as exc:
+                    log.warning(f"[VisualEmbed] falling back to text-desc embedding for {file_path.name}: {exc}")
+                    visual_vecs = vectors
+                    img_data_url = None
+
+                self._add_visual_vectors(visual_vecs, [{
+                    "source_file_id": file_id,
+                    "type": "visual",
+                    "content": desc_text,
+                    "path": str(file_path),
+                }])
+
+                if img_data_url:
+                    try:
+                        omni_vecs = self._call_omni_embedding_api(img_data_url, is_image=True)
+                        self._add_omni_vectors(omni_vecs, [{
+                            "source_file_id": file_id,
+                            "type": "visual",
+                            "content": desc_text,
+                            "path": str(file_path),
+                        }])
+                    except Exception as exc:
+                        log.warning(f"[Omni] Media omni embed failed: {exc}")
+
             record["media_desc_count"] = 1
         else:
-            log.warning(f"Skipping media {file_path.name} (no description available)")
+            log.warning(f"Skipping media description for {file_path.name} (no description available)")
+
+        # ── OCR text → chunk & embed ──
+        if ocr_text and ocr_text.strip():
+            ocr_path = out_dir / "ocr_text.txt"
+            ocr_path.write_text(ocr_text, encoding="utf-8")
+            record["ocr_text_path"] = str(ocr_path)
+
+            chunks = _chunk_text(ocr_text)
+            if not chunks:
+                chunks = [c.strip() for c in ocr_text.split('\n\n') if c.strip() and len(c.strip()) > 10]
+            if chunks:
+                vecs = self._call_embedding_api(chunks)
+                meta = [
+                    {"source_file_id": file_id, "type": "ocr_chunk", "content": c, "chunk_index": i}
+                    for i, c in enumerate(chunks)
+                ]
+                self._add_vectors(vecs, meta)
+                if self._visual_embed_svc is not None:
+                    try:
+                        omni_vecs = self._call_omni_embedding_api_batch(chunks)
+                        self._add_omni_vectors(omni_vecs, meta)
+                    except Exception as exc:
+                        log.warning(f"[Omni] OCR chunk omni embed failed: {exc}")
+                record["ocr_chunks_count"] = len(chunks)
+                log.info(f"[OCR] embedded {len(chunks)} chunks from {file_path.name}")
+
+        # ── Transcript text → chunk & embed ──
+        if transcript_text and transcript_text.strip():
+            tx_path = out_dir / "transcript.txt"
+            tx_path.write_text(transcript_text, encoding="utf-8")
+            record["transcript_path"] = str(tx_path)
+
+            chunks = _chunk_text(transcript_text)
+            if not chunks:
+                chunks = [c.strip() for c in transcript_text.split('\n\n') if c.strip() and len(c.strip()) > 10]
+            if chunks:
+                vecs = self._call_embedding_api(chunks)
+                meta = [
+                    {"source_file_id": file_id, "type": "transcript_chunk", "content": c, "chunk_index": i}
+                    for i, c in enumerate(chunks)
+                ]
+                self._add_vectors(vecs, meta)
+                if self._visual_embed_svc is not None:
+                    try:
+                        omni_vecs = self._call_omni_embedding_api_batch(chunks)
+                        self._add_omni_vectors(omni_vecs, meta)
+                    except Exception as exc:
+                        log.warning(f"[Omni] transcript chunk omni embed failed: {exc}")
+                record["transcript_chunks_count"] = len(chunks)
+                log.info(f"[Transcribe] embedded {len(chunks)} chunks from {file_path.name}")
 
 async def process_knowledge_base_files(
     file_list: List[Dict[str, str]],

@@ -429,6 +429,8 @@ class IntelligentQARequest(MainRequest):
     rag_query: str = ""  # RAG/embedding 检索问题；为空时回退到 query
     history: List[Dict[str, str]] = field(default_factory=list)  # 历史记录 [{"role": "user", "content": "..."}]
     vector_store_base_dir: Optional[str] = None  # 可选，用于 RAG：向量库根目录（与 kb_embedding 约定一致）
+    retrieval_mode: str = "text"  # "text" | "vlm" — vlm 模式下同时搜索视觉索引
+    query_image_data_urls: List[str] = field(default_factory=list)  # 用户附加的图片 data URLs，用于以图搜图
 
 @dataclass
 class IntelligentQAState(MainState):

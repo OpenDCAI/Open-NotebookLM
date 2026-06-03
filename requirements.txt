@@ -1,0 +1,3 @@
+# Standard Python dependency entrypoint.
+# Keep the full backend dependency list in requirements-base.txt.
+-r requirements-base.txt

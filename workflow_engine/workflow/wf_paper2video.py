@@ -13,8 +13,9 @@ from __future__ import annotations
 import asyncio
 import json
 import multiprocessing
+import os
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
+import time
 from pathlib import Path
 
 from workflow_engine.agentroles import create_vlm_agent
@@ -267,9 +268,34 @@ def create_paper2video_continue_graph() -> GenericGraphBuilder:
                     )
                 )
 
-        max_workers = min(3, len(all_tasks)) if all_tasks else 1
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
-            results = list(ex.map(P2V.speech_task_wrapper_with_cloud_tts, all_tasks))
+        try:
+            request_interval = max(
+                0.0,
+                float(os.getenv("PAPER2VIDEO_TTS_INTERVAL_SECONDS", "1.2")),
+            )
+        except ValueError:
+            request_interval = 1.2
+        results = []
+        for task_index, task in enumerate(all_tasks, start=1):
+            slide_idx, idx, _prompt, out_wav, *_ = task
+            if Path(out_wav).is_file():
+                try:
+                    duration = P2V.get_audio_length(out_wav)
+                    if duration > 0:
+                        log.info(
+                            "paper2video_continue: 复用已生成 TTS slide=%s idx=%s wav=%s",
+                            slide_idx,
+                            idx,
+                            out_wav,
+                        )
+                        results.append((slide_idx, idx, duration, out_wav))
+                        continue
+                except Exception as exc:
+                    log.warning("paper2video_continue: 已有 TTS wav 不可用，将重新生成 %s: %s", out_wav, exc)
+                    Path(out_wav).unlink(missing_ok=True)
+            results.append(P2V.speech_task_wrapper_with_cloud_tts(task))
+            if request_interval and task_index < len(all_tasks):
+                time.sleep(request_interval)
         log.info("paper2video_continue: TTS 完成，共 %s 个片段，开始合并每页 wav", len(all_tasks))
 
         organized: dict = {}

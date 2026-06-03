@@ -3,6 +3,7 @@ import re
 import wave
 import base64
 import io
+import asyncio
 from typing import Optional, List
 import httpx
 from workflow_engine.logger import get_logger
@@ -12,6 +13,8 @@ from workflow_engine.toolkits.multimodaltool.utils import detect_provider, Provi
 from fastapi_app.config import settings
 
 log = get_logger(__name__)
+
+_RETRYABLE_TTS_STATUS_CODES = {408, 409, 425, 429, 500, 502, 503, 504}
 
 # 全局模型缓存
 _qwen_native_model = None
@@ -191,13 +194,29 @@ async def _call_dashscope_qwen_tts(
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    log.info(f"[TTS] DashScope Qwen TTS POST {url}")
+    max_attempts = max(1, int(kwargs.get("max_attempts") or 1))
     async with httpx.AsyncClient(timeout=httpx.Timeout(timeout), http2=False) as client:
-        resp = await client.post(url, headers=headers, json=payload)
-        log.info(f"[TTS] dashscope status={resp.status_code}")
-        if resp.status_code >= 400:
-            log.error(f"[TTS] dashscope body={resp.text[:1000]}")
-        resp.raise_for_status()
+        for attempt in range(1, max_attempts + 1):
+            log.info(f"[TTS] DashScope Qwen TTS POST {url} attempt={attempt}/{max_attempts}")
+            resp = await client.post(url, headers=headers, json=payload)
+            log.info(f"[TTS] dashscope status={resp.status_code}")
+            if resp.status_code >= 400:
+                log.error(f"[TTS] dashscope body={resp.text[:1000]}")
+            if resp.status_code in _RETRYABLE_TTS_STATUS_CODES and attempt < max_attempts:
+                retry_after = resp.headers.get("Retry-After")
+                try:
+                    delay = float(retry_after) if retry_after else min(2 ** attempt, 20)
+                except (TypeError, ValueError):
+                    delay = min(2 ** attempt, 20)
+                log.warning(
+                    "[TTS] DashScope temporary error status=%s, retrying in %.1fs",
+                    resp.status_code,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+                continue
+            resp.raise_for_status()
+            break
         data = resp.json()
         audio = (data.get("output") or {}).get("audio") or {}
         audio_b64 = audio.get("data")

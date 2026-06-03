@@ -818,10 +818,405 @@ class OutputV2Service:
         ):
             if item.get(key):
                 normalized[key] = item.get(key)
+        for key in (
+            "generation_failed",
+            "generation_error",
+            "mode",
+            "page_idx",
+            "review_status",
+            "confirmed",
+        ):
+            if key in item:
+                normalized[key] = item.get(key)
         return normalized
 
     def _normalize_ppt_outline(self, outline: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         return [self._normalize_ppt_outline_item(item or {}, index) for index, item in enumerate(outline or [])]
+
+    def _normalize_ppt_output_info(
+        self,
+        output_info: Optional[Dict[str, Any]],
+        *,
+        item: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        raw = output_info if isinstance(output_info, dict) else {}
+        page_count = raw.get("page_count") or item.get("page_count") or len(item.get("outline") or []) or 0
+        try:
+            page_count = int(page_count)
+        except (TypeError, ValueError):
+            page_count = 0
+        return {
+            "type": str(raw.get("type") or item.get("target_type") or "ppt"),
+            "title": str(raw.get("title") or item.get("title") or "PPT").strip() or "PPT",
+            "page_count": page_count,
+            "source_names": list(raw.get("source_names") or item.get("source_names") or []),
+            "bound_document_titles": list(raw.get("bound_document_titles") or item.get("bound_document_titles") or []),
+        }
+
+    def _normalize_ppt_style_info(self, style_info: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+        raw = style_info if isinstance(style_info, dict) else {}
+        preset = str(raw.get("preset") or "clean").strip() or "clean"
+        labels = {
+            "clean": "简洁干净",
+            "business": "商务汇报",
+            "academic": "学术严谨",
+        }
+        supplement = raw.get("supplement_prompt")
+        if isinstance(supplement, list):
+            supplement_prompt = [str(item or "").strip() for item in supplement if str(item or "").strip()]
+        elif str(supplement or "").strip():
+            supplement_prompt = [str(supplement).strip()]
+        else:
+            supplement_prompt = []
+        return {
+            "preset": preset,
+            "label": str(raw.get("label") or labels.get(preset) or preset).strip(),
+            "tone": str(raw.get("tone") or "").strip(),
+            "visual_style": str(raw.get("visual_style") or "").strip(),
+            "audience_assumption": str(raw.get("audience_assumption") or "").strip(),
+            "supplement_prompt": supplement_prompt,
+        }
+
+    def _build_outline_chat_intent_summary(
+        self,
+        *,
+        message: str,
+        active_slide_index: Optional[int],
+    ) -> Dict[str, Any]:
+        text = str(message or "").strip()
+        mode = "style" if self._is_ppt_style_only_message(
+            message=text,
+            intent_summary={"mode": "none"},
+            active_slide_index=active_slide_index,
+        ) else "outline"
+        slide_targets = []
+        if active_slide_index is not None:
+            slide_targets.append({"index": active_slide_index})
+        return {
+            "mode": mode,
+            "message": text,
+            "global_directives": [],
+            "slide_targets": slide_targets,
+        }
+
+    def _is_ppt_style_only_message(
+        self,
+        *,
+        message: str,
+        intent_summary: Optional[Dict[str, Any]],
+        active_slide_index: Optional[int],
+    ) -> bool:
+        if active_slide_index is not None:
+            return False
+        mode = str((intent_summary or {}).get("mode") or "").strip()
+        if mode == "style":
+            return True
+        text = str(message or "").strip()
+        if not text:
+            return False
+        style_words = ("风格", "商务", "配色", "视觉", "语气", "版式", "style")
+        outline_words = ("第", "页", "标题", "要点", "大纲", "顺序", "删除", "新增", "拆成", "合并")
+        return any(word in text for word in style_words) and not any(word in text for word in outline_words)
+
+    def _active_outline_chat_session(self, item: Dict[str, Any]) -> Dict[str, Any]:
+        sessions = item.get("outline_chat_sessions")
+        if not isinstance(sessions, list):
+            sessions = []
+            item["outline_chat_sessions"] = sessions
+        active_id = str(item.get("outline_chat_active_session_id") or "").strip()
+        for session in sessions:
+            if isinstance(session, dict) and session.get("id") == active_id:
+                return session
+        for session in sessions:
+            if isinstance(session, dict) and session.get("status") == "active":
+                item["outline_chat_active_session_id"] = session.get("id")
+                return session
+        now = self._now()
+        session = {
+            "id": f"session_{uuid4().hex}",
+            "status": "active",
+            "messages": [],
+            "draft_outline": self._normalize_ppt_outline(item.get("outline") or []),
+            "draft_output_info": item.get("output_info"),
+            "draft_style_info": item.get("style_info"),
+            "has_pending_changes": False,
+            "created_at": now,
+            "updated_at": now,
+        }
+        sessions.append(session)
+        item["outline_chat_active_session_id"] = session["id"]
+        return session
+
+    def _sync_outline_chat_state(self, item: Dict[str, Any]) -> tuple[Dict[str, Any], bool]:
+        changed = False
+        outline = self._normalize_ppt_outline(item.get("outline") or [])
+        if item.get("outline") != outline:
+            item["outline"] = outline
+            changed = True
+
+        output_info = self._normalize_ppt_output_info(item.get("output_info"), item=item)
+        if item.get("output_info") != output_info:
+            item["output_info"] = output_info
+            changed = True
+
+        style_info = self._normalize_ppt_style_info(item.get("style_info"))
+        supplement = list(style_info.get("supplement_prompt") or [])
+        guidance_text = str(item.get("guidance_snapshot_text") or "").strip()
+        if guidance_text and guidance_text not in supplement:
+            supplement.append(guidance_text)
+        directives = item.get("outline_global_directives") if isinstance(item.get("outline_global_directives"), list) else []
+        for directive in directives:
+            if not isinstance(directive, dict):
+                continue
+            text = str(directive.get("instruction") or directive.get("label") or "").strip()
+            if text and text not in supplement:
+                supplement.append(text)
+        if guidance_text or directives:
+            joined = " ".join(supplement)
+            if "商务" in joined and style_info.get("preset") == "clean":
+                style_info["preset"] = "business"
+                style_info["label"] = "商务汇报"
+            style_info["supplement_prompt"] = supplement
+        if item.get("style_info") != style_info:
+            item["style_info"] = style_info
+            changed = True
+        if directives:
+            item["outline_global_directives"] = []
+            item["outline_chat_draft_global_directives"] = []
+            changed = True
+        return item, changed
+
+    async def _apply_outline_chat(
+        self,
+        *,
+        item: Dict[str, Any],
+        outline: List[Dict[str, Any]],
+        output_info: Dict[str, Any],
+        style_info: Dict[str, Any],
+        global_directives: List[Dict[str, Any]],
+        intent_summary: Dict[str, Any],
+        history: List[Dict[str, Any]],
+        conversation_history: Optional[List[Dict[str, Any]]],
+        context_snapshot: Optional[Dict[str, Any]],
+        message: str,
+        active_slide_index: Optional[int],
+        email: str,
+        api_url: Optional[str],
+        api_key: Optional[str],
+        model: Optional[str],
+    ) -> Dict[str, Any]:
+        if self._is_ppt_style_only_message(
+            message=message,
+            intent_summary=intent_summary,
+            active_slide_index=active_slide_index,
+        ):
+            draft_style = self._normalize_ppt_style_info(style_info)
+            text = str(message or "").strip()
+            if "商务" in text:
+                draft_style.update({
+                    "preset": "business",
+                    "label": "商务汇报",
+                    "tone": draft_style.get("tone") or "简洁、清晰、结论先行",
+                    "visual_style": draft_style.get("visual_style") or "浅色背景、少量强调色、图文平衡",
+                })
+            supplement = list(draft_style.get("supplement_prompt") or [])
+            if text and text not in supplement:
+                supplement.append(text)
+            draft_style["supplement_prompt"] = supplement
+            return {
+                "outline": outline,
+                "draft_output_info": output_info,
+                "draft_style_info": draft_style,
+                "draft_global_directives": [],
+                "assistant_message": "已整理为风格信息候选修改，确认后会应用到 PPT 产出信息。",
+                "applied_scope": "style",
+                "applied_slide_index": None,
+                "change_summary": "更新风格信息",
+                "intent_summary": intent_summary,
+            }
+
+        return {
+            "outline": outline,
+            "draft_output_info": output_info,
+            "draft_style_info": style_info,
+            "draft_global_directives": global_directives,
+            "assistant_message": "已整理为候选大纲修改，确认后会应用到 PPT 产出文档。",
+            "applied_scope": "outline",
+            "applied_slide_index": active_slide_index,
+            "change_summary": "生成候选大纲",
+            "intent_summary": intent_summary,
+        }
+
+    async def outline_chat(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        email: str,
+        output_id: str,
+        message: str,
+        active_slide_index: Optional[int],
+        conversation_history: Optional[List[Dict[str, Any]]],
+        api_url: Optional[str],
+        api_key: Optional[str],
+        model: Optional[str],
+    ) -> tuple[Dict[str, Any], str, str, Optional[int], str, Dict[str, Any]]:
+        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
+        manifest = self._read_manifest(manifest_path)
+        index, item = self._find_output(manifest, output_id)
+        item, _ = self._sync_outline_chat_state(item)
+        outline = self._normalize_ppt_outline(item.get("outline") or [])
+        output_info = self._normalize_ppt_output_info(item.get("output_info"), item=item)
+        style_info = self._normalize_ppt_style_info(item.get("style_info"))
+        intent_summary = self._build_outline_chat_intent_summary(
+            message=message,
+            active_slide_index=active_slide_index,
+        )
+        session = self._active_outline_chat_session(item)
+        messages = session.setdefault("messages", [])
+        now = self._now()
+        messages.append({
+            "id": f"message_{uuid4().hex}",
+            "role": "user",
+            "content": str(message or "").strip(),
+            "created_at": now,
+        })
+        mutation = await self._apply_outline_chat(
+            item=item,
+            outline=outline,
+            output_info=output_info,
+            style_info=style_info,
+            global_directives=[],
+            intent_summary=intent_summary,
+            history=messages,
+            conversation_history=None,
+            context_snapshot=None,
+            message=message,
+            active_slide_index=active_slide_index,
+            email=email,
+            api_url=api_url,
+            api_key=api_key,
+            model=model,
+        )
+        draft_outline = self._normalize_ppt_outline(mutation.get("outline") or outline)
+        draft_output_info = self._normalize_ppt_output_info(mutation.get("draft_output_info"), item=item)
+        draft_style_info = self._normalize_ppt_style_info(mutation.get("draft_style_info") or style_info)
+        draft_global_directives = list(mutation.get("draft_global_directives") or [])
+        assistant_message = str(mutation.get("assistant_message") or "已生成候选修改。")
+        messages.append({
+            "id": f"message_{uuid4().hex}",
+            "role": "assistant",
+            "content": assistant_message,
+            "created_at": self._now(),
+        })
+        session.update({
+            "draft_outline": draft_outline,
+            "draft_output_info": draft_output_info,
+            "draft_style_info": draft_style_info,
+            "draft_global_directives": draft_global_directives,
+            "has_pending_changes": True,
+            "intent_summary": mutation.get("intent_summary") or intent_summary,
+            "updated_at": self._now(),
+        })
+        item.update({
+            "outline_chat_draft_outline": draft_outline,
+            "outline_chat_draft_output_info": draft_output_info,
+            "outline_chat_draft_style_info": draft_style_info,
+            "outline_chat_draft_global_directives": draft_global_directives,
+            "outline_chat_has_pending_changes": True,
+            "updated_at": self._now(),
+        })
+        manifest[index] = item
+        self._write_manifest(manifest_path, manifest)
+        return (
+            item,
+            assistant_message,
+            str(mutation.get("applied_scope") or "outline"),
+            mutation.get("applied_slide_index"),
+            str(mutation.get("change_summary") or ""),
+            mutation.get("intent_summary") or intent_summary,
+        )
+
+    async def apply_outline_chat(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        output_id: str,
+    ) -> tuple[Dict[str, Any], str]:
+        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
+        manifest = self._read_manifest(manifest_path)
+        index, item = self._find_output(manifest, output_id)
+        item, _ = self._sync_outline_chat_state(item)
+        session = self._active_outline_chat_session(item)
+        draft_outline = self._normalize_ppt_outline(session.get("draft_outline") or item.get("outline") or [])
+        draft_output_info = self._normalize_ppt_output_info(session.get("draft_output_info"), item=item)
+        draft_style_info = self._normalize_ppt_style_info(session.get("draft_style_info") or item.get("style_info"))
+        item["outline"] = draft_outline
+        item["output_info"] = draft_output_info
+        item["style_info"] = draft_style_info
+        item["outline_global_directives"] = []
+        item["outline_chat_draft_outline"] = draft_outline
+        item["outline_chat_draft_output_info"] = draft_output_info
+        item["outline_chat_draft_style_info"] = draft_style_info
+        item["outline_chat_draft_global_directives"] = []
+        item["outline_chat_has_pending_changes"] = False
+        session["draft_outline"] = draft_outline
+        session["draft_output_info"] = draft_output_info
+        session["draft_style_info"] = draft_style_info
+        session["draft_global_directives"] = []
+        session["has_pending_changes"] = False
+        session.setdefault("messages", []).append({
+            "id": f"message_{uuid4().hex}",
+            "role": "system",
+            "content": "已应用候选修改到正式大纲。",
+            "created_at": self._now(),
+        })
+        session["updated_at"] = self._now()
+        item["updated_at"] = self._now()
+        manifest[index] = item
+        self._write_manifest(manifest_path, manifest)
+        return item, "已应用候选修改到正式大纲。"
+
+    def discard_outline_chat(
+        self,
+        *,
+        notebook_id: str,
+        notebook_title: str,
+        user_id: str,
+        output_id: str,
+    ) -> tuple[Dict[str, Any], str]:
+        manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
+        manifest = self._read_manifest(manifest_path)
+        index, item = self._find_output(manifest, output_id)
+        item, _ = self._sync_outline_chat_state(item)
+        confirmed_outline = self._normalize_ppt_outline(item.get("outline") or [])
+        confirmed_output_info = self._normalize_ppt_output_info(item.get("output_info"), item=item)
+        confirmed_style_info = self._normalize_ppt_style_info(item.get("style_info"))
+        session = self._active_outline_chat_session(item)
+        session["draft_outline"] = confirmed_outline
+        session["draft_output_info"] = confirmed_output_info
+        session["draft_style_info"] = confirmed_style_info
+        session["draft_global_directives"] = []
+        session["has_pending_changes"] = False
+        session.setdefault("messages", []).append({
+            "id": f"message_{uuid4().hex}",
+            "role": "system",
+            "content": "已放弃上一版候选大纲，继续基于当前正式大纲讨论。",
+            "created_at": self._now(),
+        })
+        session["updated_at"] = self._now()
+        item["outline_chat_draft_outline"] = confirmed_outline
+        item["outline_chat_draft_output_info"] = confirmed_output_info
+        item["outline_chat_draft_style_info"] = confirmed_style_info
+        item["outline_chat_draft_global_directives"] = []
+        item["outline_chat_has_pending_changes"] = False
+        item["updated_at"] = self._now()
+        manifest[index] = item
+        self._write_manifest(manifest_path, manifest)
+        return item, "已放弃上一版候选大纲，继续基于当前正式大纲讨论。"
 
     def _attach_ppt_page_images_from_disk(
         self,
@@ -1969,6 +2364,7 @@ class OutputV2Service:
         outline: List[Dict[str, Any]],
         pipeline_stage: Optional[str] = None,
         enable_images: Optional[bool] = None,
+        manual_edit_log: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         manifest_path = self._manifest_path(notebook_id, notebook_title, user_id)
         manifest = self._read_manifest(manifest_path)
@@ -2021,6 +2417,11 @@ class OutputV2Service:
             item["status"] = pipeline_stage
         if enable_images is not None:
             item["enable_images"] = bool(enable_images)
+        if manual_edit_log:
+            existing_log = item.get("manual_edit_log")
+            if not isinstance(existing_log, list):
+                existing_log = []
+            item["manual_edit_log"] = [*existing_log, *manual_edit_log]
         if deck in ("ppt", "video"):
             if should_reset_deck_state:
                 item = self._reset_ppt_generation_state(item)
@@ -2224,7 +2625,7 @@ class OutputV2Service:
             generate_quiz,
         )
 
-        payload_model = model or settings.KB_CHAT_MODEL
+        payload_model = model or settings.KB_CHAT_MODEL or "deepseek-v3.2"
         if target_type == "mindmap":
             return await generate_mindmap_from_kb(
                 file_paths=[str(md_path)],
@@ -2235,6 +2636,8 @@ class OutputV2Service:
                 api_url=api_url,
                 api_key=api_key,
                 model=payload_model,
+                max_depth=10,
+                language="zh",
             )
         if target_type == "podcast":
             return await generate_podcast_from_kb(

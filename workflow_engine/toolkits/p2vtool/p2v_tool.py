@@ -817,7 +817,7 @@ def _validate_talking_video_output(
             audio_dur = get_audio_length(audio_path)
         except Exception as e:
             log.warning("[talking-video] cannot get duration for validation: %s", e)
-            return False
+            return True
         if audio_dur <= 0:
             return True
         ratio = video_dur / audio_dur

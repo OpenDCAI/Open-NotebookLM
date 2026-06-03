@@ -298,7 +298,7 @@ def images_to_pdf(image_paths: Sequence[str], output_pdf_path: str) -> str:
         imgs.append(im)
     if not imgs:
         raise ValueError("No images for PDF.")
-    imgs[0].save(output_pdf_path, save_all=True, append_images=imgs[1:])
+    imgs[0].save(output_pdf_path, format="PDF", save_all=True, append_images=imgs[1:])
     return output_pdf_path
 
 

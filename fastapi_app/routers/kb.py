@@ -1279,6 +1279,15 @@ async def _vlm_describe_base64_image(
         return ""
 
 
+def _resolve_kb_vlm_model(fallback_model: Optional[str] = None) -> str:
+    return (
+        (getattr(settings, "KB_VLM_MODEL", "") or "").strip()
+        or (getattr(settings, "LLM_MODEL", "") or "").strip()
+        or str(fallback_model or "").strip()
+        or "gemini-2.5-flash"
+    )
+
+
 def _load_image_as_data_url(path: str) -> str:
     """Load a local image file and return it as a base64 data URL."""
     import base64
@@ -1547,8 +1556,9 @@ async def chat_with_kb_stream(
                     "message": "正在分析图片内容",
                     "message_en": "Analyzing attached images",
                 })
+                vlm_model = _resolve_kb_vlm_model(req.model)
                 descs = await asyncio.gather(*[
-                    _vlm_describe_base64_image(url, req.chat_api_url, req.api_key, req.model)
+                    _vlm_describe_base64_image(url, req.chat_api_url, req.api_key, vlm_model)
                     for url in image_attachments
                 ])
                 image_descriptions = [d for d in descs if d]
@@ -1643,10 +1653,7 @@ async def chat_with_kb_stream(
             )
             chat_model = req.model
             if has_images:
-                vlm_model = (
-                    (getattr(settings, "KB_VLM_MODEL", "") or "").strip()
-                    or (getattr(settings, "LLM_MODEL", "") or "").strip()
-                )
+                vlm_model = _resolve_kb_vlm_model(req.model)
                 if vlm_model:
                     chat_model = vlm_model
                     log.info(f"[VLM] Switching to multimodal model: {chat_model}")
@@ -3057,6 +3064,12 @@ async def generate_mindmap_from_kb(
         else:
             mermaid_code = getattr(result_state, "mermaid_code", "")
             result_path = getattr(result_state, "result_path", "")
+
+        if str(mermaid_code or "").lstrip().startswith("# Error"):
+            raise HTTPException(
+                status_code=500,
+                detail=str(mermaid_code).replace("# Error", "", 1).strip() or "Mindmap generation failed",
+            )
 
         mindmap_path = ""
         if result_path:

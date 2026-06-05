@@ -1,217 +1,296 @@
-<p align="center">
-  <img src="frontend/public/logo_banner.jpg" alt="OpenNotebookLM logo" width="640" />
-</p>
+<div align="center">
+
+<img src="docs/assets/thinkflow/thinkflow-logo.png" alt="ThinkFlow Logo" width="720"/>
 
 # Open-NotebookLM / ThinkFlow
 
-Open-NotebookLM 是一个面向论文阅读、产品调研、课程学习和团队汇报的 AI 知识工作台。前端产品形态叫 ThinkFlow，它把资料导入、基于来源的问答、文本/图片多模态检索、知识沉淀和多形态产出放进同一个笔记本里，让一次资料处理可以持续演化为摘要、梳理文档、报告、导图、PPT、播客、卡片和测验。
+[![Python](https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=111111)](https://react.dev/)
+[![Vite](https://img.shields.io/badge/Vite-5-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vitejs.dev/)
+[![License](https://img.shields.io/badge/License-Apache_2.0-2F80ED?style=flat-square&logo=apache&logoColor=white)](LICENSE)
+[![GitHub Repo](https://img.shields.io/badge/GitHub-OpenDCAI%2FThinkFlow-24292F?style=flat-square&logo=github&logoColor=white)](https://github.com/OpenDCAI/ThinkFlow)
 
-项目由 FastAPI 后端、React/Vite 前端和本地文件工作区组成。后端负责来源管理、文档处理、文本与视觉向量索引、知识库记录、LLM/VLM 调用、TTS、PPT/报告等产出编排；前端提供三栏式知识工作台、对话区、图片附件、PDF 图片图库、文档工作台和产出预览。
+中文 | [English](README_EN.md)
 
-> 本 README 的截图来自 2026-06-01 的本地 Playwright 走查，截图材料是演示来源，不包含账号密码。
+✨ **面向论文阅读、产品调研、课程学习和团队汇报的 AI 知识工作台：从资料导入、来源问答、多模态检索，到文档沉淀、报告、导图、PPT、播客、卡片和测验生成** ✨
 
-![知识工作台](docs/assets/thinkflow/dashboard.png)
+| 📚 **基于来源问答** &nbsp;|&nbsp; 🧠 **多模态检索** &nbsp;|&nbsp; 📝 **知识工作台** &nbsp;|&nbsp; 🎬 **多形态产出** |
 
-## 项目能做什么
+<br>
 
-Open-NotebookLM 解决的是“资料进来以后如何持续加工成可复用成果”的问题。它不是只提供一次性聊天窗口，而是把来源、对话、沉淀和产出组织成一个可回溯的闭环。
+<a href="#-快速启动" target="_self">
+  <img alt="Quick Start" src="https://img.shields.io/badge/🚀-Quick_Start-2F80ED?style=for-the-badge" />
+</a>
+<a href="#-功能展示" target="_self">
+  <img alt="Showcase" src="https://img.shields.io/badge/📸-Showcase-56CCF2?style=for-the-badge" />
+</a>
+<a href="docs/" target="_blank">
+  <img alt="Docs" src="https://img.shields.io/badge/📚-Docs-2D9CDB?style=for-the-badge" />
+</a>
 
-- **统一管理来源**：支持上传文件、粘贴文本、导入网页，也可以通过搜索和深度研究补充外部资料。
-- **围绕来源问答**：对话区基于已选来源回答问题，适合论文精读、竞品调研、课程复习和材料梳理。
-- **VLM 多模态检索**：对话区可在文本检索和 VLM 检索之间切换，支持粘贴/附加图片，用图片问题或视觉线索检索 PDF 页面图、插图和图片来源。
-- **PDF 图片索引与图库**：PDF 入库后可以重建图片索引、提取图片并在来源侧查看，VLM 模式会优先利用视觉索引和多模态 embedding。
-- **音视频来源处理**：音频、视频和图片可以作为来源进入工作区，后端会尽量转写、OCR 或调用 VLM 生成可检索内容。
-- **把有价值内容沉淀下来**：重要回答可以进入 Summary、梳理文档或产出指导，避免聊天内容一次性消失。
-- **保留对话上下文**：支持新建对话、查看历史对话，并保存每轮对话绑定的来源、活跃文档和产出工作区状态。
-- **生成多种结果**：基于来源快照生成报告、思维导图、PPT、播客、学习卡片和测验。
-- **保留产出依据**：产出会锁定当次来源、梳理文档和产出指导，方便后续追溯与重生成。
+<br>
+<br>
 
-## 核心工作流
+<img src="docs/assets/thinkflow/dashboard.png" alt="ThinkFlow 知识工作台" width="92%"/>
 
-ThinkFlow 的主界面采用三栏布局。左侧管理来源、对话历史和已生成产出；中间是基于来源的主对话；右侧是知识资产和产出工作台。
+</div>
 
-![来源与三栏工作区](docs/assets/thinkflow/workspace-sources.png)
+## 📑 目录
 
-典型流程如下：
+- [✨ 核心功能](#-核心功能)
+- [🔁 工作流](#-工作流)
+- [📸 功能展示](#-功能展示)
+- [🚀 快速启动](#-快速启动)
+- [⚙️ 配置说明](#️-配置说明)
+- [📂 项目结构](#-项目结构)
+- [🧪 开发命令](#-开发命令)
+- [📦 本地数据位置](#-本地数据位置)
+- [🗺️ 路线图](#️-路线图)
+- [📚 更多文档](#-更多文档)
 
-1. **建立笔记本**：每个笔记本对应一次研究、课程、产品调研或汇报任务。
-2. **导入来源**：把 PDF、Markdown、网页、访谈纪要或粘贴文本统一登记为来源。
-3. **基于来源对话**：围绕选中的来源提问，逐步形成可验证的理解；需要读图、看 PDF 页面图或上传截图时，可切换到 VLM 模式。
-4. **沉淀知识资产**：把关键结论保存到 Summary、梳理文档和产出指导。
-5. **生成结果**：选择报告、导图、PPT、播客、卡片或测验，基于锁定的来源快照生成成果。
+## ✨ 核心功能
 
-## 功能导览
+> ThinkFlow 把一个笔记本变成可追踪的知识生产闭环：来源进入笔记本，对话形成理解，确认过的内容被沉淀，最终产出从锁定上下文中生成。
 
-### 1. 来源与对话
+- **📚 统一来源接入**：支持上传文件、粘贴文本、导入网页、搜索和深度研究，把材料统一放进一个笔记本。
+- **💬 基于来源问答**：围绕已选来源提问，保留引用、来源映射和多轮上下文。
+- **🧠 VLM 多模态检索**：在文本模式和 VLM 模式之间切换，支持图片附件、粘贴图片、PDF 页面图和图表证据检索。
+- **🖼️ PDF 图片索引与图库**：可重建 PDF 图片索引、查看抽取图片，并让视觉证据参与检索和后续产出。
+- **📝 知识工作台**：把有价值的回答保存为 Summary 卡片、可编辑文档和产出指导，避免知识散落在聊天里。
+- **📌 对话状态保留**：按对话保存已选来源、绑定文档、活跃文档和产出上下文。
+- **📄 报告生成**：基于来源、梳理文档和产出指导生成报告草稿。
+- **🗺️ 思维导图生成**：把材料整理成层级结构，支持预览和导出。
+- **🎞️ PPT 工作流**：先生成大纲，再逐页生成和确认演示内容。
+- **🎧 播客生成**：把来源内容转成脚本和可播放音频。
+- **🧩 学习产出**：生成学习卡片和测验，适合课程复习、团队培训和知识验收。
+- **🎬 视频生成**：基于资料和脚本生成分镜、口播稿和视频结果。
 
-来源是整个系统的第一优先级。用户可以在左侧栏选择参与当前对话和产出的材料，中间对话区会围绕这些来源回答问题。回答旁边提供沉淀入口，方便把单条回答、一轮问答或多条消息推送到右侧知识资产。
+---
 
-![三栏工作区](docs/assets/thinkflow/workspace-sources.png)
+## 🔁 工作流
 
-### 2. VLM 多模态检索与图片附件
+<div align="center">
 
-最新合并的多模态检索能力把普通文本 RAG 扩展为文本、图片和 PDF 页面图的联合检索。中间对话区可以一键切换“文本 / VLM”模式；在 VLM 模式下，用户可以直接粘贴图片、附加本地图片，或用文字问题检索 PDF 中抽取出的图片、页面截图和图表。后端会使用 `VISUAL_EMBEDDING_*` 配置构建视觉索引；如果没有单独配置视觉 embedding，也会按配置回退到普通 embedding 服务。
+| 1. 导入 | 2. 提问 | 3. 沉淀 | 4. 约束 | 5. 生成 |
+| --- | --- | --- | --- | --- |
+| PDF / Word / 图片 / 音频 / 视频 / 文本 / 网页 | 文本 RAG 或 VLM 检索 | Summary、文档和可复用笔记 | 产出指导和来源快照 | 报告、导图、PPT、视频、播客、卡片、测验 |
 
-这一能力适合处理论文图表、PPT 截图、产品页面截图、实验结果图和带大量插图的 PDF。回答中可以返回检索到的图片线索，帮助用户从“图片证据”回到原始来源。
+</div>
 
-![VLM 检索入口](docs/assets/thinkflow/workspace-sources.png)
+ThinkFlow 不是一次性聊天窗口，而是为持续知识工作设计的工作台：
 
-### 3. PDF 图片索引、图库与多格式来源
+1. **创建笔记本**：对应一篇论文、一次产品调研、一门课程或一场团队汇报。
+2. **导入来源**：选择哪些来源参与当前对话或产出。
+3. **基于来源提问**：文本模式处理普通资料，VLM 模式处理图片、截图、PDF 图表和视觉证据。
+4. **沉淀确认过的内容**：把关键结论保存到 Summary、文档和产出指导。
+5. **生成最终成果**：从锁定的来源、文档和指导中生成可追溯结果。
 
-PDF 来源除了正文解析外，还支持提取页面图和内嵌图片，并在左侧来源区提供图片索引重建、PDF 图片查看等入口。对于图片来源，系统可以调用 VLM 做 OCR/描述；对于音频和视频来源，后端会尽量转写成可检索文本，让访谈、演示视频、课程录音也能进入同一个知识库。
+---
 
-这类多格式来源会统一沉淀到笔记本目录下，并参与后续对话、文档沉淀和报告/PPT 等产出。
+## 📸 功能展示
 
-### 4. 对话历史与工作区状态
+### 📚 来源工作区与基于来源问答
 
-ThinkFlow 现在支持更完整的多轮对话工作区。用户可以新建对话、查看历史对话，并在每个对话中保存当前选择的来源、绑定文档、活跃文档和相关产出状态。这样同一个笔记本可以容纳多个研究分支，例如“论文方法细读”“实验复现问题”“汇报大纲讨论”，每个分支都能保留自己的上下文。
+<div align="center">
 
-![对话与工作区](docs/assets/thinkflow/workspace-sources.png)
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/showcase/来源展示.png" width="100%"/>
+      <br><sub>✨ 将文件、文本、网页、搜索和深度研究材料统一放进笔记本</sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/thinkflow/workspace-sources.png" width="100%"/>
+      <br><sub>✨ 三栏式工作区统一管理来源、对话、文档和产出</sub>
+    </td>
+  </tr>
+</table>
 
-### 5. Summary 卡片
+</div>
 
-Summary 用来保存从对话和资料中提炼出的关键结论。它适合承载“我已经确认过的要点”，也可以进一步重算为总 Summary，作为后续产出的背景材料。
+### 🧠 多模态检索
 
-![Summary 卡片](docs/assets/thinkflow/summary-panel.png)
+<div align="center">
 
-### 6. 梳理文档
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/showcase/文本模式.png" width="100%"/>
+      <br><sub>✨ 文本模式检索来源片段，并围绕上下文回答问题</sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/showcase/VLM模式.png" width="100%"/>
+      <br><sub>✨ VLM 模式支持图片提问，并检索 PDF 和图片来源里的视觉证据</sub>
+    </td>
+  </tr>
+</table>
 
-梳理文档是后续报告、导图和 PPT 的主输入区。它不是聊天记录副本，而是用户确认过的正文内容，可以持续追加、整理、融合和回看历史版本。
+</div>
 
-![梳理文档](docs/assets/thinkflow/document-panel.png)
+### 📝 知识工作台
 
-### 7. 产出指导
+<div align="center">
 
-产出指导是高权重 brief，用来约束后续结果的重点、风格和讲述顺序。它适合保存“最终产出应该强调什么、避免什么、采用什么口径”这类信息。
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/assets/showcase/沉淀摘要.png" width="100%"/>
+      <br><sub>✨ 把关键结论保存为 Summary 卡片</sub>
+    </td>
+    <td width="34%" align="center" valign="top">
+      <img src="docs/assets/showcase/沉淀文档.png" width="100%"/>
+      <br><sub>✨ 维护可编辑梳理文档，作为报告和 PPT 的主输入</sub>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/assets/showcase/沉淀产出指导.png" width="100%"/>
+      <br><sub>✨ 保存受众、风格和重点约束，指导后续生成</sub>
+    </td>
+  </tr>
+</table>
 
-![产出指导](docs/assets/thinkflow/guidance-panel.png)
+<br>
 
-### 8. 报告生成
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/showcase/沉淀操作.png" width="100%"/>
+      <br><sub>✨ 将有价值的对话回答推送到可复用知识资产</sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/showcase/沉淀为文档之后可以勾选引用了.png" width="100%"/>
+      <br><sub>✨ 在后续产出中显式引用已经沉淀的文档</sub>
+    </td>
+  </tr>
+</table>
 
-报告产出会合并来源、梳理文档和产出指导，生成可预览、可下载的 Markdown/PDF 结果。它适合作为调研报告、论文阅读笔记、课程总结或汇报材料底稿。
+</div>
 
-![报告产出](docs/assets/thinkflow/report-output.png)
+### 📄 报告与导图
 
-### 9. 思维导图
+<div align="center">
 
-思维导图会把来源内容整理成层级结构，便于快速把握主题、模块和子问题。前端提供展开、收缩、缩放、适应视图、下载 PNG、导出文本和 Mermaid 等操作入口。
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/showcase/报告1.png" width="100%"/>
+      <br><sub>✨ 从来源、文档和产出指导生成报告草稿</sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/showcase/思维1.png" width="100%"/>
+      <br><sub>✨ 把材料整理成层级导图，便于快速复盘</sub>
+    </td>
+  </tr>
+</table>
 
-![导图产出](docs/assets/thinkflow/mindmap-output.png)
+</div>
 
-### 10. 学习卡片
+### 🧩 学习产出
 
-学习卡片把材料转成逐张翻阅的问答卡，适合课程复习、论文方法记忆、产品知识培训和团队 onboarding。
+<div align="center">
 
-![学习卡片](docs/assets/thinkflow/flashcard-output.png)
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/assets/showcase/卡片1.png" width="100%"/>
+      <br><sub>✨ 将来源内容转成学习卡片</sub>
+    </td>
+    <td width="34%" align="center" valign="top">
+      <img src="docs/assets/showcase/学习卡片结果.png" width="100%"/>
+      <br><sub>✨ 在工作台里翻阅和复习卡片</sub>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/assets/showcase/问卷1.png" width="100%"/>
+      <br><sub>✨ 生成带答案和解释的测验题</sub>
+    </td>
+  </tr>
+</table>
 
-### 11. 互动测验
+</div>
 
-测验产出会基于来源生成选择题，并保留正确答案和解释。它适合检查资料理解、课程复习和团队知识验收。
+### 🎞️ PPT、视频和播客
 
-![测验产出](docs/assets/thinkflow/quiz-output.png)
+<div align="center">
 
-### 12. PPT 工作台
+<table>
+  <tr>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/assets/showcase/ppt1.png" width="100%"/>
+      <br><sub>✨ 先生成并调整 PPT 大纲，再进入逐页生成</sub>
+    </td>
+    <td width="34%" align="center" valign="top">
+      <img src="docs/assets/showcase/ppt2.png" width="100%"/>
+      <br><sub>✨ 检查逐页生成进度和页面内容</sub>
+    </td>
+    <td width="33%" align="center" valign="top">
+      <img src="docs/assets/showcase/ppt3.png" width="100%"/>
+      <br><sub>✨ 在产出工作台中打开生成结果</sub>
+    </td>
+  </tr>
+</table>
 
-PPT 采用阶段化流程：先生成可讨论的大纲，再确认大纲并进入逐页生成、页级核对和单页重做。PPT 工作台会展示来源锁定、大纲确认、逐页生成确认、确认进度和重新生成入口。
+<br>
 
-![PPT 产出](docs/assets/thinkflow/ppt-output.png)
+<table>
+  <tr>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/showcase/视频2.png" width="100%"/>
+      <br><sub>✨ 生成视频前确认口播稿和分镜</sub>
+    </td>
+    <td width="50%" align="center" valign="top">
+      <img src="docs/assets/showcase/播客1.png" width="100%"/>
+      <br><sub>✨ 从锁定来源生成播客脚本和可播放音频</sub>
+    </td>
+  </tr>
+</table>
 
-### 13. 播客生成
+<br>
 
-播客产出会基于锁定来源生成脚本和音频文件。结果页提供音频播放器、重新生成、回流来源和打开结果入口，适合把阅读材料转成可听内容。
+<a href="docs/assets/showcase/video-demo.mp4">查看视频生成演示</a>
 
-![播客产出](docs/assets/thinkflow/podcast-output.png)
+</div>
 
-## 适用场景
+---
 
-- **论文阅读**：导入论文、实验记录和参考资料，围绕方法、贡献、实验和局限持续提问，再沉淀为摘要、梳理文档和汇报材料。
-- **产品调研**：整合网页、竞品资料、访谈纪要和行业报告，生成竞品分析、调研报告、导图和路线图讨论材料。
-- **课程学习**：把教材或讲义转成问答、卡片和测验，形成可复习的学习资产。
-- **团队汇报**：把原始资料加工为报告、导图和 PPT，并保留来源快照，方便回溯结果依据。
-- **数据与表格分析**：项目内还包含数据抽取和表格分析相关接口，可用于把结构化数据接入对话式分析流程。
-
-## 项目结构
-
-```text
-.
-├── fastapi_app/              # FastAPI 后端，包含认证、知识库、来源、文档、产出、TTS、搜索等路由
-├── frontend/                 # React + Vite 前端，ThinkFlow 主界面
-├── workflow_engine/          # 工作流和算子引擎
-├── vendor/presentagent/      # 可编辑 PPT / PresentAgent 相关集成
-├── docs/                     # 设计文档和 README 截图资产
-├── outputs/                  # 本地用户数据、来源文件、产出文件和工作区状态
-├── scripts/                  # 启停脚本、监控脚本、embedding 启动脚本
-└── requirements-base.txt     # Python 后端基础依赖
-```
-
-## 快速启动
+## 🚀 快速启动
 
 ### 环境要求
 
-- Python 3.11
+- Python 3.11 或更高版本
 - Node.js 18 或更高版本
 - npm
-- 可用的 LLM / Embedding / TTS / Image Generation 配置，按需填写在 `fastapi_app/.env`
+- 可用的 LLM 和 embedding API 配置
+- 可选：`ffmpeg`，用于音视频处理和媒体产出
 
-### 1. 配置环境变量
-
-复制后端环境变量模板：
-
-```bash
-cp fastapi_app/.env.example fastapi_app/.env
-```
-
-至少需要根据你要使用的功能配置这些变量：
+Ubuntu 常用运行依赖示例：
 
 ```bash
-LLM_API_URL=https://api.example.com/v1
-LLM_API_KEY=your_llm_api_key
-LLM_MODEL=your_model_name
-
-EMBEDDING_PROVIDER=apiyi
-EMBEDDING_API_URL=https://api.example.com/v1
-EMBEDDING_API_KEY=your_embedding_api_key
-EMBEDDING_MODEL=text-embedding-3-small
-
-TTS_PROVIDER=apiyi
-TTS_API_URL=https://api.example.com/v1
-TTS_API_KEY=your_tts_api_key
-TTS_MODEL=qwen-tts
+sudo apt-get update
+sudo apt-get install -y ffmpeg libxcb-shm0 libxcb-shape0 libxcb-xfixes0
 ```
 
-VLM 多模态检索和 PDF 图片索引是可选增强能力。如果需要启用图片 embedding 和 VLM 对话，可以继续配置：
+### 1. 克隆项目
 
 ```bash
-KB_VLM_MODEL=your_multimodal_chat_model
-
-VISUAL_EMBEDDING_API_URL=https://api.example.com/v1
-VISUAL_EMBEDDING_API_KEY=your_visual_embedding_api_key
-VISUAL_EMBEDDING_MODEL=qwen3-vl-embedding
+git clone https://github.com/OpenDCAI/Open-NotebookLM.git
+cd Open-NotebookLM
 ```
 
-视觉索引初始化需要显式配置 `VISUAL_EMBEDDING_API_URL`；`VISUAL_EMBEDDING_API_KEY` 留空时会回退到普通 `EMBEDDING_API_KEY`。如果未配置视觉 embedding 或 VLM，图片检索和图片理解能力会受限，但普通文本来源、文本问答和文档沉淀仍可运行。
-
-如果需要登录和云端用户体系，继续配置 Supabase：
-
-```bash
-SUPABASE_URL=https://your-project-id.supabase.co
-SUPABASE_ANON_KEY=your_supabase_anon_key
-SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
-```
-
-如果不配置 Supabase，项目仍可用本地工作区方式运行；数据会主要保存在 `outputs/` 下。
-
-### 2. 安装依赖
-
-后端：
+### 2. 创建环境并安装后端依赖
 
 ```bash
 python -m venv .venv
 source .venv/bin/activate
-pip install -r requirements-base.txt
+pip install -r requirements.txt
 ```
 
-前端：
+如果需要运行测试：
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+### 3. 安装前端依赖
 
 ```bash
 cd frontend
@@ -219,9 +298,15 @@ npm install
 cd ..
 ```
 
-### 3. 一键启动
+### 4. 配置环境变量
 
-仓库提供了后台启动脚本：
+```bash
+cp fastapi_app/.env.example fastapi_app/.env
+```
+
+编辑 `fastapi_app/.env`，至少填写 LLM 和 embedding 配置。示例见 [配置说明](#️-配置说明)。
+
+### 5. 一键启动
 
 ```bash
 ./scripts/start.sh
@@ -231,8 +316,8 @@ cd ..
 
 - 后端：`http://localhost:8000`
 - 前端：`http://localhost:3001`
-- 本地 embedding 服务：默认 `8899` 端口，如果该端口已有服务会复用
-- 监控脚本：异常时尝试拉起服务
+- 本地 embedding 服务：默认 `8899` 端口，如果端口已有服务会复用
+- 监控脚本：用于基础进程恢复
 
 停止服务：
 
@@ -240,9 +325,9 @@ cd ..
 ./scripts/stop.sh
 ```
 
-### 4. 手动启动前后端
+### 6. 手动启动
 
-如果你只想启动前后端，或者本地没有 embedding 模型环境，可以手动运行：
+如果不希望脚本启动内置本地 embedding 服务，可以手动启动前后端：
 
 ```bash
 # 终端 1：后端
@@ -255,51 +340,183 @@ cd frontend
 npm run dev -- --host 0.0.0.0 --port 3001
 ```
 
-前端的 Vite 配置会把 `/api` 和 `/outputs` 代理到 `http://localhost:8000`。
-
-### 5. 检查服务
-
-```bash
-curl http://localhost:8000/health
-```
-
-返回结果应为：
-
-```json
-{"status":"ok"}
-```
-
-然后打开：
+打开：
 
 ```text
 http://localhost:3001
 ```
 
-## 常用命令
+健康检查：
 
 ```bash
+curl http://localhost:8000/health
+```
+
+期望返回：
+
+```json
+{"status":"ok"}
+```
+
+---
+
+## ⚙️ 配置说明
+
+后端配置位于 `fastapi_app/.env`。示例文件只包含占位符，请替换为你自己的服务配置。
+
+### LLM
+
+```bash
+LLM_API_URL=https://api.example.com/v1
+LLM_API_KEY=your_llm_api_key
+LLM_MODEL=your_model_name
+```
+
+### Embedding
+
+OpenAI 兼容或 ApiYi 兼容 embedding：
+
+```bash
+EMBEDDING_PROVIDER=apiyi
+EMBEDDING_API_URL=https://api.example.com/v1
+EMBEDDING_API_KEY=your_embedding_api_key
+EMBEDDING_MODEL=text-embedding-3-small
+EMBEDDING_DIMENSION=1536
+```
+
+本地 embedding 服务：
+
+```bash
+EMBEDDING_PROVIDER=local
+EMBEDDING_API_URL=http://localhost:8899/v1
+EMBEDDING_API_KEY=
+EMBEDDING_MODEL=/path/to/your/embedding-model
+EMBEDDING_DIMENSION=1024
+```
+
+> [!NOTE]
+> `scripts/start.sh` 会在 `8899` 端口空闲时尝试启动 `scripts/start_embedding_4b.sh`。如果你的机器没有默认本地模型路径，请设置 `EMBEDDING_MODEL` 和 `EMBEDDING_PYTHON_BIN`，或改用外部 embedding provider。
+
+### VLM 与视觉 embedding
+
+这些配置用于启用图片附件、PDF 图片检索和多模态回答：
+
+```bash
+KB_VLM_MODEL=your_multimodal_chat_model
+VISUAL_EMBEDDING_API_URL=https://api.example.com/v1
+VISUAL_EMBEDDING_API_KEY=your_visual_embedding_api_key
+VISUAL_EMBEDDING_MODEL=your_visual_embedding_model
+```
+
+如果 `VISUAL_EMBEDDING_API_KEY` 留空，视觉 embedding 客户端可以回退使用普通 embedding key。即使未配置 VLM 或视觉 embedding，文本 RAG、来源导入、文档沉淀和标准产出仍可运行。
+
+### TTS、搜索、图像生成和视频
+
+```bash
+TTS_PROVIDER=apiyi
+TTS_API_URL=https://api.example.com/v1
+TTS_API_KEY=your_tts_api_key
+TTS_MODEL=qwen-tts
+
+SEARCH_PROVIDER=serper
+SERPER_API_KEY=your_serper_key_here
+SERPAPI_KEY=your_serpapi_key_here
+BOCHA_API_KEY=your_bocha_key_here
+
+IMAGE_GEN_API_URL=https://api.example.com/v1
+IMAGE_GEN_API_KEY=your_image_gen_api_key
+IMAGE_GEN_MODEL=your_image_model
+
+GUI_PLUS_API_KEY=your_dashscope_or_bailian_key
+LIVEPORTRAIT_KEY=your_liveportrait_key
+```
+
+### Supabase 认证
+
+Supabase 是可选配置。未配置时，应用仍可使用 `outputs/` 下的本地工作区数据运行。
+
+```bash
+SUPABASE_URL=https://your-project-id.supabase.co
+SUPABASE_ANON_KEY=your_supabase_anon_key
+SUPABASE_SERVICE_ROLE_KEY=your_supabase_service_role_key
+```
+
+---
+
+## 📂 项目结构
+
+```text
+.
+├── fastapi_app/              # FastAPI 后端：认证、笔记本、来源、文档、产出、搜索、TTS
+├── frontend/                 # React + Vite 前端，ThinkFlow 主工作区
+├── workflow_engine/          # 工作流编排、多模态工具、提示词模板和产出流水线
+├── docs/                     # 产品文档、架构说明、走查文档和 README 资产
+│   └── assets/               # README/docs 使用的截图、logo 和视频素材
+├── scripts/                  # 启停脚本、监控脚本和本地 embedding 服务启动脚本
+├── static/                   # 静态 README/产品资产
+├── requirements.txt          # Python 依赖入口
+├── requirements-base.txt     # 后端运行时依赖
+└── requirements-dev.txt      # 测试/开发依赖
+```
+
+---
+
+## 🧪 开发命令
+
+```bash
+# 后端测试
+pytest -q
+
+# 后端语法检查
+python -m compileall fastapi_app workflow_engine scripts
+
 # 前端构建
 cd frontend && npm run build
 
 # 前端测试
 cd frontend && npm test
 
-# 查看后端健康状态
+# 服务健康检查
 curl http://localhost:8000/health
 
 # 停止脚本启动的服务
 ./scripts/stop.sh
 ```
 
-## 数据和产物位置
+---
 
-- `outputs/`：笔记本、来源、向量索引、工作区状态和生成结果。
-- `logs/`：通过 `scripts/start.sh` 启动时产生的后端、前端和 embedding 日志。
-- `docs/assets/thinkflow/`：README 使用的截图资产。
+## 📦 本地数据位置
 
-## 更多文档
+ThinkFlow 默认把运行数据保存在项目目录下，适合本地试用、调试和迁移：
 
-- [ThinkFlow 走查 README](docs/thinkflow-readme.md)
-- [开发架构说明](docs/development-architecture-guide.md)
-- [文件处理流程](docs/thinkflow-upload-file-processing-flow.md)
-- [OnlyOffice 可编辑 PPT](docs/onlyoffice-editable-ppt.md)
+- `outputs/`：笔记本、上传来源、生成结果、向量索引和本地工作区状态。迁移或清理项目前，建议先备份这个目录。
+- `logs/`：通过 `scripts/start.sh` 启动时生成的后端、前端和 embedding 服务日志，便于排查启动、检索和生成问题。
+- `fastapi_app/.env`：本机环境配置文件，由 `fastapi_app/.env.example` 复制生成，用来填写模型、embedding、TTS、搜索、图像生成等 provider 配置。
+
+---
+
+## 🗺️ 路线图
+
+| 状态 | 模块 | 方向 |
+| --- | --- | --- |
+| ✅ | 基于来源的知识工作台 | 笔记本、来源、对话、引用、文档和产出 |
+| ✅ | 多模态检索 | VLM 模式、图片附件、视觉 embedding、PDF 图片图库 |
+| ✅ | 知识资产 | Summary 卡片、可编辑文档、产出指导、文档引用 |
+| ✅ | 多形态产出 | 报告、导图、PPT、播客、卡片、测验、视频 |
+| 🚧 | 可编辑产出流程 | 为 PPT、视频和报告提供更结构化的审阅与编辑闭环 |
+| 🚧 | 部署方案 | 补充 Docker/生产部署和 provider 配置指南 |
+| 🚧 | 评测与追踪 | 增强生成 trace、来源覆盖检查和产出质量诊断 |
+
+---
+
+## 📚 更多文档
+
+- [docs/](docs/)
+
+您可以使用 Claude Code / Codex 阅读 `docs/`，帮助理解整个项目。
+
+---
+
+## 📄 许可证
+
+本项目使用 [Apache License 2.0](LICENSE)。

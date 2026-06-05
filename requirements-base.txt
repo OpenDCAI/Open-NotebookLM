@@ -1,6 +1,6 @@
 # ============================================
 # Open-NotebookLM - 核心依赖
-# 环境: conda env thinkflow (Python 3.11)
+# 环境: Python 3.11 / 3.12
 # ============================================
 
 # ------ Core Framework ------
@@ -17,11 +17,11 @@ supabase>=2.0.0
 # ------ LLM / LangChain / LangGraph ------
 openai>=1.50.0
 langchain==0.3.27
-langchain-openai>=0.3.0
-langchain-chroma>=0.2.0
-langchain-community>=0.3.0
-langchain-text-splitters>=0.3.0
-langgraph>=0.3.0
+langchain-openai>=0.3.35,<0.4.0
+langchain-chroma>=0.2.6,<0.3.0
+langchain-community>=0.3.31,<0.4.0
+langchain-text-splitters>=0.3.11,<0.4.0
+langgraph>=1.0.1,<1.1.0
 tiktoken>=0.7.0
 
 # ------ Vector Store / Embedding ------
@@ -49,7 +49,7 @@ moviepy>=1.0.3,<2.0
 sqlalchemy>=2.0.0
 sqlmodel>=0.0.21
 duckdb>=1.1.0
-pandas>=2.2.0
+pandas>=2.2.0,<4.0.0
 
 # ------ Web Scraping ------
 beautifulsoup4>=4.12.0

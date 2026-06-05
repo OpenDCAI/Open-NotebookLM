@@ -85,6 +85,11 @@ test-*.webp
 test_*.py
 *_test.py
 scripts/test_*.py
+!fastapi_app/tests/test_*.py
+!fastapi_app/tests/*_test.py
+
+# Frontend test artifacts
+frontend/test-results/
 
 # Jupyter
 .ipynb_checkpoints/

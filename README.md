@@ -41,7 +41,6 @@
 
 ## 📑 目录
 
-- [🔥 更新](#-更新)
 - [✨ 核心功能](#-核心功能)
 - [🔁 工作流](#-工作流)
 - [📸 功能展示](#-功能展示)
@@ -52,24 +51,6 @@
 - [📦 数据和产物](#-数据和产物)
 - [🗺️ 路线图](#️-路线图)
 - [📚 更多文档](#-更多文档)
-
----
-
-## 🔥 更新
-
-> [!TIP]
-> 🆕 <strong>2026-06-04 · README 与品牌视觉更新</strong><br>
-> README 调整为 Paper2Any 风格：新增 ThinkFlow logo、顶部能力矩阵、功能展示表格、清晰的启动和配置说明，并拆分出中英文版本。
-
-> [!TIP]
-> 🆕 <strong>2026-06-02 · 多模态检索能力合入</strong><br>
-> ThinkFlow 已集成 <strong>VLM 模式</strong>、图片附件、粘贴图片提问、PDF 图片抽取/图库、视觉 embedding 配置和多模态来源处理能力。
-
-> [!TIP]
-> 🆕 <strong>2026-06-01 · 端到端产品走查</strong><br>
-> README 截图来自本地 Playwright 走查：创建笔记本、添加来源、生成 Summary/文档/产出指导，并打开报告、导图、卡片、测验、PPT、视频和播客结果。
-
----
 
 ## ✨ 核心功能
 
@@ -535,11 +516,9 @@ curl http://localhost:8000/health
 
 ## 📚 更多文档
 
-- [ThinkFlow 产品走查](docs/thinkflow-readme.md)
-- [开发架构说明](docs/development-architecture-guide.md)
-- [上传与文件处理流程](docs/thinkflow-upload-file-processing-flow.md)
-- [对话历史设计](docs/conversation-history-design.md)
-- [表格分析说明](docs/thinkflow-table-analysis.md)
+- [docs/](docs/)
+
+您可以使用 Claude Code / Codex 阅读 `docs/`，帮助理解整个项目。
 
 ---
 

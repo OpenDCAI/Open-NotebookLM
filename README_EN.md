@@ -41,7 +41,6 @@
 
 ## 📑 Table of Contents
 
-- [🔥 News](#-news)
 - [✨ Core Features](#-core-features)
 - [🔁 Workflow](#-workflow)
 - [📸 Showcase](#-showcase)
@@ -52,24 +51,6 @@
 - [📦 Data and Artifacts](#-data-and-artifacts)
 - [🗺️ Roadmap](#️-roadmap)
 - [📚 More Docs](#-more-docs)
-
----
-
-## 🔥 News
-
-> [!TIP]
-> 🆕 <strong>2026-06-04 · Bilingual README and ThinkFlow Branding</strong><br>
-> The README is now split into Chinese and English versions, with Chinese as the default entry and `README_EN.md` as the English version.
-
-> [!TIP]
-> 🆕 <strong>2026-06-02 · Multimodal Retrieval Merge</strong><br>
-> ThinkFlow now includes <strong>VLM mode</strong>, image attachments, pasted-image prompts, PDF image extraction/gallery, visual embedding configuration, and multimodal source processing.
-
-> [!TIP]
-> 🆕 <strong>2026-06-01 · End-to-end Product Walkthrough</strong><br>
-> The README screenshots were produced from a local Playwright walkthrough that created a notebook, added sources, generated summaries/documents/guidance, and opened report, mindmap, flashcard, quiz, PPT, video, and podcast outputs.
-
----
 
 ## ✨ Core Features
 
@@ -535,11 +516,9 @@ curl http://localhost:8000/health
 
 ## 📚 More Docs
 
-- [ThinkFlow product walkthrough](docs/thinkflow-readme.md)
-- [Development architecture guide](docs/development-architecture-guide.md)
-- [Upload and file processing flow](docs/thinkflow-upload-file-processing-flow.md)
-- [Conversation history design](docs/conversation-history-design.md)
-- [Table analysis notes](docs/thinkflow-table-analysis.md)
+- [docs/](docs/)
+
+You can use Claude Code / Codex to read `docs/` and understand the project.
 
 ---
 

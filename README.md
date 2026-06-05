@@ -9,7 +9,7 @@
 [![React](https://img.shields.io/badge/React-18-61DAFB?style=flat-square&logo=react&logoColor=111111)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-5-646CFF?style=flat-square&logo=vite&logoColor=white)](https://vitejs.dev/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-2F80ED?style=flat-square&logo=apache&logoColor=white)](LICENSE)
-[![GitHub Repo](https://img.shields.io/badge/GitHub-OpenDCAI%2FOpen--NotebookLM-24292F?style=flat-square&logo=github&logoColor=white)](https://github.com/OpenDCAI/Open-NotebookLM)
+[![GitHub Repo](https://img.shields.io/badge/GitHub-OpenDCAI%2FThinkFlow-24292F?style=flat-square&logo=github&logoColor=white)](https://github.com/OpenDCAI/ThinkFlow)
 
 中文 | [English](README_EN.md)
 
@@ -25,11 +25,8 @@
 <a href="#-功能展示" target="_self">
   <img alt="Showcase" src="https://img.shields.io/badge/📸-Showcase-56CCF2?style=for-the-badge" />
 </a>
-<a href="docs/thinkflow-readme.md" target="_blank">
-  <img alt="Walkthrough" src="https://img.shields.io/badge/📚-Walkthrough-2D9CDB?style=for-the-badge" />
-</a>
-<a href="docs/development-architecture-guide.md" target="_blank">
-  <img alt="Architecture" src="https://img.shields.io/badge/🧩-Architecture-27AE60?style=for-the-badge" />
+<a href="docs/" target="_blank">
+  <img alt="Docs" src="https://img.shields.io/badge/📚-Docs-2D9CDB?style=for-the-badge" />
 </a>
 
 <br>
@@ -48,7 +45,7 @@
 - [⚙️ 配置说明](#️-配置说明)
 - [📂 项目结构](#-项目结构)
 - [🧪 开发命令](#-开发命令)
-- [📦 数据和产物](#-数据和产物)
+- [📦 本地数据位置](#-本地数据位置)
 - [🗺️ 路线图](#️-路线图)
 - [📚 更多文档](#-更多文档)
 
@@ -488,15 +485,13 @@ curl http://localhost:8000/health
 
 ---
 
-## 📦 数据和产物
+## 📦 本地数据位置
 
-- `outputs/`：笔记本、上传来源、生成结果、向量索引和本地工作区状态。
-- `logs/`：通过 `scripts/start.sh` 启动时生成的后端、前端和 embedding 日志。
-- `docs/assets/thinkflow/`：README logo 和走查截图。
-- `docs/assets/showcase/`：功能展示截图和视频演示素材。
+ThinkFlow 默认把运行数据保存在项目目录下，适合本地试用、调试和迁移：
 
-> [!IMPORTANT]
-> 不要提交真实 `.env`、provider API key、模型凭据、生成的用户数据或私有笔记本产物。
+- `outputs/`：笔记本、上传来源、生成结果、向量索引和本地工作区状态。迁移或清理项目前，建议先备份这个目录。
+- `logs/`：通过 `scripts/start.sh` 启动时生成的后端、前端和 embedding 服务日志，便于排查启动、检索和生成问题。
+- `fastapi_app/.env`：本机环境配置文件，由 `fastapi_app/.env.example` 复制生成，用来填写模型、embedding、TTS、搜索、图像生成等 provider 配置。
 
 ---
 
